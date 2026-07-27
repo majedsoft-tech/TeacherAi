@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Cairo", sans-serif;
+}
+
+@keyframes laneScroll {
+  from {
+    background-position-y: 0px;
+  }
+  to {
+    background-position-y: 50px;
+  }
+}
+
+.lane-line {
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent,
+    transparent 15px,
+    rgba(255, 255, 255, 0.5) 15px,
+    rgba(255, 255, 255, 0.5) 35px
+  );
+  animation: laneScroll 0.8s linear infinite;
+}
+
+.lane-line-fast {
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent,
+    transparent 15px,
+    rgba(255, 255, 255, 0.8) 15px,
+    rgba(255, 255, 255, 0.8) 35px
+  );
+  animation: laneScroll 0.25s linear infinite;
+}

@@ -1,0 +1,191 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Safety Net (default-deny catch-all)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helper Functions ---
+    
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(teacherId) {
+      return isSignedIn() && request.auth.uid == teacherId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidQuiz(data) {
+      return data.id is string && isValidId(data.id) &&
+             data.teacherId is string && isOwner(data.teacherId) &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+             data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 100 &&
+             data.durationMinutes is int && data.durationMinutes >= 1 && data.durationMinutes <= 1440 &&
+             data.status is string && (data.status == 'active' || data.status == 'closed') &&
+             data.dateCreated is string && data.dateCreated.size() <= 50 &&
+             data.questions is list && data.questions.size() <= 200;
+    }
+
+    function isValidStudent(data) {
+      return data.id is string && isValidId(data.id) &&
+             data.teacherId is string && isOwner(data.teacherId) &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+             data.gradeClass is string && data.gradeClass.size() >= 1 && data.gradeClass.size() <= 100 &&
+             data.email is string && data.email.size() <= 150 &&
+             (data.averageScore is number || data.averageScore is int) && data.averageScore >= 0 && data.averageScore <= 100 &&
+             data.status is string && (data.status == 'excellent' || data.status == 'good' || data.status == 'average' || data.status == 'needs_improvement') &&
+             data.detailedGrades is list && data.detailedGrades.size() <= 500;
+    }
+
+    function isValidTrashStudent(data) {
+      return data.id is string && isValidId(data.id) &&
+             data.teacherId is string && isOwner(data.teacherId) &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+             data.gradeClass is string && data.gradeClass.size() >= 1 && data.gradeClass.size() <= 100 &&
+             data.deletedAt is string && data.deletedAt.size() <= 50;
+    }
+
+    function isValidBankQuestion(data) {
+      return data.id is string && isValidId(data.id) &&
+             data.teacherId is string && (data.teacherId.size() >= 0) &&
+             data.text is string && data.text.size() >= 1 && data.text.size() <= 1000 &&
+             data.type is string && (data.type == 'multiple_choice' || data.type == 'true_false') &&
+             data.options is list && data.options.size() <= 20 &&
+             data.correctAnswer is string && data.correctAnswer.size() >= 1 && data.correctAnswer.size() <= 100 &&
+             data.points is int && data.points >= 1 && data.points <= 100 &&
+             data.stage is string && data.stage.size() >= 1 && data.stage.size() <= 100 &&
+             data.grade is string && data.grade.size() >= 1 && data.grade.size() <= 100 &&
+             data.semester is string && data.semester.size() >= 1 && data.semester.size() <= 100 &&
+             data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 100 &&
+             data.unit is string && data.unit.size() >= 1 && data.unit.size() <= 100 &&
+             data.lesson is string && data.lesson.size() >= 1 && data.lesson.size() <= 100;
+    }
+
+    function isValidTeacher(data, teacherId) {
+      return data.uid is string && data.uid == teacherId &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 200 &&
+             data.email is string && data.email.size() <= 200;
+    }
+
+    function isValidReviewChallenge(data) {
+      return data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+             data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 100 &&
+             data.grade is string && data.grade.size() >= 1 && data.grade.size() <= 100 &&
+             data.semester is string && data.semester.size() >= 1 && data.semester.size() <= 100 &&
+             data.status is string && (data.status == 'active' || data.status == 'completed') &&
+             data.teacherId is string && isOwner(data.teacherId) &&
+             data.createdAt is string && data.createdAt.size() <= 50 &&
+             data.gameType is string && (data.gameType == 'time_attack' || data.gameType == 'space_invaders' || data.gameType == 'quiz_game' || data.gameType == 'car_racing') &&
+             data.questions is list && data.questions.size() <= 200;
+    }
+
+    function isValidReviewScore(data) {
+      return data.id is string && isValidId(data.id) &&
+             data.challengeId is string && isValidId(data.challengeId) &&
+             data.studentId is string && isValidId(data.studentId) &&
+             data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 200 &&
+             data.gradeClass is string && data.gradeClass.size() >= 1 && data.gradeClass.size() <= 200 &&
+             (data.score is number || data.score is int) && data.score >= 0 && data.score <= 1000000 &&
+             data.correctCount is int && data.correctCount >= 0 && data.correctCount <= 200 &&
+             data.totalCount is int && data.totalCount >= 0 && data.totalCount <= 200 &&
+             data.timeSpentSeconds is int && data.timeSpentSeconds >= 0 && data.timeSpentSeconds <= 86400 &&
+             data.completedAt is string && data.completedAt.size() <= 50;
+    }
+
+    // --- Collection Routes ---
+
+    match /teachers/{teacherId} {
+      allow read: if true;
+      allow create, update: if isSignedIn() && request.auth.uid == teacherId && isValidId(teacherId);
+      allow delete: if false;
+    }
+
+    match /curriculum_settings/{teacherId} {
+      allow read: if true;
+      allow create, update: if isSignedIn() && request.auth.uid == teacherId && isValidId(teacherId);
+      allow delete: if false;
+    }
+
+    match /question_bank/{questionId} {
+      allow read: if true;
+      allow create: if isSignedIn() && isValidId(questionId) && isValidBankQuestion(incoming());
+      allow update: if isSignedIn() && isValidId(questionId) && isValidBankQuestion(incoming());
+      allow delete: if isSignedIn() && (isOwner(existing().teacherId) || request.auth.token.email == 'majedsoft@gmail.com' || existing().teacherId == 'system' || existing().teacherId == '');
+    }
+
+    match /quizzes/{quizId} {
+      allow read: if true;
+      allow create: if isSignedIn() && isValidId(quizId) && isValidQuiz(incoming());
+      allow update: if isSignedIn() && isValidId(quizId) && isOwner(existing().teacherId) && isValidQuiz(incoming()) && incoming().teacherId == existing().teacherId;
+      allow delete: if isSignedIn() && isValidId(quizId) && isOwner(existing().teacherId);
+    }
+
+    match /students/{studentId} {
+      allow read: if true;
+      allow create: if isValidId(studentId) && (1==1);
+      allow update: if isValidId(studentId) && incoming().teacherId == existing().teacherId;
+      allow delete: if isSignedIn() && isValidId(studentId) && (!('teacherId' in existing()) || isOwner(existing().teacherId));
+    }
+
+    match /trash_students/{studentId} {
+      allow read: if true;
+      allow create, update: if isSignedIn() && isValidId(studentId) && incoming().teacherId == request.auth.uid;
+      allow delete: if isSignedIn() && isValidId(studentId) && (!('teacherId' in existing()) || existing().teacherId == request.auth.uid);
+    }
+
+    match /grades/{gradeId} {
+      allow get: if isValidId(gradeId);
+      allow list: if true;
+      allow create: if isSignedIn() && isValidId(gradeId) && incoming().teacherId == request.auth.uid && incoming().name is string && incoming().name.size() >= 1 && incoming().name.size() <= 100;
+      allow update: if isSignedIn() && isValidId(gradeId) && isOwner(existing().teacherId) && incoming().teacherId == existing().teacherId && incoming().name is string && incoming().name.size() >= 1 && incoming().name.size() <= 100;
+      allow delete: if isSignedIn() && isValidId(gradeId) && isOwner(existing().teacherId);
+    }
+
+    match /semesters/{semesterId} {
+      allow get: if isValidId(semesterId);
+      allow list: if true;
+      allow create: if isSignedIn() && isValidId(semesterId) && incoming().teacherId == request.auth.uid && incoming().name is string && incoming().name.size() >= 1 && incoming().name.size() <= 100;
+      allow update: if isSignedIn() && isValidId(semesterId) && isOwner(existing().teacherId) && incoming().teacherId == existing().teacherId && incoming().name is string && incoming().name.size() >= 1 && incoming().name.size() <= 100;
+      allow delete: if isSignedIn() && isValidId(semesterId) && isOwner(existing().teacherId);
+    }
+
+    match /reviewChallenges/{challengeId} {
+      allow get: if isValidId(challengeId);
+      allow list: if true;
+      allow create: if isSignedIn() && isValidId(challengeId) && isValidReviewChallenge(incoming());
+      allow update: if isSignedIn() && isValidId(challengeId) && isValidReviewChallenge(incoming()) && isOwner(existing().teacherId) && incoming().teacherId == existing().teacherId;
+      allow delete: if isSignedIn() && isValidId(challengeId) && isOwner(existing().teacherId);
+    }
+
+    match /reviewScores/{scoreId} {
+      allow get: if isValidId(scoreId);
+      allow list: if true;
+      allow create, update: if isValidId(scoreId);
+      allow delete: if isSignedIn();
+    }
+
+    match /student_curriculum_scores/{studentId} {
+      allow read: if true;
+      allow create, update: if isValidId(studentId);
+      allow delete: if isSignedIn();
+    }
+
+    match /livePlayroomPresence/{presenceId} {
+      allow read, write: if true;
+    }
+  }
+}

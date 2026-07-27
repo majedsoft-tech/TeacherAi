@@ -20,6 +20,7 @@ import {
   Users
 } from "lucide-react";
 import { ReviewChallenge, ReviewScore, Question } from "../types";
+import { isTrueFalseQuestion, normalizeQuestion } from "../utils/questionUtils";
 import { db, handleFirestoreError, OperationType } from "../firebase";
 import { setDoc, doc, collection, query, where, getDocs, deleteDoc, onSnapshot, updateDoc, deleteField, writeBatch } from "firebase/firestore";
 import { LivePodiumView, FIXED_GAMES } from "./ReviewsAdminTab";
@@ -401,30 +402,17 @@ function shuffleArray<T>(array: T[]): T[] {
 function randomizeChallenge(challenge: ReviewChallenge): ReviewChallenge {
   if (!challenge || !challenge.questions || challenge.questions.length === 0) return challenge;
 
-  const isTf = (q: Question) => {
-    if (q.type === 'true_false' || (q.type as string) === 'tf' || (q.type as string) === 'boolean') return true;
-    if (q.options && Array.isArray(q.options) && q.options.length === 2) {
-      const o1 = (q.options[0] || '').trim().toLowerCase();
-      const o2 = (q.options[1] || '').trim().toLowerCase();
-      const tfWords = ['صح', 'خطأ', 'صحيح', 'خاطئ', 'خاطئة', 'صواب', 'true', 'false'];
-      if (tfWords.includes(o1) || tfWords.includes(o2)) {
-        return true;
-      }
-    }
-    return false;
-  };
-
   // Shuffle the questions list randomly
   const shuffledQuestions = shuffleArray([...challenge.questions]).map(q => {
-    if (isTf(q)) {
+    if (isTrueFalseQuestion(q)) {
       // For True/False questions, standardize options ("صحيح" / "خطأ") without shuffling order
       let opt1 = "صحيح";
       let opt2 = "خطأ";
       if (Array.isArray(q.options) && q.options.length >= 2) {
         const o1 = q.options[0]?.trim();
         const o2 = q.options[1]?.trim();
-        if (o1 && o1 !== '') opt1 = o1;
-        if (o2 && o2 !== '') opt2 = o2;
+        if (o1 && o1 !== '' && o1 !== 'الخيار الثالث') opt1 = o1;
+        if (o2 && o2 !== '' && o2 !== 'الخيار الثالث') opt2 = o2;
       }
       return {
         ...q,
@@ -482,7 +470,7 @@ function randomizeChallenge(challenge: ReviewChallenge): ReviewChallenge {
 
 const checkIsCorrect = (q: Question | undefined, ansIdx: number): boolean => {
   if (!q) return false;
-  const isTf = q.type === 'true_false' || (q.type as string) === 'tf' || (q.options && q.options.length === 2 && ['صح', 'خطأ', 'صحيح', 'خاطئ', 'صواب', 'true', 'false'].includes((q.options[0]||'').trim().toLowerCase()));
+  const isTf = isTrueFalseQuestion(q);
   if (isTf) {
     const val = q.correctAnswer;
     // index 0 is True/Correct, index 1 is False/Incorrect
@@ -1639,7 +1627,8 @@ export default function StudentReviewsTab({
       correctCount: correctCount,
       totalCount: activeChallenge.questions.length,
       timeSpentSeconds: timeSpent || 1,
-      completedAt: new Date().toISOString()
+      completedAt: new Date().toISOString(),
+      teacherId: activeChallenge.teacherId || activeStudent.teacherId || teacherId || ""
     };
 
     try {
@@ -1914,7 +1903,8 @@ export default function StudentReviewsTab({
       correctCount: correctCount,
       totalCount: activeChallenge.questions.length,
       timeSpentSeconds: timeSpent || 1,
-      completedAt: new Date().toISOString()
+      completedAt: new Date().toISOString(),
+      teacherId: activeChallenge.teacherId || activeStudent.teacherId || teacherId || ""
     };
 
     try {
@@ -2323,34 +2313,6 @@ export default function StudentReviewsTab({
                   </button>
                 </div>
               </div>
-
-              {/* Sticky Question Box inside the Top Bar */}
-              {gameState === "playing" && activeChallenge.questions[currentQuestionIdx] && (
-                <motion.div 
-                  key={`top-sticky-q-${currentQuestionIdx}`}
-                  initial={{ opacity: 0, scale: 0.98 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  className="bg-gradient-to-r from-indigo-50/90 via-purple-50/60 to-indigo-50/90 border border-indigo-100/90 p-3 sm:p-4 rounded-2xl text-center space-y-1 w-full shadow-2xs"
-                >
-                  {(streak >= 3 || doubleScoreActive) && (
-                    <div className="flex items-center justify-center gap-2">
-                      {streak >= 3 && (
-                        <span className="px-2 py-0.5 bg-amber-400 text-slate-950 font-black text-[10px] rounded-lg shadow-2xs animate-pulse">
-                          مكافأة الحماس! ⚡
-                        </span>
-                      )}
-                      {doubleScoreActive && (
-                        <span className="px-2 py-0.5 bg-indigo-600 text-white font-black text-[10px] rounded-lg shadow-2xs animate-bounce">
-                          النقاط مضاعفة 2x! ⚡
-                        </span>
-                      )}
-                    </div>
-                  )}
-                  <h4 className="text-sm sm:text-base md:text-lg font-black text-slate-900 leading-relaxed pt-0.5">
-                    {activeChallenge.questions[currentQuestionIdx]?.text}
-                  </h4>
-                </motion.div>
-              )}
             </div>
 
             {/* Inner Grid with Arena (3 cols) and Competitors List (1 col) */}
@@ -2707,8 +2669,34 @@ export default function StudentReviewsTab({
                       ) : (
                         /* PLAYING ACTIVE GAMEPLAY SCREEN */
                         <>
-                          {/* Options Container - Question is stickied in the main top header */}
+                          {/* Options Container with Question Card */}
                           <div className="my-auto py-2 space-y-4">
+                            {/* Question Card */}
+                            <motion.div 
+                              key={`wayground-q-${currentQuestionIdx}`}
+                              initial={{ opacity: 0, y: -10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              className="bg-slate-900/95 border border-indigo-500/30 p-5 md:p-6 rounded-3xl text-center space-y-2 max-w-4xl mx-auto shadow-xl backdrop-blur-md"
+                            >
+                              {(streak >= 3 || doubleScoreActive) && (
+                                <div className="flex items-center justify-center gap-2 mb-1">
+                                  {streak >= 3 && (
+                                    <span className="px-2.5 py-0.5 bg-amber-400 text-slate-950 font-black text-[10px] rounded-lg shadow-2xs animate-pulse">
+                                      مكافأة الحماس! ⚡
+                                    </span>
+                                  )}
+                                  {doubleScoreActive && (
+                                    <span className="px-2.5 py-0.5 bg-indigo-500 text-white font-black text-[10px] rounded-lg shadow-2xs animate-bounce">
+                                      النقاط مضاعفة 2x! ⚡
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                              <h3 className="text-base sm:text-lg md:text-xl font-black text-white leading-relaxed">
+                                {activeChallenge.questions[currentQuestionIdx]?.text}
+                              </h3>
+                            </motion.div>
+
                             {/* Interactive Large Option Cards */}
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-5 max-w-4xl mx-auto pt-2">
                               {activeChallenge.questions[currentQuestionIdx]?.options.map((opt, i) => {
@@ -2870,6 +2858,18 @@ export default function StudentReviewsTab({
                   {/* GAME TYPE 1: CLASSIC QUIZ SHOW */}
                   {activeChallenge.gameType === "quiz_game" && (
                     <div className="space-y-6 relative z-10">
+                      {/* Question Card */}
+                      <motion.div 
+                        key={`quiz-q-${currentQuestionIdx}`}
+                        initial={{ opacity: 0, y: -10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="bg-indigo-900/90 border border-indigo-400/30 p-5 rounded-2xl text-center shadow-md text-white backdrop-blur-md"
+                      >
+                        <h3 className="text-base sm:text-lg font-black leading-relaxed">
+                          {activeChallenge.questions[currentQuestionIdx]?.text}
+                        </h3>
+                      </motion.div>
+
                       {/* Visual Progress Bar */}
                       <div className="space-y-1">
                         <div className="flex justify-between text-[10px] text-slate-500 font-bold">
@@ -2921,6 +2921,18 @@ export default function StudentReviewsTab({
                   {/* GAME TYPE 2: TIME ATTACK */}
                   {activeChallenge.gameType === "time_attack" && (
                     <div className="space-y-6 relative z-10">
+                      {/* Question Card */}
+                      <motion.div 
+                        key={`ta-q-${currentQuestionIdx}`}
+                        initial={{ opacity: 0, y: -10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="bg-amber-950/90 border border-amber-500/30 p-5 rounded-2xl text-center shadow-md text-amber-100 backdrop-blur-md"
+                      >
+                        <h3 className="text-base sm:text-lg font-black leading-relaxed">
+                          {activeChallenge.questions[currentQuestionIdx]?.text}
+                        </h3>
+                      </motion.div>
+
                       <div className="bg-amber-50 border border-amber-200 p-3.5 rounded-2xl flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <Timer className="w-5 h-5 text-amber-600 animate-pulse" />
@@ -2957,6 +2969,20 @@ export default function StudentReviewsTab({
                       >
                         {/* Space backdrop stars */}
                         <div className="absolute inset-0 bg-[radial-gradient(#ffffff0a_1px,transparent_1px)] [background-size:16px_16px]" />
+
+                        {/* Floating Question Card during Space Invaders gameplay */}
+                        {!isQuestionIntro && (
+                          <motion.div
+                            key={`space-q-${currentQuestionIdx}`}
+                            initial={{ opacity: 0, y: -10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="absolute top-3 inset-x-4 z-20 bg-slate-900/90 border border-indigo-500/40 p-3.5 sm:p-4 rounded-2xl text-center shadow-xl backdrop-blur-md"
+                          >
+                            <h3 className="text-sm sm:text-base font-black text-white leading-snug">
+                              {activeChallenge.questions[currentQuestionIdx]?.text}
+                            </h3>
+                          </motion.div>
+                        )}
 
                         {/* Beautiful Large Question Intro Overlay */}
                         {isQuestionIntro && (
@@ -3129,6 +3155,20 @@ export default function StudentReviewsTab({
                         {/* Highway Margins */}
                         <div className="absolute left-0 top-0 bottom-0 w-4 bg-emerald-800 border-r-2 border-yellow-500 z-10" />
                         <div className="absolute right-0 top-0 bottom-0 w-4 bg-emerald-800 border-l-2 border-yellow-500 z-10" />
+
+                        {/* Highlighted Question Card Overlay on Highway while driving */}
+                        {!isQuestionIntro && (
+                          <motion.div
+                            key={`car-q-${currentQuestionIdx}`}
+                            initial={{ opacity: 0, y: -10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="absolute top-3 inset-x-4 z-20 bg-slate-950/90 border border-cyan-500/50 p-3.5 sm:p-4 rounded-2xl text-center shadow-2xl backdrop-blur-md ring-1 ring-cyan-400/30"
+                          >
+                            <h3 className="text-sm sm:text-base md:text-lg font-black text-white leading-snug drop-shadow-md">
+                              {activeChallenge.questions[currentQuestionIdx]?.text}
+                            </h3>
+                          </motion.div>
+                        )}
 
                         {/* Beautiful Large Question Intro Overlay */}
                         {isQuestionIntro && (

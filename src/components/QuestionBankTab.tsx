@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { BankQuestion, QuestionType } from '../types';
+import { isTrueFalseQuestion, normalizeQuestion } from '../utils/questionUtils';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { doc, setDoc, deleteDoc, updateDoc, writeBatch } from 'firebase/firestore';
 
@@ -350,7 +351,8 @@ export default function QuestionBankTab({
   onAutoCreateQuiz,
   hideReadOnlyNotice
 }: QuestionBankTabProps) {
-  const isAdmin = currentUser?.email === 'majedsoft@gmail.com';
+  const isPrimaryAccount = !!currentUser && currentUser?.email?.trim().toLowerCase() === 'majedsoft@gmail.com';
+  const isAdmin = isPrimaryAccount;
 
   // Automatic restoration and default question checks have been completely removed and deleted as requested.
 
@@ -588,8 +590,8 @@ export default function QuestionBankTab({
   };
 
   const handleImportExcelData = async () => {
-    if (!currentUser) {
-      triggerToast('يرجى تسجيل الدخول أولاً كمعلم للقيام بهذه العملية.', 'error');
+    if (!isAdmin) {
+      triggerToast('استيراد وإضافة أسئلة بنك الأسئلة متاح فقط للحساب الرئيسي (majedsoft@gmail.com).', 'error');
       return;
     }
 
@@ -680,7 +682,7 @@ export default function QuestionBankTab({
         let correctAnswer = type === 'true_false' ? 'true' : '0';
 
         // Extract points
-        let points = 5; // Default score is 5 points for standard questions
+        let points = 1; // Default score is 1 point for standard questions
         if (invMappings['points'] !== undefined) {
           const rawPoints = Number(row[invMappings['points']]);
           if (!isNaN(rawPoints) && rawPoints > 0) {
@@ -813,7 +815,7 @@ export default function QuestionBankTab({
   const [formType, setFormType] = useState<QuestionType>('multiple_choice');
   const [formOptions, setFormOptions] = useState<string[]>(['', '', '', '']);
   const [formCorrectAnswer, setFormCorrectAnswer] = useState('0');
-  const [formPoints, setFormPoints] = useState(5);
+  const [formPoints, setFormPoints] = useState(1);
 
   const [formStage, setFormStage] = useState('المرحلة الثانوية');
   const [formGrade, setFormGrade] = useState('السنة الأولى المشتركة (أول ثانوي)');
@@ -831,10 +833,7 @@ export default function QuestionBankTab({
   const [moveUnit, setMoveUnit] = useState('');
   const [moveLesson, setMoveLesson] = useState('');
 
-  // Automatic Quiz Creation states
-  const [showAutoQuizModal, setShowAutoQuizModal] = useState(false);
-  const [autoMcqCount, setAutoMcqCount] = useState(0);
-  const [autoTfCount, setAutoTfCount] = useState(0);
+
 
   // Handle stage change in form to adjust grade presets
   const handleFormStageChange = (stage: string) => {
@@ -879,7 +878,7 @@ export default function QuestionBankTab({
     setFormType('multiple_choice');
     setFormOptions(['', '', '', '']);
     setFormCorrectAnswer('0');
-    setFormPoints(5);
+    setFormPoints(1);
     setFormStage('المرحلة الثانوية');
     setFormGrade('السنة الأولى المشتركة (أول ثانوي)');
     setFormSemester('الفصل الدراسي الأول');
@@ -893,7 +892,10 @@ export default function QuestionBankTab({
   // Save question handler (Insert or Update)
   const handleSaveQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentUser) return;
+    if (!isAdmin) {
+      triggerToast('تعديل وإضافة أسئلة بنك الأسئلة متاح فقط للحساب الرئيسي (majedsoft@gmail.com).', 'error');
+      return;
+    }
 
     if (!formText.trim()) {
       triggerToast('الرجاء كتابة نص السؤال الأول', 'error');
@@ -1119,7 +1121,10 @@ export default function QuestionBankTab({
   };
 
   const handleSaveSelectedDrafts = async () => {
-    if (!currentUser) return;
+    if (!isAdmin) {
+      triggerToast('حفظ واستيراد أسئلة بنك الأسئلة متاح فقط للحساب الرئيسي (majedsoft@gmail.com).', 'error');
+      return;
+    }
 
     const draftsToSave = generatedDrafts.filter((_, idx) => selectedDraftIndexes[idx]);
     if (draftsToSave.length === 0) {
@@ -1199,7 +1204,10 @@ export default function QuestionBankTab({
 
   // Delete question
   const handleDeleteQuestion = async (id: string, text: string) => {
-    if (!currentUser) return;
+    if (!isAdmin) {
+      triggerToast('حذف وتعديل أسئلة بنك الأسئلة متاح فقط للحساب الرئيسي (majedsoft@gmail.com).', 'error');
+      return;
+    }
     triggerConfirm(
       'حذف السؤال نهائياً',
       `هل أنت متأكد من رغبتك في حذف هذا السؤال نهائياً من كشف بنك الأسئلة؟\n\n"${text.substring(0, 50)}..."`,
@@ -1226,7 +1234,10 @@ export default function QuestionBankTab({
 
   // Batch delete selected questions
   const handleDeleteSelected = async () => {
-    if (!currentUser) return;
+    if (!isAdmin) {
+      triggerToast('حذف أسئلة بنك الأسئلة متاح فقط للحساب الرئيسي (majedsoft@gmail.com).', 'error');
+      return;
+    }
     const selectedIds = Object.keys(selectedBqIds).filter(id => selectedBqIds[id]);
     if (selectedIds.length === 0) return;
 
@@ -1274,7 +1285,10 @@ export default function QuestionBankTab({
   };
 
   const handleMoveSelected = async () => {
-    if (!currentUser) return;
+    if (!isAdmin) {
+      triggerToast('نقل أسئلة بنك الأسئلة متاح فقط للحساب الرئيسي (majedsoft@gmail.com).', 'error');
+      return;
+    }
     const selectedIds = Object.keys(selectedBqIds).filter(id => selectedBqIds[id]);
     if (selectedIds.length === 0) return;
 
@@ -1352,7 +1366,10 @@ export default function QuestionBankTab({
 
   // Automated cleanup of all found duplicate questions
   const handleCleanDuplicates = async () => {
-    if (!currentUser) return;
+    if (!isAdmin) {
+      triggerToast('تنظيف الأسئلة المكررة متاح فقط للحساب الرئيسي (majedsoft@gmail.com).', 'error');
+      return;
+    }
     const dups = getDuplicatesInfo();
     if (dups.length === 0) {
       triggerToast('ممتاز! لم يتم العثور على أي أسئلة مكررة في بنك الأسئلة حالياً.', 'info');
@@ -1391,90 +1408,7 @@ export default function QuestionBankTab({
   };
 
 
-  // Confirm and create automatic quiz
-  const handleConfirmAutoQuiz = () => {
-    const isTf = (q: BankQuestion) => {
-      if (q.type === 'true_false' || (q.type as string) === 'tf' || (q.type as string) === 'boolean') return true;
-      if (q.options && Array.isArray(q.options) && q.options.length === 2) {
-        const o1 = (q.options[0] || '').trim().toLowerCase();
-        const o2 = (q.options[1] || '').trim().toLowerCase();
-        const tfWords = ['صح', 'خطأ', 'صحيح', 'خاطئ', 'خاطئة', 'صواب', 'true', 'false'];
-        if (tfWords.includes(o1) || tfWords.includes(o2)) return true;
-      }
-      return false;
-    };
 
-    const availableMcqs = filteredBank.filter(q => !isTf(q));
-    const availableTf = filteredBank.filter(q => isTf(q));
-
-    if (autoMcqCount === 0 && autoTfCount === 0) {
-      triggerToast('يرجى تحديد سؤال واحد على الأقل لإنشاء الاختبار التلقائي.', 'error');
-      return;
-    }
-
-    if (autoMcqCount > availableMcqs.length) {
-      triggerToast(`العدد المطلوب لأسئلة الاختيار من متعدد يتجاوز المتاح (${availableMcqs.length} سؤال).`, 'error');
-      return;
-    }
-
-    if (autoTfCount > availableTf.length) {
-      triggerToast(`العدد المطلوب لأسئلة الصواب والخطأ يتجاوز المتاح (${availableTf.length} سؤال).`, 'error');
-      return;
-    }
-
-    // Shuffle and pick
-    const shuffledMcqs = [...availableMcqs].sort(() => 0.5 - Math.random());
-    const shuffledTf = [...availableTf].sort(() => 0.5 - Math.random());
-
-    const selectedMcqs = shuffledMcqs.slice(0, autoMcqCount);
-    const selectedTf = shuffledTf.slice(0, autoTfCount);
-
-    const finalSelected = [...selectedMcqs, ...selectedTf].map(q => ({
-      ...q,
-      type: isTf(q) ? ('true_false' as const) : ('multiple_choice' as const)
-    }));
-
-    if (onAutoCreateQuiz) {
-      onAutoCreateQuiz(finalSelected, {
-        stage: filterStage,
-        grade: filterGrade,
-        semester: filterSemester,
-        subject: filterSubject,
-        unit: filterUnit,
-        lesson: filterLesson
-      });
-      setShowAutoQuizModal(false);
-      setAutoMcqCount(0);
-      setAutoTfCount(0);
-    } else {
-      triggerToast('هذه الميزة غير مفعلة في سياق تشغيل بنك الأسئلة الحالي.', 'error');
-    }
-  };
-
-  const handleOpenAutoQuizModal = () => {
-    const isTf = (q: BankQuestion) => {
-      if (q.type === 'true_false' || (q.type as string) === 'tf' || (q.type as string) === 'boolean') return true;
-      if (q.options && Array.isArray(q.options) && q.options.length === 2) {
-        const o1 = (q.options[0] || '').trim().toLowerCase();
-        const o2 = (q.options[1] || '').trim().toLowerCase();
-        const tfWords = ['صح', 'خطأ', 'صحيح', 'خاطئ', 'خاطئة', 'صواب', 'true', 'false'];
-        if (tfWords.includes(o1) || tfWords.includes(o2)) return true;
-      }
-      return false;
-    };
-
-    const availableMcqs = filteredBank.filter(q => !isTf(q));
-    const availableTf = filteredBank.filter(q => isTf(q));
-
-    if (filteredBank.length === 0) {
-      triggerToast('لا توجد أسئلة متاحة في الفلترة الحالية لبناء الاختبار التلقائي منها.', 'error');
-      return;
-    }
-
-    setAutoMcqCount(Math.min(5, availableMcqs.length));
-    setAutoTfCount(Math.min(5, availableTf.length));
-    setShowAutoQuizModal(true);
-  };
 
   // Filter logic
   const filteredBank = bankQuestions.filter(q => {
@@ -1973,18 +1907,7 @@ export default function QuestionBankTab({
           </div>
         </div>
 
-        {/* Automatic Quiz Creation Button Section */}
-        <div className="flex flex-col sm:flex-row justify-end items-center gap-3 pt-2">
-          <button
-            type="button"
-            id="btn-auto-quiz-trigger"
-            onClick={handleOpenAutoQuizModal}
-            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white font-extrabold text-xs rounded-xl shadow-md hover:shadow-indigo-100 transition-all cursor-pointer group"
-          >
-            <Sparkles className="w-4 h-4 text-indigo-200 group-hover:animate-pulse" />
-            <span>إنشاء اختبار تلقائي ذكي للاختبار 🪄</span>
-          </button>
-        </div>
+
 
         {/* Dynamic Filter Statistics */}
         <div className="border-t border-slate-100 pt-4 mt-2 select-none">
@@ -2277,7 +2200,7 @@ export default function QuestionBankTab({
                       min={1}
                       max={100}
                       disabled={!isAdmin}
-                      value={q.points || 5}
+                      value={q.points || 1}
                       onChange={async (e) => {
                         if (!isAdmin) return;
                         const newP = Number(e.target.value);
@@ -2305,30 +2228,37 @@ export default function QuestionBankTab({
                   
                   {/* Options display stacked vertically with numbered indicators */}
                   <div className="flex flex-col gap-2.5 w-full">
-                    {(q.options || [])
-                      .map((opt, oIdx) => ({ opt, oIdx }))
-                      .filter(item => {
-                        if (!item.opt) return false;
-                        const t = item.opt.trim();
-                        if (q.type === 'true_false') {
-                          return t !== '' && 
-                            t !== 'الخيار الثالث' && 
-                            t !== 'الخيار الرابع' && 
-                            t !== 'الخيار الثالث...' && 
-                            t !== 'الخيار الرابع...' &&
-                            t !== 'option 3' &&
-                            t !== 'option 4' &&
-                            t !== 'option3' &&
-                            t !== 'option4';
-                        }
-                        return t !== '';
-                      })
-                      .map(({ opt, oIdx }) => {
-                        const isCorrect = q.type === 'multiple_choice' 
-                          ? String(oIdx) === q.correctAnswer
-                          : (oIdx === 0 && q.correctAnswer === 'true') || (oIdx === 1 && q.correctAnswer === 'false');
+                    {(() => {
+                      const isTf = isTrueFalseQuestion(q);
+                      const baseOpts = isTf
+                        ? (Array.isArray(q.options) && q.options.length >= 2 && q.options[0] && q.options[1] && !q.options[0].includes('الخيار الثالث') ? [q.options[0], q.options[1]] : ['صحيح', 'خطأ'])
+                        : (q.options || []);
 
-                        return (
+                      return baseOpts
+                        .map((opt, oIdx) => ({ opt, oIdx }))
+                        .filter(item => {
+                          if (!item.opt) return false;
+                          const t = item.opt.trim();
+                          if (isTf) {
+                            return t !== '' && 
+                              t !== 'الخيار الثالث' && 
+                              t !== 'الخيار الرابع' && 
+                              t !== 'الخيار الثالث...' && 
+                              t !== 'الخيار الرابع...' &&
+                              t !== 'option 3' &&
+                              t !== 'option 4' &&
+                              t !== 'option3' &&
+                              t !== 'option4';
+                          }
+                          return t !== '';
+                        })
+                        .map(({ opt, oIdx }) => {
+                          const isCorrect = !isTf 
+                            ? String(oIdx) === String(q.correctAnswer)
+                            : (oIdx === 0 && (q.correctAnswer === 'true' || q.correctAnswer === '0' || q.correctAnswer === 'صح' || q.correctAnswer === 'صحيح' || q.correctAnswer === 'صواب')) ||
+                              (oIdx === 1 && (q.correctAnswer === 'false' || q.correctAnswer === '1' || q.correctAnswer === 'خطأ' || q.correctAnswer === 'خاطئ' || q.correctAnswer === 'خاطئة'));
+
+                          return (
                           <div 
                             key={oIdx}
                             className={`p-3.5 rounded-xl border flex items-center justify-between transition-colors ${
@@ -2350,7 +2280,8 @@ export default function QuestionBankTab({
                             {isCorrect && <Check className="w-5 h-5 text-emerald-600 shrink-0 mr-2" />}
                           </div>
                         );
-                      })}
+                      })
+                    })()}
                   </div>
                 </div>
 
@@ -3293,258 +3224,7 @@ export default function QuestionBankTab({
         )}
       </AnimatePresence>
 
-      {/* Automatic Quiz Wizard Modal Overlay */}
-      <AnimatePresence>
-        {showAutoQuizModal && (() => {
-          const isTf = (q: BankQuestion) => {
-            if (q.type === 'true_false' || (q.type as string) === 'tf' || (q.type as string) === 'boolean') return true;
-            if (q.options && Array.isArray(q.options) && q.options.length === 2) {
-              const o1 = (q.options[0] || '').trim().toLowerCase();
-              const o2 = (q.options[1] || '').trim().toLowerCase();
-              const tfWords = ['صح', 'خطأ', 'صحيح', 'خاطئ', 'خاطئة', 'صواب', 'true', 'false'];
-              if (tfWords.includes(o1) || tfWords.includes(o2)) return true;
-            }
-            return false;
-          };
-          const modalAvailableMcqs = filteredBank.filter(q => !isTf(q));
-          const modalAvailableTfs = filteredBank.filter(q => isTf(q));
-          
-          const sampleMcqs = modalAvailableMcqs.slice(0, autoMcqCount);
-          const sampleTfs = modalAvailableTfs.slice(0, autoTfCount);
-          const totalAutoScore = [...sampleMcqs, ...sampleTfs].reduce((sum, q) => sum + (q.points || 0), 0);
-          
-          return (
-            <div className="fixed inset-0 z-[190] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in">
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden flex flex-col"
-                dir="rtl"
-              >
-                {/* Header */}
-                <div className="p-6 border-b border-slate-100 bg-slate-50 flex items-start gap-4">
-                  <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center shrink-0">
-                    <Sparkles className="w-5 h-5 text-indigo-600 animate-pulse" />
-                  </div>
-                  <div className="flex-1 text-right">
-                    <h3 className="text-sm font-black text-slate-900">المعالج الذكي للاختبارات التلقائية</h3>
-                    <p className="text-[11px] text-slate-500 mt-0.5 font-semibold">
-                      توليد واختيار الأسئلة عشوائياً وتلقائياً بناءً على فلاتر بنك الأسئلة المحددة حالياً.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowAutoQuizModal(false)}
-                    className="text-slate-400 hover:text-slate-600 transition p-1 bg-white hover:bg-slate-100 rounded-lg border border-slate-150 cursor-pointer"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
 
-                {/* Body */}
-                <div className="p-6 space-y-5 overflow-y-auto max-h-[60vh]">
-                  {/* Current Filter breadcrumb */}
-                  <div className="bg-indigo-50/40 p-4 rounded-2xl border border-indigo-100/50 text-right">
-                    <span className="text-[10px] font-extrabold text-indigo-600/80 block mb-2 font-sans">
-                      معايير الفلترة الحالية:
-                    </span>
-                    <div className="flex flex-wrap gap-1.5">
-                      <span className="bg-white text-indigo-700 text-[10px] font-black px-2.5 py-1 rounded-lg border border-indigo-100/60 shadow-3xs">
-                        {filterStage === 'all' ? 'جميع المراحل' : filterStage}
-                      </span>
-                      <span className="bg-white text-indigo-700 text-[10px] font-black px-2.5 py-1 rounded-lg border border-indigo-100/60 shadow-3xs">
-                        {filterGrade === 'all' ? 'جميع الصفوف' : filterGrade}
-                      </span>
-                      <span className="bg-white text-indigo-700 text-[10px] font-black px-2.5 py-1 rounded-lg border border-indigo-100/60 shadow-3xs">
-                        {filterSubject === 'all' ? 'جميع المواد' : filterSubject}
-                      </span>
-                      {filterSemester !== 'all' && (
-                        <span className="bg-white text-indigo-700 text-[10px] font-black px-2.5 py-1 rounded-lg border border-indigo-100/60 shadow-3xs">
-                          {filterSemester}
-                        </span>
-                      )}
-                      {filterUnit !== 'all' && (
-                        <span className="bg-white text-indigo-700 text-[10px] font-black px-2.5 py-1 rounded-lg border border-indigo-100/60 shadow-3xs max-w-[180px] truncate" title={filterUnit}>
-                          {filterUnit}
-                        </span>
-                      )}
-                      {filterLesson !== 'all' && (
-                        <span className="bg-white text-indigo-700 text-[10px] font-black px-2.5 py-1 rounded-lg border border-indigo-100/60 shadow-3xs max-w-[180px] truncate" title={filterLesson}>
-                          {filterLesson}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Available questions counts */}
-                  <div className="space-y-3">
-                    <h4 className="text-xs font-extrabold text-slate-700 flex items-center gap-1.5">
-                      <Layers className="w-3.5 h-3.5 text-indigo-500" />
-                      الأسئلة المتوفرة في الفلترة الحالية ({filteredBank.length} سؤال):
-                    </h4>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {/* MCQ Select Box */}
-                      <div className="bg-slate-50/60 border border-slate-200/60 p-4 rounded-2xl flex flex-col justify-between">
-                        <div>
-                          <div className="flex justify-between items-start mb-1">
-                            <span className="text-xs font-black text-slate-800">اختيار من متعدد</span>
-                            <span className="bg-indigo-50 text-indigo-700 text-[10px] font-extrabold px-1.5 py-0.5 rounded-md">
-                              متاح: {modalAvailableMcqs.length}
-                            </span>
-                          </div>
-                          <p className="text-[10px] text-slate-400 font-semibold mb-3">أسئلة الاختيار متعدد الخيارات</p>
-                        </div>
-
-                        <div className="flex items-center justify-between gap-2 mt-2">
-                          <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-1 py-1 shadow-3xs">
-                            <button
-                              type="button"
-                              onClick={() => setAutoMcqCount(prev => Math.max(0, prev - 1))}
-                              className="w-7 h-7 flex items-center justify-center text-slate-500 hover:bg-slate-50 rounded-lg font-bold text-sm select-none cursor-pointer border border-slate-100"
-                            >
-                              -
-                            </button>
-                            <input
-                              type="number"
-                              min={0}
-                              max={modalAvailableMcqs.length}
-                              value={autoMcqCount}
-                              onChange={(e) => {
-                                const val = Math.min(modalAvailableMcqs.length, Math.max(0, parseInt(e.target.value) || 0));
-                                setAutoMcqCount(val);
-                              }}
-                              className="w-12 text-center text-xs font-bold font-sans outline-none focus:ring-0"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setAutoMcqCount(prev => Math.min(modalAvailableMcqs.length, prev + 1))}
-                              className="w-7 h-7 flex items-center justify-center text-slate-500 hover:bg-slate-50 rounded-lg font-bold text-sm select-none cursor-pointer border border-slate-100"
-                            >
-                              +
-                            </button>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() => setAutoMcqCount(modalAvailableMcqs.length)}
-                            className="text-[10px] font-black text-indigo-600 hover:text-indigo-700 bg-white hover:bg-indigo-50/50 border border-slate-200 px-2 py-2 rounded-lg cursor-pointer transition shrink-0"
-                          >
-                            اختر الكل
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* True False Select Box */}
-                      <div className="bg-slate-50/60 border border-slate-200/60 p-4 rounded-2xl flex flex-col justify-between">
-                        <div>
-                          <div className="flex justify-between items-start mb-1">
-                            <span className="text-xs font-black text-slate-800">صواب أو خطأ</span>
-                            <span className="bg-emerald-50 text-emerald-700 text-[10px] font-extrabold px-1.5 py-0.5 rounded-md">
-                              متاح: {modalAvailableTfs.length}
-                            </span>
-                          </div>
-                          <p className="text-[10px] text-slate-400 font-semibold mb-3">أسئلة صواب أو خطأ الصح أم الخطأ</p>
-                        </div>
-
-                        <div className="flex items-center justify-between gap-2 mt-2">
-                          <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-1 py-1 shadow-3xs">
-                            <button
-                              type="button"
-                              onClick={() => setAutoTfCount(prev => Math.max(0, prev - 1))}
-                              className="w-7 h-7 flex items-center justify-center text-slate-500 hover:bg-slate-50 rounded-lg font-bold text-sm select-none cursor-pointer border border-slate-100"
-                            >
-                              -
-                            </button>
-                            <input
-                              type="number"
-                              min={0}
-                              max={modalAvailableTfs.length}
-                              value={autoTfCount}
-                              onChange={(e) => {
-                                const val = Math.min(modalAvailableTfs.length, Math.max(0, parseInt(e.target.value) || 0));
-                                setAutoTfCount(val);
-                              }}
-                              className="w-12 text-center text-xs font-bold font-sans outline-none focus:ring-0"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setAutoTfCount(prev => Math.min(modalAvailableTfs.length, prev + 1))}
-                              className="w-7 h-7 flex items-center justify-center text-slate-500 hover:bg-slate-50 rounded-lg font-bold text-sm select-none cursor-pointer border border-slate-100"
-                            >
-                              +
-                            </button>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() => setAutoTfCount(modalAvailableTfs.length)}
-                            className="text-[10px] font-black text-indigo-600 hover:text-indigo-700 bg-white hover:bg-indigo-50/50 border border-slate-200 px-2 py-2 rounded-lg cursor-pointer transition shrink-0"
-                          >
-                            اختر الكل
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Dynamic Summary Section */}
-                  <div className="bg-indigo-600/5 border border-indigo-100 rounded-2xl p-5 space-y-3">
-                    <h5 className="text-[11px] font-extrabold text-indigo-900 flex items-center gap-1.5">
-                      <HelpCircle className="w-3.5 h-3.5 text-indigo-600" />
-                      إحصائيات ملخص الاختبار أثناء الإعداد:
-                    </h5>
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="bg-white/80 p-3 rounded-xl border border-indigo-50 text-center">
-                        <span className="text-[10px] font-bold text-slate-400 block mb-1">مجموع الأسئلة المحددة</span>
-                        <span className="text-lg font-black font-sans text-indigo-700">{autoMcqCount + autoTfCount}</span>
-                        <span className="text-[10px] text-slate-400 block font-semibold">سؤال للاستيراد</span>
-                      </div>
-
-                      <div className="bg-white/80 p-3 rounded-xl border border-indigo-50 text-center">
-                        <span className="text-[10px] font-bold text-slate-400 block mb-1">مجموع درجات الاختبار</span>
-                        <span className="text-lg font-black font-sans text-indigo-700">{totalAutoScore}</span>
-                        <span className="text-[10px] text-slate-400 block font-semibold">درجة مستحقة</span>
-                      </div>
-                    </div>
-
-                    <div className="text-[10px] text-indigo-600 font-bold bg-white p-2.5 rounded-xl border border-indigo-100/30 leading-relaxed text-right">
-                      💡 سيقوم النظام باختيار عدد الأسئلة المطلوبة تلقائياً وبشكل عشوائي فريد من بنك الأسئلة وفقاً لمعايير الفلترة المحددة، ثم يحيلك مباشرة إلى مصمم الاختبار لإكمال إعدادات الاختبار الأساسية (مثل العنوان والزمن والتحكم بالنتائج).
-                    </div>
-                  </div>
-                </div>
-
-                {/* Footer */}
-                <div className="p-5 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setShowAutoQuizModal(false)}
-                    className="px-5 py-2.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 cursor-pointer transition"
-                  >
-                    إلغاء الإجراء
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleConfirmAutoQuiz}
-                    disabled={autoMcqCount + autoTfCount === 0}
-                    className={`px-6 py-2.5 rounded-xl text-white font-extrabold text-xs shadow-md transition flex items-center gap-2 cursor-pointer ${
-                      autoMcqCount + autoTfCount === 0
-                        ? 'bg-indigo-300 shadow-none cursor-not-allowed'
-                        : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-150'
-                    }`}
-                  >
-                    <Check className="w-4 h-4" />
-                    <span>أنشئ الاختبار تلقائياً 🪄</span>
-                  </button>
-                </div>
-              </motion.div>
-            </div>
-          );
-        })()}
-      </AnimatePresence>
 
       {/* Moving Progress Modal Overlay */}
       <AnimatePresence>

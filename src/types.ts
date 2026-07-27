@@ -103,5 +103,6 @@ export interface ReviewScore {
   totalCount: number;
   timeSpentSeconds: number;
   completedAt: string;
+  teacherId?: string;
 }
 

@@ -71,6 +71,7 @@ import {
   ReviewChallenge,
   ReviewScore,
 } from "./types";
+import { isTrueFalseQuestion, normalizeQuestion } from "./utils/questionUtils";
 import {
   initialQuizzes,
   initialStudents,
@@ -327,7 +328,17 @@ export default function App() {
   }, []);
 
   const gradesList = useMemo(() => {
-    return [...grades].sort(sortGradesByNumber);
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const g of grades) {
+      if (!g) continue;
+      const norm = normalizeGradeName(g) || g.trim();
+      if (!seen.has(norm)) {
+        seen.add(norm);
+        result.push(g);
+      }
+    }
+    return result.sort(sortGradesByNumber);
   }, [grades, sortGradesByNumber]);
 
   // Custom Universal Confirm Dialog State
@@ -819,6 +830,7 @@ export default function App() {
       if (user) {
         localStorage.setItem("seb_student_teacher_id", user.uid);
         localStorage.removeItem("seb_student_logged_id");
+        setStudentPortalTeacherId(user.uid);
         
         // Save original platform teacher UID to localStorage if we are running on the default platform app
         if (!isCustomFirebaseActive()) {
@@ -834,6 +846,19 @@ export default function App() {
         }, { merge: true }).catch(err => {
           console.error("Error saving teacher profile:", err);
         });
+      } else {
+        // Reset all teacher state and clear student teacher cache when logged out
+        setQuizzes([]);
+        setStudents([]);
+        setBankQuestions([]);
+        setGrades([]);
+        setSemesters([]);
+        setTrashStudents([]);
+        setReviewChallenges([]);
+        setReviewScores([]);
+        setStudentPortalTeacherId(null);
+        localStorage.removeItem("seb_student_teacher_id");
+        localStorage.removeItem("seb_student_logged_id");
       }
     });
     return () => unsubscribe();
@@ -1224,7 +1249,9 @@ export default function App() {
                 (snapshot) => {
                   const qList: Quiz[] = [];
                   snapshot.forEach((doc) => {
-                    qList.push(doc.data() as Quiz);
+                    const data = doc.data() as Quiz;
+                    const normalizedQs = (data.questions || []).map((q) => normalizeQuestion(q));
+                    qList.push({ ...data, questions: normalizedQs });
                   });
                   qList.sort((a, b) => b.dateCreated.localeCompare(a.dateCreated));
                   setQuizzes(qList);
@@ -1244,7 +1271,7 @@ export default function App() {
                 (snapshot) => {
                   const qbList: BankQuestion[] = [];
                   snapshot.forEach((doc) => {
-                    qbList.push(doc.data() as BankQuestion);
+                    qbList.push(normalizeQuestion(doc.data() as BankQuestion));
                   });
                   setBankQuestions(qbList);
                   setBankQuestionsLoaded(true);
@@ -1555,7 +1582,15 @@ export default function App() {
 
   // Listen to Firestore real-time updates when logged in
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser) {
+      setQuizzes([]);
+      setStudents([]);
+      setBankQuestions([]);
+      setGrades([]);
+      setSemesters([]);
+      setTrashStudents([]);
+      return;
+    }
     if (studentPortalActive || teacherPreviewActive) return;
 
     const quizzesQuery = query(
@@ -1567,7 +1602,9 @@ export default function App() {
       (snapshot) => {
         const list: Quiz[] = [];
         snapshot.forEach((doc) => {
-          list.push(doc.data() as Quiz);
+          const data = doc.data() as Quiz;
+          const normalizedQs = (data.questions || []).map((q) => normalizeQuestion(q));
+          list.push({ ...data, questions: normalizedQs });
         });
         list.sort((a, b) => b.dateCreated.localeCompare(a.dateCreated));
         setQuizzes(list);
@@ -1631,7 +1668,7 @@ export default function App() {
       (snapshot) => {
         const list: BankQuestion[] = [];
         snapshot.forEach((doc) => {
-          list.push(doc.data() as BankQuestion);
+          list.push(normalizeQuestion(doc.data() as BankQuestion));
         });
         setBankQuestions(list);
         setBankQuestionsLoaded(true);
@@ -1652,12 +1689,20 @@ export default function App() {
         const gItems = snapshot.docs.map((doc) => {
           const data = doc.data();
           return {
-            name: data.name as string,
+            name: (data.name as string) || "",
             createdAt: data.createdAt || 0,
             id: doc.id,
           };
         });
-        gItems.sort((a, b) => {
+        // Deduplicate grades by normalized grade name
+        const seenGrades = new Set<string>();
+        const uniqueGItems = gItems.filter((item) => {
+          const norm = normalizeGradeName(item.name);
+          if (!norm || seenGrades.has(norm)) return false;
+          seenGrades.add(norm);
+          return true;
+        });
+        uniqueGItems.sort((a, b) => {
           const timeA = a.createdAt || 0;
           const timeB = b.createdAt || 0;
           if (timeA !== timeB) {
@@ -1665,7 +1710,7 @@ export default function App() {
           }
           return a.id.localeCompare(b.id);
         });
-        const list = gItems.map((item) => item.name);
+        const list = uniqueGItems.map((item) => item.name);
         setGrades(list);
         setGradesLoaded(true);
       },
@@ -1681,7 +1726,7 @@ export default function App() {
     const unsubscribeSemesters = onSnapshot(
       semestersQuery,
       (snapshot) => {
-        const list: Array<{
+        const rawList: Array<{
           id: string;
           name: string;
           gradeName: string;
@@ -1690,13 +1735,23 @@ export default function App() {
         }> = [];
         snapshot.forEach((doc) => {
           const d = doc.data();
-          list.push({
+          rawList.push({
             id: d.id || doc.id,
             name: d.name || "",
             gradeName: d.gradeName || "",
             number: d.number !== undefined ? Number(d.number) : undefined,
             createdAt: d.createdAt || 0,
           });
+        });
+        // Deduplicate semesters by (normalized gradeName, normalized semester name)
+        const seenSemKey = new Set<string>();
+        const list = rawList.filter((s) => {
+          const gNorm = normalizeGradeName(s.gradeName);
+          const sNorm = normalizeSemesterName(s.name);
+          const key = `${gNorm}___${sNorm}`;
+          if (!sNorm || seenSemKey.has(key)) return false;
+          seenSemKey.add(key);
+          return true;
         });
         setSemesters(list);
         setSemestersLoaded(true);
@@ -1755,38 +1810,51 @@ export default function App() {
     let unsubChallenges = () => {};
     let unsubScores = () => {};
 
-    // Listen to review challenges (broad query so student portal always gets published challenges)
-    const challengesQuery = query(collection(db, "reviewChallenges"));
-    unsubChallenges = onSnapshot(
-      challengesQuery,
-      (snapshot) => {
-        const list: ReviewChallenge[] = [];
-        snapshot.forEach((doc) => {
-          list.push({ id: doc.id, ...doc.data() } as ReviewChallenge);
-        });
-        list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-        setReviewChallenges(list);
-      },
-      (error) => {
-        console.warn("Failed to listen to review challenges:", error);
-      }
-    );
+    const targetTeacherId = studentPortalActive ? studentPortalTeacherId : currentUser?.uid;
 
-    // 2. Listen to review scores (real-time live updates for lab competition leaderboard)
-    const scoresQuery = collection(db, "reviewScores");
-    unsubScores = onSnapshot(
-      scoresQuery,
-      (snapshot) => {
-        const list: ReviewScore[] = [];
-        snapshot.forEach((doc) => {
-          list.push({ id: doc.id, ...doc.data() } as ReviewScore);
-        });
-        setReviewScores(list);
-      },
-      (error) => {
-        console.warn("Failed to listen to review scores:", error);
-      }
-    );
+    if (targetTeacherId) {
+      // Listen to review challenges for this specific teacher
+      const challengesQuery = query(
+        collection(db, "reviewChallenges"),
+        where("teacherId", "==", targetTeacherId)
+      );
+      unsubChallenges = onSnapshot(
+        challengesQuery,
+        (snapshot) => {
+          const list: ReviewChallenge[] = [];
+          snapshot.forEach((doc) => {
+            list.push({ id: doc.id, ...doc.data() } as ReviewChallenge);
+          });
+          list.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+          setReviewChallenges(list);
+        },
+        (error) => {
+          console.warn("Failed to listen to review challenges:", error);
+        }
+      );
+
+      // Listen to review scores for this specific teacher
+      const scoresQuery = query(
+        collection(db, "reviewScores"),
+        where("teacherId", "==", targetTeacherId)
+      );
+      unsubScores = onSnapshot(
+        scoresQuery,
+        (snapshot) => {
+          const list: ReviewScore[] = [];
+          snapshot.forEach((doc) => {
+            list.push({ id: doc.id, ...doc.data() } as ReviewScore);
+          });
+          setReviewScores(list);
+        },
+        (error) => {
+          console.warn("Failed to listen to review scores:", error);
+        }
+      );
+    } else {
+      setReviewChallenges([]);
+      setReviewScores([]);
+    }
 
     return () => {
       unsubChallenges();
@@ -2380,33 +2448,14 @@ export default function App() {
 
     // Map questions
     const mapped: Question[] = selectedQuestions.map((bq, idx) => {
-      const qIsTf = bq.type === "true_false" || (bq.options && (bq.options.length === 2 || bq.options.some(o => {
-        const norm = o.trim();
-        return norm === 'صح' || norm === 'خطأ' || norm === 'صحيح' || norm === 'خاطئ' || norm === 'صواب' || norm === 'خاطئة';
-      })));
-      let normAnswer = bq.correctAnswer;
-      if (qIsTf) {
-        let ansText = String(bq.correctAnswer).trim();
-        if ((ansText === "0" || ansText === "1") && Array.isArray(bq.options) && bq.options.length > 0) {
-          const idx = parseInt(ansText, 10);
-          if (bq.options[idx]) {
-            ansText = bq.options[idx].trim();
-          }
-        }
-        const lowerAns = ansText.toLowerCase();
-        if (lowerAns === "true" || lowerAns === "0" || lowerAns === "صح" || lowerAns === "صحيح" || lowerAns === "صواب") {
-          normAnswer = "true";
-        } else if (lowerAns === "false" || lowerAns === "1" || lowerAns === "خطأ" || lowerAns === "خاطئ" || lowerAns === "خاطئة") {
-          normAnswer = "false";
-        }
-      }
+      const normQ = normalizeQuestion(bq);
       return {
         id: `temp-${Date.now()}-${idx}-${bq.id}`,
-        text: bq.text,
-        type: qIsTf ? ("true_false" as const) : ("multiple_choice" as const),
-        options: bq.options,
-        correctAnswer: normAnswer,
-        points: bq.points,
+        text: normQ.text,
+        type: normQ.type,
+        options: normQ.options,
+        correctAnswer: normQ.correctAnswer,
+        points: normQ.points || 1,
       };
     });
 
@@ -2423,19 +2472,8 @@ export default function App() {
 
   // Open the builder-level automatic quiz creation modal
   const handleOpenBuilderAutoQuizModal = () => {
-    const isTf = (q: BankQuestion) => {
-      if (q.type === 'true_false' || (q.type as string) === 'tf' || (q.type as string) === 'boolean') return true;
-      if (q.options && Array.isArray(q.options) && q.options.length === 2) {
-        const o1 = (q.options[0] || '').trim().toLowerCase();
-        const o2 = (q.options[1] || '').trim().toLowerCase();
-        const tfWords = ['صح', 'خطأ', 'صحيح', 'خاطئ', 'خاطئة', 'صواب', 'true', 'false'];
-        if (tfWords.includes(o1) || tfWords.includes(o2)) return true;
-      }
-      return false;
-    };
-
-    const availableMcqs = filteredImportQuestions.filter((q) => !isTf(q));
-    const availableTfs = filteredImportQuestions.filter((q) => isTf(q));
+    const availableMcqs = filteredImportQuestions.filter((q) => !isTrueFalseQuestion(q));
+    const availableTfs = filteredImportQuestions.filter((q) => isTrueFalseQuestion(q));
 
     if (filteredImportQuestions.length === 0) {
       triggerToast("لا توجد أسئلة متاحة في الفلترة الحالية لتوليد الاختبار التلقائي منها.", "error");
@@ -2449,19 +2487,8 @@ export default function App() {
 
   // Confirm and generate automatic quiz from builder filters
   const handleConfirmBuilderAutoQuiz = () => {
-    const isTf = (q: BankQuestion) => {
-      if (q.type === 'true_false' || (q.type as string) === 'tf' || (q.type as string) === 'boolean') return true;
-      if (q.options && Array.isArray(q.options) && q.options.length === 2) {
-        const o1 = (q.options[0] || '').trim().toLowerCase();
-        const o2 = (q.options[1] || '').trim().toLowerCase();
-        const tfWords = ['صح', 'خطأ', 'صحيح', 'خاطئ', 'خاطئة', 'صواب', 'true', 'false'];
-        if (tfWords.includes(o1) || tfWords.includes(o2)) return true;
-      }
-      return false;
-    };
-
-    const availableMcqs = filteredImportQuestions.filter((q) => !isTf(q));
-    const availableTfs = filteredImportQuestions.filter((q) => isTf(q));
+    const availableMcqs = filteredImportQuestions.filter((q) => !isTrueFalseQuestion(q));
+    const availableTfs = filteredImportQuestions.filter((q) => isTrueFalseQuestion(q));
 
     if (autoBuilderMcqCount === 0 && autoBuilderTfCount === 0) {
       triggerToast("يرجى اختيار سؤال واحد على الأقل لإنشاء الاختبار التلقائي.", "error");
@@ -2515,30 +2542,14 @@ export default function App() {
 
     // Map questions
     const mapped: Question[] = finalSelected.map((bq, idx) => {
-      const qIsTf = isTf(bq);
-      let normAnswer = bq.correctAnswer;
-      if (qIsTf) {
-        let ansText = String(bq.correctAnswer).trim();
-        if ((ansText === "0" || ansText === "1") && Array.isArray(bq.options) && bq.options.length > 0) {
-          const idx = parseInt(ansText, 10);
-          if (bq.options[idx]) {
-            ansText = bq.options[idx].trim();
-          }
-        }
-        const lowerAns = ansText.toLowerCase();
-        if (lowerAns === "true" || lowerAns === "0" || lowerAns === "صح" || lowerAns === "صحيح" || lowerAns === "صواب") {
-          normAnswer = "true";
-        } else if (lowerAns === "false" || lowerAns === "1" || lowerAns === "خطأ" || lowerAns === "خاطئ" || lowerAns === "خاطئة") {
-          normAnswer = "false";
-        }
-      }
+      const normQ = normalizeQuestion(bq);
       return {
         id: `temp-${Date.now()}-${idx}-${bq.id}`,
-        text: bq.text,
-        type: qIsTf ? ("true_false" as const) : ("multiple_choice" as const),
-        options: bq.options,
-        correctAnswer: normAnswer,
-        points: bq.points,
+        text: normQ.text,
+        type: normQ.type,
+        options: normQ.options,
+        correctAnswer: normQ.correctAnswer,
+        points: normQ.points || 1,
       };
     });
 
@@ -2570,30 +2581,14 @@ export default function App() {
     );
 
     const mapped: Question[] = matchedQuestions.map((bq, idx) => {
-      const isTf = bq.type === 'true_false' || (bq.type as string) === 'tf' || (bq.type as string) === 'boolean' || (bq.options && bq.options.length === 2 && ['صح', 'خطأ', 'صحيح', 'خاطئ', 'صواب', 'true', 'false'].includes((bq.options[0]||'').trim().toLowerCase()));
-      let normAnswer = bq.correctAnswer;
-      if (isTf) {
-        let ansText = String(bq.correctAnswer).trim();
-        if ((ansText === "0" || ansText === "1") && Array.isArray(bq.options) && bq.options.length > 0) {
-          const idx = parseInt(ansText, 10);
-          if (bq.options[idx]) {
-            ansText = bq.options[idx].trim();
-          }
-        }
-        const lowerAns = ansText.toLowerCase();
-        if (lowerAns === "true" || lowerAns === "0" || lowerAns === "صح" || lowerAns === "صحيح" || lowerAns === "صواب") {
-          normAnswer = "true";
-        } else if (lowerAns === "false" || lowerAns === "1" || lowerAns === "خطأ" || lowerAns === "خاطئ" || lowerAns === "خاطئة") {
-          normAnswer = "false";
-        }
-      }
+      const normQ = normalizeQuestion(bq);
       return {
         id: `temp-${Date.now()}-${idx}-${bq.id}`,
-        text: bq.text,
-        type: isTf ? ("true_false" as const) : ("multiple_choice" as const),
-        options: bq.options,
-        correctAnswer: normAnswer,
-        points: bq.points,
+        text: normQ.text,
+        type: normQ.type,
+        options: normQ.options,
+        correctAnswer: normQ.correctAnswer,
+        points: normQ.points || 1,
       };
     });
 
@@ -2863,30 +2858,14 @@ export default function App() {
         selectedIds.includes(q.id),
       );
       const mapped: Question[] = matchedQuestions.map((bq, idx) => {
-        const isTf = bq.type === 'true_false' || (bq.type as string) === 'tf' || (bq.type as string) === 'boolean' || (bq.options && bq.options.length === 2 && ['صح', 'خطأ', 'صحيح', 'خاطئ', 'صواب', 'true', 'false'].includes((bq.options[0]||'').trim().toLowerCase()));
-        let normAnswer = bq.correctAnswer;
-        if (isTf) {
-          let ansText = String(bq.correctAnswer).trim();
-          if ((ansText === "0" || ansText === "1") && Array.isArray(bq.options) && bq.options.length > 0) {
-            const idx = parseInt(ansText, 10);
-            if (bq.options[idx]) {
-              ansText = bq.options[idx].trim();
-            }
-          }
-          const lowerAns = ansText.toLowerCase();
-          if (lowerAns === "true" || lowerAns === "0" || lowerAns === "صح" || lowerAns === "صحيح" || lowerAns === "صواب") {
-            normAnswer = "true";
-          } else if (lowerAns === "false" || lowerAns === "1" || lowerAns === "خطأ" || lowerAns === "خاطئ" || lowerAns === "خاطئة") {
-            normAnswer = "false";
-          }
-        }
+        const normQ = normalizeQuestion(bq);
         return {
           id: `temp-${Date.now()}-${idx}-${bq.id}`,
-          text: bq.text,
-          type: isTf ? ("true_false" as const) : ("multiple_choice" as const),
-          options: bq.options,
-          correctAnswer: normAnswer,
-          points: bq.points,
+          text: normQ.text,
+          type: normQ.type,
+          options: normQ.options,
+          correctAnswer: normQ.correctAnswer,
+          points: normQ.points || 1,
         };
       });
 
@@ -3015,18 +2994,34 @@ export default function App() {
   const handleAddGrade = async () => {
     if (!currentUser || !newGradeInput.trim()) return;
     const addedGradeName = newGradeInput.trim();
+
+    // Check if grade already exists
+    const isDuplicate = grades.some(
+      (g) => normalizeGradeName(g) === normalizeGradeName(addedGradeName)
+    );
+    if (isDuplicate) {
+      triggerToast(`الصف الدراسي "${addedGradeName}" مضاف مسبقاً!`, "info");
+      return;
+    }
+
     try {
-      const id = `grade-${Math.random().toString(36).substr(2, 9)}`;
-      await setDoc(doc(db, "grades", id), {
-        id,
-        teacherId: currentUser.uid,
-        name: addedGradeName,
-        createdAt: Date.now(),
-      });
-      setNewGradeInput("");
-      setSelectedManageGrade(addedGradeName);
-      setSelectedSemesterNumbers([]);
-      triggerToast("تمت إضافة الصف الدراسي الجديد بنجاح", "success");
+      await runWithProgress(
+        async () => {
+          const id = `grade-${Math.random().toString(36).substr(2, 9)}`;
+          await setDoc(doc(db, "grades", id), {
+            id,
+            teacherId: currentUser.uid,
+            name: addedGradeName,
+            createdAt: Date.now(),
+          });
+          setGrades((prev) => [...prev, addedGradeName]);
+          setNewGradeInput("");
+          setSelectedManageGrade(addedGradeName);
+          setSelectedSemesterNumbers([]);
+        },
+        `جاري إضافة الصف الدراسي "${addedGradeName}"...`,
+        `تمت إضافة الصف الدراسي "${addedGradeName}" بنجاح ✨`
+      );
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, "grades");
     }
@@ -3094,46 +3089,47 @@ export default function App() {
   const handleUpdateGrade = async () => {
     if (!currentUser || !editingGrade || !editingGrade.current.trim()) return;
     try {
-      const q = query(
-        collection(db, "grades"),
-        where("teacherId", "==", currentUser.uid),
-        where("name", "==", editingGrade.original),
-      );
-      const s = await getDocs(q);
-      const batch = writeBatch(db);
-      
-      s.forEach((d) => {
-        batch.update(doc(db, "grades", d.id), {
-          name: editingGrade.current.trim(),
-        });
-      });
+      await runWithProgress(
+        async () => {
+          const q = query(
+            collection(db, "grades"),
+            where("teacherId", "==", currentUser.uid),
+            where("name", "==", editingGrade.original),
+          );
+          const s = await getDocs(q);
+          const batch = writeBatch(db);
+          
+          s.forEach((d) => {
+            batch.update(doc(db, "grades", d.id), {
+              name: editingGrade.current.trim(),
+            });
+          });
 
-      const studentsToUpdate = students.filter((student) => {
-        const sGrade =
-          student.grade ||
-          (student.gradeClass && student.gradeClass.includes(" - ")
-            ? student.gradeClass.split(" - ")[0].trim()
-            : "الصف العاشر");
-        return sGrade === editingGrade.original;
-      });
+          const studentsToUpdate = students.filter((student) => {
+            const sGrade =
+              student.grade ||
+              (student.gradeClass && student.gradeClass.includes(" - ")
+                ? student.gradeClass.split(" - ")[0].trim()
+                : "الصف العاشر");
+            return sGrade === editingGrade.original;
+          });
 
-      studentsToUpdate.forEach((student) => {
-        const section =
-          student.gradeClass && student.gradeClass.includes(" - ")
-            ? student.gradeClass.split(" - ")[1].trim()
-            : "أ";
-        batch.update(doc(db, "students", student.id), {
-          grade: editingGrade.current.trim(),
-          gradeClass: `${editingGrade.current.trim()} - ${section}`,
-        });
-      });
+          studentsToUpdate.forEach((student) => {
+            const section =
+              student.gradeClass && student.gradeClass.includes(" - ")
+                ? student.gradeClass.split(" - ")[1].trim()
+                : "أ";
+            batch.update(doc(db, "students", student.id), {
+              grade: editingGrade.current.trim(),
+              gradeClass: `${editingGrade.current.trim()} - ${section}`,
+            });
+          });
 
-      await batch.commit();
-
-      setEditingGrade(null);
-      triggerToast(
-        "تم تعديل مسمى الصف وتحديث بيانات الطلاب المنتسبين له بنجاح",
-        "success",
+          await batch.commit();
+          setEditingGrade(null);
+        },
+        `جاري تحديث مسمى الصف الدراسي إلى "${editingGrade.current.trim()}"...`,
+        "تم تعديل مسمى الصف وتحديث بيانات الطلاب المنتسبين له بنجاح ✨"
       );
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, "grades");
@@ -3161,58 +3157,99 @@ export default function App() {
     let addedCount = 0;
     const newSemDocs: typeof semesters = [];
 
-    for (const num of numbersToAdd) {
-      const finalSemesterName = `الفصل ${num}`;
-      const isDuplicate = semesters.some(
-        (s) =>
-          normalizeGradeName(s.gradeName) === normalizeGradeName(activeGrade) &&
-          normalizeSemesterName(s.name) === normalizeSemesterName(finalSemesterName)
-      );
+    try {
+      await runWithProgress(
+        async () => {
+          const batch = writeBatch(db);
+          for (const num of numbersToAdd) {
+            const finalSemesterName = `الفصل ${num}`;
+            const isDuplicate = semesters.some(
+              (s) =>
+                normalizeGradeName(s.gradeName) === normalizeGradeName(activeGrade) &&
+                normalizeSemesterName(s.name) === normalizeSemesterName(finalSemesterName)
+            );
 
-      if (!isDuplicate) {
-        try {
+            if (!isDuplicate) {
+              const id = `semester-${Math.random().toString(36).substr(2, 9)}`;
+              const docData = {
+                id,
+                teacherId: currentUser.uid,
+                name: finalSemesterName,
+                gradeName: activeGrade,
+                number: num,
+                createdAt: Date.now() + num,
+              };
+              batch.set(doc(db, "semesters", id), docData);
+              newSemDocs.push(docData);
+              addedCount++;
+            }
+          }
+
+          if (addedCount > 0) {
+            await batch.commit();
+            setSemesters((prev) => [...prev, ...newSemDocs]);
+            setSelectedSemesterNumbers([]);
+          }
+        },
+        `جاري إضافة الفصول المحددة لصف "${activeGrade}"...`,
+        () => {
+          if (addedCount === 0) {
+            return "جميع الفصول المحددة مضافة مسبقاً لهذا الصف!";
+          }
+          return addedCount === 1
+            ? `تمت إضافة الفصل بنجاح لـ ${activeGrade} 🎉`
+            : `تمت إضافة ${addedCount} فصول بنجاح لـ ${activeGrade} 🎉`;
+        }
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, "semesters");
+    }
+  };
+
+  const addSingleSemesterToGrade = async (targetGrade: string, num: number) => {
+    if (!currentUser) return;
+    const finalSemesterName = `الفصل ${num}`;
+    const isDuplicate = semesters.some(
+      (s) =>
+        normalizeGradeName(s.gradeName) === normalizeGradeName(targetGrade) &&
+        normalizeSemesterName(s.name) === normalizeSemesterName(finalSemesterName)
+    );
+
+    if (isDuplicate) return;
+
+    try {
+      await runWithProgress(
+        async () => {
           const id = `semester-${Math.random().toString(36).substr(2, 9)}`;
           const docData = {
             id,
             teacherId: currentUser.uid,
             name: finalSemesterName,
-            gradeName: activeGrade,
+            gradeName: targetGrade,
             number: num,
             createdAt: Date.now() + num,
           };
           await setDoc(doc(db, "semesters", id), docData);
-          newSemDocs.push(docData);
-          addedCount++;
-        } catch (error) {
-          handleFirestoreError(error, OperationType.CREATE, "semesters");
-        }
-      }
-    }
-
-    if (newSemDocs.length > 0) {
-      setSemesters((prev) => [...prev, ...newSemDocs]);
-    }
-
-    if (addedCount > 0) {
-      triggerToast(
-        addedCount === 1
-          ? `تمت إضافة الفصل بنجاح لـ ${activeGrade}`
-          : `تمت إضافة ${addedCount} فصول بنجاح لـ ${activeGrade}`,
-        "success"
+          setSemesters((prev) => [...prev, docData]);
+        },
+        `جاري إضافة ${finalSemesterName} لصف ${targetGrade}...`,
+        `تمت إضافة ${finalSemesterName} لـ "${targetGrade}" بنجاح 🎉`
       );
-      setSelectedSemesterNumbers([]);
-    } else {
-      triggerToast("جميع الفصول المحددة مضافة مسبقاً لهذا الصف!", "info");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, "semesters");
     }
   };
 
   const handleDeleteSemester = async (
     semesterId: string,
     semesterName: string,
+    targetGradeOverride?: string,
   ) => {
     if (!currentUser) return;
     const activeGrade =
-      selectedManageGrade || (gradesList.length > 0 ? gradesList[0] : "");
+      targetGradeOverride ||
+      selectedManageGrade ||
+      (gradesList.length > 0 ? gradesList[0] : "");
 
     // Check if there are any students in this class/semester under this grade
     const hasStudents = students.some((student) => {
@@ -3246,7 +3283,29 @@ export default function App() {
       async () => {
         await runWithProgress(
           async () => {
-            await deleteDoc(doc(db, "semesters", semesterId));
+            const q = query(
+              collection(db, "semesters"),
+              where("teacherId", "==", currentUser.uid)
+            );
+            const snap = await getDocs(q);
+            const batch = writeBatch(db);
+            let deletedCount = 0;
+            snap.forEach((d) => {
+              const data = d.data();
+              if (
+                d.id === semesterId ||
+                (normalizeGradeName(data.gradeName) === normalizeGradeName(activeGrade) &&
+                 normalizeSemesterName(data.name) === normalizeSemesterName(semesterName))
+              ) {
+                batch.delete(doc(db, "semesters", d.id));
+                deletedCount++;
+              }
+            });
+            if (deletedCount > 0) {
+              await batch.commit();
+            } else {
+              await deleteDoc(doc(db, "semesters", semesterId));
+            }
           },
           `جاري حذف الفصل "${semesterName}"...`,
           `تم حذف الفصل "${semesterName}" بنجاح 🗑️`
@@ -3415,55 +3474,107 @@ export default function App() {
   const semestersList = useMemo(() => {
     const activeGrade =
       selectedTabGrade || (gradesList.length > 0 ? gradesList[0] : "");
-    return getSemestersForGrade(activeGrade);
+    const raw = getSemestersForGrade(activeGrade);
+    const seen = new Set<string>();
+    const unique: string[] = [];
+    for (const s of raw) {
+      const norm = normalizeSemesterName(s) || s.trim();
+      if (norm && !seen.has(norm)) {
+        seen.add(norm);
+        unique.push(s);
+      }
+    }
+    return unique;
   }, [getSemestersForGrade, selectedTabGrade, gradesList]);
 
   const addStudentSemestersList = useMemo(() => {
-    return getSemestersForGrade(newStudentGrade);
+    const raw = getSemestersForGrade(newStudentGrade);
+    const seen = new Set<string>();
+    const unique: string[] = [];
+    for (const s of raw) {
+      const norm = normalizeSemesterName(s) || s.trim();
+      if (norm && !seen.has(norm)) {
+        seen.add(norm);
+        unique.push(s);
+      }
+    }
+    return unique;
   }, [getSemestersForGrade, newStudentGrade]);
 
   const studentGradesList = useMemo(() => {
-    const uniqueGrades = new Set<string>();
+    const seen = new Set<string>();
+    const result: string[] = [];
+
+    const addGrade = (g: string) => {
+      if (!g) return;
+      const norm = normalizeGradeName(g) || g.trim();
+      if (!seen.has(norm)) {
+        seen.add(norm);
+        result.push(g);
+      }
+    };
 
     // 1. Gather from actual student records loaded for this teacher
     students.forEach((s) => {
-      const sGrade = s.grade || (s.gradeClass && s.gradeClass.includes(" - ") ? s.gradeClass.split(" - ")[0].trim() : "");
+      const sGrade =
+        s.grade ||
+        (s.gradeClass && s.gradeClass.includes(" - ")
+          ? s.gradeClass.split(" - ")[0].trim()
+          : "");
       if (sGrade) {
-        uniqueGrades.add(sGrade);
+        addGrade(sGrade);
       }
     });
 
     // 2. Gather from custom grades collection
     if (gradesLoaded) {
       grades.forEach((g) => {
-        if (g) uniqueGrades.add(g);
+        if (g) addGrade(g);
       });
     }
 
-    const list = Array.from(uniqueGrades);
-    list.sort(sortGradesByNumber);
-    return list;
+    result.sort(sortGradesByNumber);
+    return result;
   }, [students, grades, gradesLoaded, sortGradesByNumber]);
 
   const studentSemestersList = useMemo(() => {
-    const uniqueSemesters = new Set<string>();
+    const seen = new Set<string>();
+    const result: string[] = [];
+
+    const addSem = (s: string) => {
+      if (!s) return;
+      const norm = normalizeSemesterName(s) || s.trim();
+      if (!seen.has(norm)) {
+        seen.add(norm);
+        result.push(s);
+      }
+    };
 
     // 1. Gather from actual student records under selected grade
     students.forEach((s) => {
-      const sGrade = s.grade || (s.gradeClass && s.gradeClass.includes(" - ") ? s.gradeClass.split(" - ")[0].trim() : "");
-      const sSemester = s.semester || (s.gradeClass && s.gradeClass.includes(" - ") ? s.gradeClass.split(" - ")[1].trim() : "");
-      if (normalizeGradeName(sGrade) === normalizeGradeName(studentSelectedGrade) && sSemester) {
-        uniqueSemesters.add(sSemester);
+      const sGrade =
+        s.grade ||
+        (s.gradeClass && s.gradeClass.includes(" - ")
+          ? s.gradeClass.split(" - ")[0].trim()
+          : "");
+      const sSemester =
+        s.semester ||
+        (s.gradeClass && s.gradeClass.includes(" - ")
+          ? s.gradeClass.split(" - ")[1].trim()
+          : "");
+      if (
+        normalizeGradeName(sGrade) === normalizeGradeName(studentSelectedGrade) &&
+        sSemester
+      ) {
+        addSem(sSemester);
       }
     });
 
     // 2. Gather from custom semesters collection
     const baseList = getSemestersForGrade(studentSelectedGrade);
     baseList.forEach((s) => {
-      if (s) uniqueSemesters.add(s);
+      if (s) addSem(s);
     });
-
-    const list = Array.from(uniqueSemesters);
 
     if (studentQuiz && studentQuiz.semester) {
       const qSem = studentQuiz.semester;
@@ -3474,17 +3585,39 @@ export default function App() {
         qSem !== "جميع الفصول والفرق المعتمدة"
       ) {
         const allowedSemesters = qSem.split(",").map((s) => s.trim());
-        const filtered = list.filter((s) => allowedSemesters.includes(s));
-        return filtered.length > 0 ? [...filtered].sort(sortSemestersByNumber) : [...list].sort(sortSemestersByNumber);
+        const filtered = result.filter((s) =>
+          allowedSemesters.some(
+            (p) => normalizeSemesterName(s) === normalizeSemesterName(p)
+          )
+        );
+        return filtered.length > 0
+          ? [...filtered].sort(sortSemestersByNumber)
+          : [...result].sort(sortSemestersByNumber);
       }
     }
-    return [...list].sort(sortSemestersByNumber);
-  }, [students, studentSelectedGrade, getSemestersForGrade, studentQuiz, sortSemestersByNumber]);
+    return [...result].sort(sortSemestersByNumber);
+  }, [
+    students,
+    studentSelectedGrade,
+    getSemestersForGrade,
+    studentQuiz,
+    sortSemestersByNumber,
+  ]);
 
   const builderSemestersList = useMemo(() => {
     const activeGrade =
       builderGrade || (gradesList.length > 0 ? gradesList[0] : "");
-    return getSemestersForGrade(activeGrade);
+    const raw = getSemestersForGrade(activeGrade);
+    const seen = new Set<string>();
+    const unique: string[] = [];
+    for (const s of raw) {
+      const norm = normalizeSemesterName(s) || s.trim();
+      if (norm && !seen.has(norm)) {
+        seen.add(norm);
+        unique.push(s);
+      }
+    }
+    return unique;
   }, [getSemestersForGrade, builderGrade, gradesList]);
 
   // Automatically sync select defaults when grades list loads or changes
@@ -4301,62 +4434,6 @@ export default function App() {
               <span>✓ مزامنة سحابية فورية</span>
               <span>✓ استيراد وتوليد بالذكاء الاصطناعي</span>
               <span>✓ تصنيف هرمي دقيق</span>
-            </div>
-          </motion.div>
-        </div>
-      );
-    }
-
-    // Authenticated Standalone Question Bank Portal
-    if (currentUser.email !== "majedsoft@gmail.com") {
-      return (
-        <div
-          className="min-h-screen bg-[#090d16] text-slate-200 flex flex-col items-center justify-center p-6 font-sans relative overflow-hidden"
-          dir="rtl"
-        >
-          {/* Decorative gradients */}
-          <div className="absolute top-0 left-0 w-[500px] h-[500px] bg-rose-500/10 rounded-full blur-[120px] pointer-events-none" />
-          <div className="absolute bottom-0 right-0 w-[500px] h-[500px] bg-amber-500/10 rounded-full blur-[120px] pointer-events-none" />
-
-          <motion.div
-            initial={{ opacity: 0, y: 30 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-[#111827]/80 backdrop-blur-md p-8 md:p-12 rounded-3xl shadow-2xl max-w-lg w-full border border-rose-500/20 text-center relative z-10"
-          >
-            <div className="w-20 h-20 rounded-2xl bg-gradient-to-tr from-rose-600 to-amber-500 flex items-center justify-center text-white mx-auto shadow-lg shadow-rose-500/20 mb-6">
-              <Lock className="w-10 h-10 text-white" />
-            </div>
-
-            <h1 className="text-2xl md:text-3xl font-extrabold text-white mb-2 leading-tight">
-              منطقة إدارية محمية 🔒
-            </h1>
-            <p className="text-rose-400 text-xs font-bold tracking-widest uppercase mb-4 font-mono">
-              بوابة بنك الأسئلة المستقلة • للمسؤول فقط
-            </p>
-            <p className="text-slate-400 text-xs md:text-sm mb-8 font-medium leading-relaxed">
-              عذراً، هذه البوابة المستقلة مخصصة حصرياً لمدير ومسؤول بنك الأسئلة الموحد (<span className="text-emerald-400 font-bold font-sans">majedsoft@gmail.com</span>). بصفتك معلماً، يمكنك استعراض وربط الأسئلة بكامل الصلاحيات والسهولة مباشرةً من داخل لوحة تحكم المعلم عند إعداد أي اختبار جديد.
-            </p>
-
-            <div className="space-y-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setBankPortalActive(false);
-                  setStudentPortalActive(false);
-                  const url = new URL(window.location.href);
-                  url.searchParams.set("teacher", "true");
-                  url.searchParams.delete("portal");
-                  window.history.pushState({}, "", url.toString());
-                }}
-                className="w-full flex items-center justify-center gap-2 px-6 py-3.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl font-bold transition-all duration-200 active:scale-[0.98] cursor-pointer text-xs border border-slate-700"
-              >
-                <span>العودة لبوابة المعلم الرئيسية ↩</span>
-              </button>
-            </div>
-            
-            <div className="mt-8 pt-6 border-t border-slate-800 flex flex-wrap justify-center gap-4 text-[10px] text-slate-500 font-sans font-bold">
-              <span>✓ نظام آمن ومصنف</span>
-              <span>✓ مقتصر على البريد المعتمد</span>
             </div>
           </motion.div>
         </div>
@@ -7076,7 +7153,7 @@ export default function App() {
           )}
 
           <div className="mt-8 pt-6 border-t border-slate-100 flex flex-col items-center gap-3">
-            {currentUser && currentUser.email === "majedsoft@gmail.com" && (
+            {currentUser && currentUser.email?.trim().toLowerCase() === "majedsoft@gmail.com" && (
               <button
                 type="button"
                 onClick={() => {
@@ -7265,7 +7342,7 @@ export default function App() {
 
 
 
-            {currentUser && currentUser.email === "majedsoft@gmail.com" && (
+            {currentUser && currentUser.email?.trim().toLowerCase() === "majedsoft@gmail.com" && (
               <button
                 type="button"
                 onClick={() => {
@@ -7340,7 +7417,7 @@ export default function App() {
               </span>
             </div>
             <span className="text-[9px] text-slate-500 block font-bold font-sans">
-              {currentUser?.email || "majedsoft@gmail.com"}
+              {currentUser?.email || ""}
             </span>
           </div>
 
@@ -9882,6 +9959,9 @@ export default function App() {
                           type="button"
                           onClick={() => {
                             ensureSeededGradesAndSemesters();
+                            setSelectedManageGrade(null);
+                            setSelectedSemesterNumbers([]);
+                            setNewGradeInput("");
                             setShowGradesSemestersModal(true);
                           }}
                           className="px-3.5 py-2 flex items-center gap-2 rounded-xl text-white bg-amber-500 hover:bg-amber-600 border border-amber-400 hover:border-amber-500 active:scale-95 transition-all duration-200 cursor-pointer shadow-sm shadow-amber-200 shrink-0 text-xs font-black"
@@ -11239,7 +11319,7 @@ export default function App() {
                   triggerToast={triggerToast}
                   triggerConfirm={triggerConfirm}
                   onAutoCreateQuiz={handleAutoCreateQuiz}
-                  hideReadOnlyNotice={true}
+                  hideReadOnlyNotice={false}
                 />
               </motion.div>
             )}
@@ -13163,7 +13243,7 @@ export default function App() {
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.95 }}
-                  className="bg-white rounded-3xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+                  className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
                 >
                   {/* Header */}
                   <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
@@ -13199,8 +13279,7 @@ export default function App() {
                     </div>
                   ) : (
                     <div className="p-6 overflow-y-auto space-y-6 flex-1">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 divide-y md:divide-y-0 md:divide-x md:divide-x-reverse divide-slate-100 pt-2">
-                        {/* COLUMN 1: Grades Management */}
+                      <div className="space-y-4 pt-2">
                         <div className="space-y-4 pt-4 md:pt-0">
                           <div className="flex items-center justify-between">
                             <h4 className="font-bold text-xs text-indigo-600 flex items-center gap-1.5 pb-2">
@@ -13231,12 +13310,10 @@ export default function App() {
                           </div>
 
                           {/* List */}
-                          <div className="space-y-2 max-h-[300px] overflow-y-auto scrollbar-thin">
+                          <div className="space-y-3 max-h-[480px] overflow-y-auto scrollbar-thin p-0.5">
                             {gradesList.map((g) => {
                               const isEditing = editingGrade?.original === g;
-                              const isSelected =
-                                selectedManageGrade === g ||
-                                (!selectedManageGrade && gradesList[0] === g);
+                              const isSelected = selectedManageGrade === g;
                               const activeSemList = getSemestersForGrade(g);
                               const gradeStudentsCount = students.filter(
                                 (student) => {
@@ -13273,375 +13350,67 @@ export default function App() {
                                       setSelectedSemesterNumbers([]);
                                     }
                                   }}
-                                  className={`flex items-center justify-between p-2.5 rounded-xl border transition-all gap-2 cursor-pointer ${
+                                  className={`flex flex-col p-3.5 rounded-2xl border-2 transition-all gap-2.5 cursor-pointer shadow-2xs ${
                                     isSelected
-                                      ? "bg-indigo-50 border-indigo-200 text-indigo-700 shadow-3xs"
-                                      : "bg-slate-50/60 border-slate-100 hover:bg-slate-50 text-slate-700"
+                                      ? "bg-indigo-50/90 border-indigo-500 text-indigo-700 shadow-sm ring-2 ring-indigo-500/20"
+                                      : "bg-white border-slate-300 hover:border-indigo-400 hover:shadow-sm text-slate-700"
                                   }`}
                                 >
-                                  {isEditing ? (
-                                    <input
-                                      type="text"
-                                      value={editingGrade.current}
-                                      onChange={(e) =>
-                                        setEditingGrade({
-                                          ...editingGrade,
-                                          current: e.target.value,
-                                        })
-                                      }
-                                      onClick={(e) => e.stopPropagation()}
-                                      className="flex-1 bg-white border border-indigo-300 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 font-sans"
-                                    />
-                                  ) : (
-                                    <span
-                                      className={`text-xs font-semibold ${isSelected ? "text-indigo-900 font-extrabold" : "text-slate-700"}`}
-                                    >
-                                      {g}
-                                    </span>
-                                  )}
-
-                                  <div
-                                    className="flex items-center gap-1.5"
-                                    onClick={(e) => e.stopPropagation()}
-                                  >
-                                    {!isEditing && gradeStudentsCount > 0 && (
-                                      <span
-                                        className="text-xs font-black text-rose-600 bg-rose-50 px-2.5 py-0.5 rounded-md border border-rose-100/50 flex items-center gap-0.5"
-                                        title="عدد الطلاب"
-                                      >
-                                        <span>{gradeStudentsCount}</span>
-                                        <span className="text-[10px] opacity-80">
-                                          طالب
-                                        </span>
-                                      </span>
-                                    )}
-
-                                    {isEditing ? (
-                                      <>
-                                        <button
-                                          type="button"
-                                          onClick={handleUpdateGrade}
-                                          className="p-1 hover:bg-emerald-100 hover:text-emerald-750 rounded-lg text-emerald-600 transition-colors cursor-pointer"
-                                          title="حفظ التعديل"
-                                        >
-                                          <Check className="w-4 h-4" />
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={() => setEditingGrade(null)}
-                                          className="p-1 hover:bg-slate-200 hover:text-slate-700 rounded-lg text-slate-400 transition-colors cursor-pointer"
-                                          title="إلغاء التعديل"
-                                        >
-                                          <X className="w-4 h-4 text-slate-400" />
-                                        </button>
-                                      </>
-                                    ) : (
-                                      <>
-                                        <button
-                                          type="button"
-                                          onClick={() =>
-                                            setEditingGrade({
-                                              original: g,
-                                              current: g,
-                                            })
-                                          }
-                                          className="p-1 hover:bg-indigo-100 hover:text-indigo-700 rounded-lg text-slate-400 transition-colors cursor-pointer"
-                                          title="تعديل المسمى"
-                                        >
-                                          <Settings className="w-3.5 h-3.5" />
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={() => handleDeleteGrade(g)}
-                                          className="p-1 hover:bg-rose-100 hover:text-rose-700 rounded-lg text-slate-400 transition-colors cursor-pointer"
-                                          title="حذف الصف"
-                                        >
-                                          <Trash2 className="w-3.5 h-3.5" />
-                                        </button>
-                                      </>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-
-                        {/* COLUMN 2: Semesters Management */}
-                        <div className="space-y-4 pt-4 md:pt-0 pr-0 md:pr-6">
-                          <div className="flex items-center justify-between">
-                            <h4 className="font-bold text-xs text-indigo-600 flex flex-col gap-1 pb-2">
-                              <span className="flex items-center gap-1.5">
-                                <Calendar className="w-4 h-4 text-indigo-500 shrink-0" />
-                                <span>
-                                  الفصول المتاحة لـ{" "}
-                                  <span className="font-black text-rose-600 underline">
-                                    "
-                                    {selectedManageGrade ||
-                                      (gradesList.length > 0
-                                        ? gradesList[0]
-                                        : "")}
-                                    "
-                                  </span>
-                                </span>
-                              </span>
-                              <span className="text-[10.5px] text-slate-400 font-normal leading-relaxed font-sans">
-                                (اختر أي صف دراسي من الجانب الأيمن لبرمجة الفصول
-                                الخاصة به)
-                              </span>
-                            </h4>
-                          </div>
-
-                          {/* Add Semester Form */}
-                          <div className="space-y-3 bg-indigo-50/50 border border-indigo-100/55 rounded-2xl p-3.5 shadow-2xs">
-                            {/* Class Number Picker */}
-                            <div className="space-y-2 text-right" dir="rtl">
-                              <div className="flex items-center justify-between">
-                                <span className="text-[11px] font-black text-indigo-900 block">
-                                  اختر فصول الصف لإضافتها دفعة واحدة:
-                                </span>
-                                <div className="flex items-center gap-1.5">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const activeGradeName = selectedManageGrade || (gradesList[0] || "");
-                                      const existingNums = semesters
-                                        .filter((s) => normalizeGradeName(s.gradeName) === normalizeGradeName(activeGradeName))
-                                        .map((s) => s.number);
-                                      const unadded = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].filter((n) => !existingNums.includes(n));
-                                      setSelectedSemesterNumbers(unadded);
-                                    }}
-                                    className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800 hover:underline cursor-pointer"
-                                  >
-                                    تحديد الكل
-                                  </button>
-                                  <span className="text-[10px] text-slate-300">|</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const activeGradeName = selectedManageGrade || (gradesList[0] || "");
-                                      const existingNums = semesters
-                                        .filter((s) => normalizeGradeName(s.gradeName) === normalizeGradeName(activeGradeName))
-                                        .map((s) => s.number);
-                                      const unadded = [1, 2, 3, 4].filter((n) => !existingNums.includes(n));
-                                      setSelectedSemesterNumbers(unadded);
-                                    }}
-                                    className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800 hover:underline cursor-pointer"
-                                  >
-                                    (1 - 4)
-                                  </button>
-                                  <span className="text-[10px] text-slate-300">|</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => setSelectedSemesterNumbers([])}
-                                    className="text-[10px] font-bold text-rose-500 hover:text-rose-700 hover:underline cursor-pointer"
-                                  >
-                                    إلغاء التحديد
-                                  </button>
-                                </div>
-                              </div>
-
-                              <div className="grid grid-cols-5 gap-1.5 w-full pt-1">
-                                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((num) => {
-                                  const activeGradeName = selectedManageGrade || (gradesList[0] || "");
-                                  const isAlreadyAdded = semesters.some(
-                                    (s) =>
-                                      normalizeGradeName(s.gradeName) === normalizeGradeName(activeGradeName) &&
-                                      (s.number === num || normalizeSemesterName(s.name) === normalizeSemesterName(`الفصل ${num}`))
-                                  );
-                                  const isSelected = selectedSemesterNumbers.includes(num);
-
-                                  if (isAlreadyAdded) {
-                                    return (
-                                      <div
-                                        key={num}
-                                        className="py-1.5 px-1 rounded-xl text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200/80 flex items-center justify-center gap-1 opacity-80"
-                                        title={`الفصل ${num} مضاف مسبقاً`}
-                                      >
-                                        <Check className="w-3 h-3 text-emerald-600 shrink-0" />
-                                        <span>{num}</span>
-                                      </div>
-                                    );
-                                  }
-
-                                  return (
-                                    <button
-                                      key={num}
-                                      type="button"
-                                      onClick={() => {
-                                        setSelectedSemesterNumbers((prev) =>
-                                          prev.includes(num)
-                                            ? prev.filter((n) => n !== num)
-                                            : [...prev, num]
-                                        );
-                                      }}
-                                      className={`py-2 px-1 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer flex items-center justify-center gap-1 border ${
-                                        isSelected
-                                          ? "bg-indigo-600 text-white font-extrabold border-indigo-600 shadow-xs shadow-indigo-200 scale-[1.02]"
-                                          : "bg-white hover:bg-slate-100 text-slate-700 border-slate-200 hover:border-slate-300"
-                                      }`}
-                                    >
-                                      {isSelected && <Check className="w-3 h-3 text-white shrink-0" />}
-                                      <span>{num}</span>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </div>
-
-                            {/* Batch add button */}
-                            <div className="pt-2 text-right">
-                              <button
-                                type="button"
-                                id="add-semester-btn"
-                                onClick={handleAddSemester}
-                                disabled={selectedSemesterNumbers.length === 0}
-                                className={`w-full font-extrabold text-xs py-2.5 rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs ${
-                                  selectedSemesterNumbers.length > 0
-                                    ? "bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-100"
-                                    : "bg-slate-200 text-slate-400 cursor-not-allowed"
-                                }`}
-                              >
-                                <Plus className="w-4 h-4 shrink-0" />
-                                <span>
-                                  {selectedSemesterNumbers.length > 0
-                                    ? `إضافة الفصول المحددة (${selectedSemesterNumbers.length})`
-                                    : "حدد الفصول المطلوبة لإضافتها"}
-                                </span>
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* List */}
-                          <div className="space-y-2 max-h-[300px] overflow-y-auto scrollbar-thin">
-                            {(() => {
-                              const activeGradeName =
-                                selectedManageGrade ||
-                                (gradesList.length > 0 ? gradesList[0] : "");
-                              const activeSemesters = [...semesters]
-                                .filter((s) => s.gradeName === activeGradeName)
-                                .sort((a, b) => {
-                                  const numA =
-                                    typeof a.number === "number"
-                                      ? a.number
-                                      : 999;
-                                  const numB =
-                                    typeof b.number === "number"
-                                      ? b.number
-                                      : 999;
-                                  if (numA !== numB) return numA - numB;
-                                  const timeA = typeof a.createdAt === "number" ? a.createdAt : 0;
-                                  const timeB = typeof b.createdAt === "number" ? b.createdAt : 0;
-                                  if (timeA !== timeB) return timeA - timeB; // oldest first
-                                  return (a.name || "").localeCompare(
-                                    b.name || "",
-                                    "ar",
-                                  );
-                                });
-
-                              if (activeSemesters.length === 0) {
-                                return (
-                                  <div className="p-8 text-center border border-dashed border-slate-200 bg-slate-50/50 rounded-2xl flex flex-col justify-center items-center">
-                                    <span className="text-xl">📝</span>
-                                    <p className="text-[11px] text-slate-400 font-bold mt-1 font-sans">
-                                      لا توجد فصول مضافة لهذا الصف حالياً.
-                                    </p>
-                                    <p className="text-[10px] text-slate-400 mt-0.5 font-sans leading-relaxed text-center">
-                                      أدخل المسمى في الحقل أعلاه لربط أول فصل
-                                      بدراسة "{activeGradeName}".
-                                    </p>
-                                  </div>
-                                );
-                              }
-
-                              return activeSemesters.map((sDoc) => {
-                                const s = sDoc.name;
-                                const isEditing =
-                                  editingSemester?.original === s;
-                                const semesterStudentsCount = students.filter(
-                                  (student) => {
-                                    const sGrade =
-                                      student.grade ||
-                                      (student.gradeClass &&
-                                      student.gradeClass.includes(" - ")
-                                        ? student.gradeClass
-                                            .split(" - ")[0]
-                                            .trim()
-                                        : "الصف العاشر");
-                                    const sSemester =
-                                      student.semester ||
-                                      (student.gradeClass &&
-                                      student.gradeClass.includes(" - ")
-                                        ? student.gradeClass.split(" - ")[1].trim()
-                                        : "الفصل الأول");
-                                    return (
-                                      normalizeGradeName(sGrade) ===
-                                        normalizeGradeName(activeGradeName) &&
-                                      normalizeSemesterName(sSemester) ===
-                                        normalizeSemesterName(s)
-                                    );
-                                  },
-                                ).length;
-                                return (
-                                  <div
-                                    key={sDoc.id}
-                                    className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50/60 border border-slate-100 hover:bg-slate-50 transition-all gap-2"
-                                  >
+                                  {/* Grade Header */}
+                                  <div className="flex items-center justify-between gap-2 w-full">
                                     {isEditing ? (
                                       <input
                                         type="text"
-                                        value={editingSemester.current}
+                                        value={editingGrade.current}
                                         onChange={(e) =>
-                                          setEditingSemester({
-                                            ...editingSemester,
+                                          setEditingGrade({
+                                            ...editingGrade,
                                             current: e.target.value,
                                           })
                                         }
+                                        onClick={(e) => e.stopPropagation()}
                                         className="flex-1 bg-white border border-indigo-300 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 font-sans"
                                       />
                                     ) : (
-                                      <div className="flex items-center gap-2">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="w-2 h-2 rounded-full bg-indigo-600 shrink-0" />
                                         <span
-                                          className="w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 text-[10px] font-black flex items-center justify-center shrink-0"
-                                          title="ترتيب الفصل"
+                                          className="text-xs font-black text-indigo-700 bg-indigo-100/80 border border-indigo-200/80 px-2.5 py-0.5 rounded-lg shadow-2xs"
                                         >
-                                          {sDoc.number || "-"}
-                                        </span>
-                                        <span className="text-xs font-semibold text-slate-700 font-sans">
-                                          {s}
+                                          {g}
                                         </span>
                                       </div>
                                     )}
 
-                                    <div className="flex items-center gap-1.5">
-                                      {!isEditing &&
-                                        semesterStudentsCount > 0 && (
-                                          <span
-                                            className="text-xs font-black text-rose-600 bg-rose-50 px-2.5 py-0.5 rounded-md border border-rose-100/50 flex items-center gap-0.5"
-                                            title="عدد الطلاب"
-                                          >
-                                            <span>{semesterStudentsCount}</span>
-                                            <span className="text-[10px] opacity-80">
-                                              طالب
-                                            </span>
+                                    <div
+                                      className="flex items-center gap-1.5"
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      {!isEditing && gradeStudentsCount > 0 && (
+                                        <span
+                                          className="text-xs font-black text-rose-600 bg-rose-50 px-2.5 py-0.5 rounded-md border border-rose-100/50 flex items-center gap-0.5"
+                                          title="عدد الطلاب"
+                                        >
+                                          <span>{gradeStudentsCount}</span>
+                                          <span className="text-[10px] opacity-80">
+                                            طالب
                                           </span>
-                                        )}
+                                        </span>
+                                      )}
 
                                       {isEditing ? (
                                         <>
                                           <button
                                             type="button"
-                                            onClick={handleUpdateSemester}
-                                            className="p-1 hover:bg-emerald-100 hover:text-emerald-700 rounded-lg text-emerald-600 transition-colors cursor-pointer"
+                                            onClick={handleUpdateGrade}
+                                            className="p-1 hover:bg-emerald-100 hover:text-emerald-750 rounded-lg text-emerald-600 transition-colors cursor-pointer"
                                             title="حفظ التعديل"
                                           >
                                             <Check className="w-4 h-4" />
                                           </button>
                                           <button
                                             type="button"
-                                            onClick={() =>
-                                              setEditingSemester(null)
-                                            }
+                                            onClick={() => setEditingGrade(null)}
                                             className="p-1 hover:bg-slate-200 hover:text-slate-700 rounded-lg text-slate-400 transition-colors cursor-pointer"
                                             title="إلغاء التعديل"
                                           >
@@ -13653,9 +13422,9 @@ export default function App() {
                                           <button
                                             type="button"
                                             onClick={() =>
-                                              setEditingSemester({
-                                                original: s,
-                                                current: s,
+                                              setEditingGrade({
+                                                original: g,
+                                                current: g,
                                               })
                                             }
                                             className="p-1 hover:bg-indigo-100 hover:text-indigo-700 rounded-lg text-slate-400 transition-colors cursor-pointer"
@@ -13665,11 +13434,9 @@ export default function App() {
                                           </button>
                                           <button
                                             type="button"
-                                            onClick={() =>
-                                              handleDeleteSemester(sDoc.id, s)
-                                            }
+                                            onClick={() => handleDeleteGrade(g)}
                                             className="p-1 hover:bg-rose-100 hover:text-rose-700 rounded-lg text-slate-400 transition-colors cursor-pointer"
-                                            title="حذف الفصل"
+                                            title="حذف الصف"
                                           >
                                             <Trash2 className="w-3.5 h-3.5" />
                                           </button>
@@ -13677,9 +13444,121 @@ export default function App() {
                                       )}
                                     </div>
                                   </div>
-                                );
-                              });
-                            })()}
+
+                                  {/* Number Buttons (1 to 10) inside the Grade Box */}
+                                  <div
+                                    className="pt-2.5 border-t-2 border-slate-200/90 w-full"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    {/* Check if grade has any semesters */}
+                                    {(() => {
+                                      const hasSemesters = semesters.some(
+                                        (s) => normalizeGradeName(s.gradeName) === normalizeGradeName(g)
+                                      );
+                                      return (
+                                        <>
+                                          {/* Alert notice if no semesters added yet */}
+                                          {!hasSemesters && (
+                                            <div className="mb-2 p-2 rounded-lg bg-amber-50 border border-amber-300 text-amber-900 text-[11px] flex items-center gap-1.5 shadow-2xs animate-pulse">
+                                              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                                              <span className="font-extrabold leading-tight">
+                                                تنبيه: اضغط على أرقام الفصول أدناه (1، 2...) لإضافة فصول هذا الصف.
+                                              </span>
+                                            </div>
+                                          )}
+
+                                          {/* Numbers 1 to 10 for direct toggle (add / delete) */}
+                                          <div className="w-full">
+                                            <div className="flex items-center justify-between mb-1.5">
+                                              <span className="text-[10.5px] font-black text-indigo-900 block">
+                                                فصول الصف (اضغط على الرقم للإضافة أو الحذف):
+                                              </span>
+                                            </div>
+                                            <div className="grid grid-cols-10 gap-1.5 w-full">
+                                              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((num) => {
+                                                const semName = `الفصل ${num}`;
+                                                const sDoc = semesters.find(
+                                                  (s) =>
+                                                    normalizeGradeName(s.gradeName) === normalizeGradeName(g) &&
+                                                    (s.number === num || normalizeSemesterName(s.name) === normalizeSemesterName(semName))
+                                                );
+                                                const isAdded = !!sDoc;
+
+                                                const semStudentsCount = students.filter((student) => {
+                                                  const sGrade =
+                                                    student.grade ||
+                                                    (student.gradeClass && student.gradeClass.includes(" - ")
+                                                      ? student.gradeClass.split(" - ")[0].trim()
+                                                      : "");
+                                                  const sSemester =
+                                                    student.semester ||
+                                                    (student.gradeClass && student.gradeClass.includes(" - ")
+                                                      ? student.gradeClass.split(" - ")[1].trim()
+                                                      : "");
+
+                                                  if (normalizeGradeName(sGrade) !== normalizeGradeName(g)) return false;
+
+                                                  if (sDoc && normalizeSemesterName(sSemester) === normalizeSemesterName(sDoc.name)) {
+                                                    return true;
+                                                  }
+                                                  return (
+                                                    normalizeSemesterName(sSemester) === normalizeSemesterName(semName) ||
+                                                    normalizeSemesterName(sSemester) === normalizeSemesterName(`${num}`)
+                                                  );
+                                                }).length;
+
+                                                return (
+                                                  <div key={num} className="w-full">
+                                                    {isAdded ? (
+                                                      <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                          if (sDoc) {
+                                                            handleDeleteSemester(sDoc.id, sDoc.name, g);
+                                                          }
+                                                        }}
+                                                        className="w-full rounded-md overflow-hidden flex flex-col border border-indigo-600 shadow-3xs cursor-pointer group active:scale-95 transition-all"
+                                                        title={`${semName} مضاف (${semStudentsCount} طالب) — اضغط لحذفه`}
+                                                      >
+                                                        <div className="w-full bg-indigo-600 group-hover:bg-rose-600 text-white py-1 px-0.5 text-[11px] font-black flex items-center justify-center gap-0.5 transition-colors">
+                                                          <Check className="w-2.5 h-2.5 text-white shrink-0 group-hover:hidden" />
+                                                          <X className="w-2.5 h-2.5 text-white shrink-0 hidden group-hover:block" />
+                                                          <span>{num}</span>
+                                                        </div>
+                                                        <div className="w-full bg-rose-50 text-rose-600 py-0.5 px-0.5 text-[9.5px] font-black text-center leading-tight border-t border-rose-200/60 flex flex-col items-center justify-center">
+                                                          <span>{semStudentsCount}</span>
+                                                          <span className="text-[7.5px] font-bold text-rose-500 leading-none">طالب</span>
+                                                        </div>
+                                                      </button>
+                                                    ) : (
+                                                      <button
+                                                        type="button"
+                                                        onClick={() => addSingleSemesterToGrade(g, num)}
+                                                        className="w-full rounded-md overflow-hidden flex flex-col border border-indigo-200 hover:border-indigo-600 shadow-3xs cursor-pointer group active:scale-95 transition-all"
+                                                        title={`إضافة ${semName} لـ ${g}`}
+                                                      >
+                                                        <div className="w-full bg-white group-hover:bg-indigo-600 text-indigo-700 group-hover:text-white py-1 px-0.5 text-[11px] font-bold flex items-center justify-center gap-0.5 transition-colors">
+                                                          <Plus className="w-2 h-2 text-indigo-500 group-hover:text-white shrink-0" />
+                                                          <span>{num}</span>
+                                                        </div>
+                                                        <div className="w-full bg-rose-50 text-rose-600 py-0.5 px-0.5 text-[9.5px] font-black text-center leading-tight border-t border-indigo-100 flex flex-col items-center justify-center">
+                                                          <span>{semStudentsCount}</span>
+                                                          <span className="text-[7.5px] font-bold text-rose-500 leading-none">طالب</span>
+                                                        </div>
+                                                      </button>
+                                                    )}
+                                                  </div>
+                                                );
+                                              })}
+                                            </div>
+                                          </div>
+                                        </>
+                                      );
+                                    })()}
+                                  </div>
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
                       </div>

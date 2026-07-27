@@ -21,6 +21,7 @@ import {
   AlertCircle
 } from "lucide-react";
 import { BankQuestion, Student } from "../types";
+import { isTrueFalseQuestion as isTFHelper, normalizeQuestion } from "../utils/questionUtils";
 import { db } from "../firebase";
 import { collection, doc, setDoc, getDocs, query, where, onSnapshot } from "firebase/firestore";
 
@@ -638,43 +639,7 @@ export default function StudentCurriculumReview({
   const pendingAiHintKeysRef = useRef<Set<string>>(new Set());
 
   // Robust check for True/False or 2-option binary questions
-  const isTrueFalseQuestion = (q: any) => {
-    if (!q) return false;
-    if (q.type === "true_false" || q.type === "tf" || q.type === "boolean" || q.type === "truefalse") {
-      return true;
-    }
-    const rawOpts = q.options || [];
-    const cleanOpts = rawOpts.filter((opt: string) => {
-      if (!opt) return false;
-      const t = opt.trim();
-      return (
-        t !== "" &&
-        !t.startsWith("الخيار الثالث") &&
-        !t.startsWith("الخيار الرابع") &&
-        !t.toLowerCase().startsWith("option 3") &&
-        !t.toLowerCase().startsWith("option 4") &&
-        !t.toLowerCase().startsWith("option3") &&
-        !t.toLowerCase().startsWith("option4")
-      );
-    });
-
-    if (cleanOpts.length <= 2) {
-      return true;
-    }
-
-    const optsStr = cleanOpts.join(" ").toLowerCase();
-    if (
-      optsStr.includes("صح") ||
-      optsStr.includes("خطأ") ||
-      optsStr.includes("صواب") ||
-      optsStr.includes("true") ||
-      optsStr.includes("false")
-    ) {
-      return true;
-    }
-
-    return false;
-  };
+  const isTrueFalseQuestion = (q: any) => isTFHelper(q);
 
   const handleFetchAiHint = async () => {
     if (!currentQuestion) return;

@@ -33,6 +33,7 @@ import {
   UserX
 } from "lucide-react";
 import { Quiz, Question, ReviewChallenge, ReviewScore, BankQuestion } from "../types";
+import { isTrueFalseQuestion, normalizeQuestion } from "../utils/questionUtils";
 import { db, handleFirestoreError, OperationType } from "../firebase";
 import { addDoc, collection, doc, updateDoc, deleteDoc, writeBatch, getDocs, query, where, onSnapshot, deleteField, setDoc } from "firebase/firestore";
 import { UnitLessonMultiSelect } from "./UnitLessonMultiSelect";
@@ -1021,18 +1022,7 @@ export default function ReviewsAdminTab({
   };
 
   // Helper to accurately identify if a question is True/False
-  const isTfQuestion = (q: BankQuestion | Question) => {
-    if (q.type === 'true_false' || (q.type as string) === 'tf' || (q.type as string) === 'boolean') return true;
-    if (q.options && Array.isArray(q.options) && q.options.length === 2) {
-      const o1 = (q.options[0] || '').trim().toLowerCase();
-      const o2 = (q.options[1] || '').trim().toLowerCase();
-      const tfWords = ['صح', 'خطأ', 'صحيح', 'خاطئ', 'خاطئة', 'صواب', 'true', 'false'];
-      if (tfWords.includes(o1) || tfWords.includes(o2)) {
-        return true;
-      }
-    }
-    return false;
-  };
+  const isTfQuestion = (q: BankQuestion | Question) => isTrueFalseQuestion(q);
 
   // Open modal to configure auto question generation counts
   const handleOpenAutoModal = () => {
@@ -1121,7 +1111,7 @@ export default function ReviewsAdminTab({
     const autoSubject = newSubject.trim() || (bqFilterSubject !== "all" ? bqFilterSubject : "مراجعة عامة");
 
     setIsSubmitting(true);
-    const fixedId = `fixed_game_${newGameType}`;
+    const fixedId = `fixed_game_${currentUser.uid}_${newGameType}`;
     const fg = FIXED_GAMES.find(g => g.gameType === newGameType) || FIXED_GAMES[0];
     const existing = reviewChallenges.find(c => c.id === fixedId || c.gameType === newGameType);
 
@@ -1205,7 +1195,7 @@ export default function ReviewsAdminTab({
 
   // Helper to check if option is correct
   const checkOptionIsCorrect = (q: Question, optIdx: number): boolean => {
-    const isTf = q.type === 'true_false' || (q.type as string) === 'tf' || (q.options && q.options.length === 2 && ['صح', 'خطأ', 'صحيح', 'خاطئ', 'صواب', 'true', 'false'].includes((q.options[0]||'').trim().toLowerCase()));
+    const isTf = isTrueFalseQuestion(q);
     if (isTf) {
       const val = (q.correctAnswer || '').toString().toLowerCase().trim();
       if (val === '0' || val === 'true' || val === 'صحيح' || val === 'صح' || val === 'صواب') return optIdx === 0;
@@ -1335,7 +1325,7 @@ export default function ReviewsAdminTab({
     }
 
     setIsSubmitting(true);
-    const fixedId = `fixed_game_${newGameType}`;
+    const fixedId = `fixed_game_${currentUser.uid}_${newGameType}`;
     const matchingChallenges = reviewChallenges.filter(c => c.id === fixedId || c.gameType === newGameType);
     const existing = reviewChallenges.find(c => c.id === fixedId) || matchingChallenges[0];
 

@@ -3,15 +3,16 @@ import { getAuth } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import originalFirebaseConfig from '../firebase-applet-config.json';
 
-// Persistent fallback to the platform's official Firebase project (which has all development/preview domains authorized)
+// Persistent fallback to the user's connected Firebase project
 const defaultPlatformConfig = {
-  projectId: "spheric-reporter-w07pf",
-  appId: "1:265490755228:web:30a2daac6eeb1298dfc759",
-  apiKey: "AIzaSyAE53PHUU04iPCpiGQxcm9qDRTAzH57d8s",
-  authDomain: "spheric-reporter-w07pf.firebaseapp.com",
-  firestoreDatabaseId: "ai-studio-2b9971df-0c42-4582-adb4-6decb429c112",
-  storageBucket: "spheric-reporter-w07pf.firebasestorage.app",
-  messagingSenderId: "265490755228"
+  projectId: "teacherai-0",
+  appId: "1:49342225404:web:b2a582e2ae77313ea73079",
+  apiKey: "AIzaSyBNthUEcTq5Rv1apXS7-DRRvdLJJwJc_sw",
+  authDomain: "teacherai-0.firebaseapp.com",
+  firestoreDatabaseId: "(default)",
+  storageBucket: "teacherai-0.firebasestorage.app",
+  messagingSenderId: "49342225404",
+  measurementId: "G-9KK6R0CDYN"
 };
 
 export const defaultFirebaseConfig = defaultPlatformConfig;
@@ -158,23 +159,7 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  console.warn('Firestore Operation Notice:', errInfo.operationType, errInfo.path, errInfo.error);
+  throw new Error(errInfo.error);
 }
 
-// Validate connection to Firestore on boot
-async function testConnection() {
-  if (typeof navigator !== 'undefined' && navigator.webdriver) {
-    // Skip in headless testing environments to avoid false positives
-    return;
-  }
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn("Please check your Firebase configuration.");
-    }
-  }
-}
-
-testConnection();

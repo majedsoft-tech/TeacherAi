@@ -198,6 +198,41 @@ export default function App() {
   const [isEditingSchoolName, setIsEditingSchoolName] = useState<boolean>(false);
   const [schoolNameInput, setSchoolNameInput] = useState<string>(schoolName);
 
+  const handleSaveSchoolName = async (newName: string) => {
+    const val = newName.trim() || "اسم المدرسة";
+    setSchoolName(val);
+    setSchoolNameInput(val);
+    setIsEditingSchoolName(false);
+
+    localStorage.setItem("teacher_school_name", val);
+
+    if (currentUser) {
+      const emailKey = currentUser.email
+        ? `teacher_school_name_${currentUser.email.toLowerCase()}`
+        : `teacher_school_name_${currentUser.uid}`;
+      localStorage.setItem(emailKey, val);
+
+      try {
+        await setDoc(
+          doc(db, "teachers", currentUser.uid),
+          {
+            uid: currentUser.uid,
+            displayName: currentUser.displayName || currentUser.email?.split("@")[0] || "المعلم",
+            email: currentUser.email || "",
+            schoolName: val,
+          },
+          { merge: true }
+        );
+        triggerToast("تم ربط اسم المدرسة ببريدك الإلكتروني وحفظه بنجاح", "success");
+      } catch (err) {
+        console.warn("Could not save schoolName to Firestore:", err);
+        triggerToast("تم حفظ اسم المدرسة محلياً", "info");
+      }
+    } else {
+      triggerToast("تم حفظ اسم المدرسة محلياً", "info");
+    }
+  };
+
   // Dynamic Grades and Semesters States
   const [grades, setGrades] = useState<string[]>([]);
   const [semesters, setSemesters] = useState<
@@ -515,12 +550,7 @@ export default function App() {
           setStudentPortalTeacherName("المعلم");
         }
       } catch (err) {
-        console.error("Error fetching teacher name:", err);
-        try {
-          handleFirestoreError(err, OperationType.GET, `teachers/${studentPortalTeacherId}`);
-        } catch (e) {
-          // Keep it caught to prevent uncaught promise rejection
-        }
+        console.warn("Could not fetch teacher name:", err);
         setStudentPortalTeacherName("المعلم");
       }
     };
@@ -837,18 +867,21 @@ export default function App() {
           console.log("Saved original platform UID to localStorage:", user.uid);
         }
 
-        // Save/update teacher profile in Firestore so students can display their name
-        setDoc(doc(db, "teachers", user.uid), {
+        // Save/update teacher profile in Firestore including schoolName tied to teacher's email
+        const emailKey = user.email ? `teacher_school_name_${user.email.toLowerCase()}` : `teacher_school_name_${user.uid}`;
+        const cachedSchoolName = localStorage.getItem(emailKey) || localStorage.getItem("teacher_school_name");
+
+        const teacherData: any = {
           uid: user.uid,
           displayName: user.displayName || user.email?.split("@")[0] || "المعلم",
           email: user.email || ""
-        }, { merge: true }).catch(err => {
+        };
+        if (cachedSchoolName) {
+          teacherData.schoolName = cachedSchoolName;
+        }
+
+        setDoc(doc(db, "teachers", user.uid), teacherData, { merge: true }).catch(err => {
           console.error("Error saving teacher profile:", err);
-          try {
-            handleFirestoreError(err, OperationType.WRITE, `teachers/${user.uid}`);
-          } catch (e) {
-            // Keep it caught to prevent uncaught promise rejection
-          }
         });
       }
     });
@@ -1589,7 +1622,7 @@ export default function App() {
         setQuizzes(list);
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, "quizzes");
+        console.warn("Error listening to quizzes:", error);
       },
     );
 
@@ -1635,7 +1668,7 @@ export default function App() {
         setStudents(list);
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, "students");
+        console.warn("Error listening to students:", error);
       },
     );
 
@@ -1653,7 +1686,7 @@ export default function App() {
         setBankQuestionsLoaded(true);
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, "question_bank");
+        console.warn("Error listening to question bank:", error);
         setBankQuestionsLoaded(true);
       },
     );
@@ -1686,7 +1719,7 @@ export default function App() {
         setGradesLoaded(true);
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, "grades");
+        console.warn("Error listening to grades:", error);
       },
     );
 
@@ -1718,7 +1751,7 @@ export default function App() {
         setSemestersLoaded(true);
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, "semesters");
+        console.warn("Error listening to semesters:", error);
       },
     );
 
@@ -1762,6 +1795,41 @@ export default function App() {
         console.error("Proactive save of teacher profile error:", err);
       });
     }
+  }, [currentUser]);
+
+  // Synchronize school name with logged in account email / Firestore
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const emailKey = currentUser.email
+      ? `teacher_school_name_${currentUser.email.toLowerCase()}`
+      : `teacher_school_name_${currentUser.uid}`;
+
+    const localVal = localStorage.getItem(emailKey);
+    if (localVal) {
+      setSchoolName(localVal);
+      setSchoolNameInput(localVal);
+    }
+
+    const unsub = onSnapshot(
+      doc(db, "teachers", currentUser.uid),
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data && data.schoolName) {
+            setSchoolName(data.schoolName);
+            setSchoolNameInput(data.schoolName);
+            localStorage.setItem(emailKey, data.schoolName);
+            localStorage.setItem("teacher_school_name", data.schoolName);
+          }
+        }
+      },
+      (err) => {
+        console.warn("Error listening to teacher schoolName:", err);
+      }
+    );
+
+    return () => unsub();
   }, [currentUser]);
 
   // Synchronize Review Challenges and Scores
@@ -7201,10 +7269,7 @@ export default function App() {
                     autoFocus
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
-                        const val = schoolNameInput.trim() || "اسم المدرسة";
-                        setSchoolName(val);
-                        localStorage.setItem("teacher_school_name", val);
-                        setIsEditingSchoolName(false);
+                        handleSaveSchoolName(schoolNameInput);
                       } else if (e.key === "Escape") {
                         setIsEditingSchoolName(false);
                       }
@@ -7212,12 +7277,7 @@ export default function App() {
                   />
                   <button
                     type="button"
-                    onClick={() => {
-                      const val = schoolNameInput.trim() || "اسم المدرسة";
-                      setSchoolName(val);
-                      localStorage.setItem("teacher_school_name", val);
-                      setIsEditingSchoolName(false);
-                    }}
+                    onClick={() => handleSaveSchoolName(schoolNameInput)}
                     className="p-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors cursor-pointer shrink-0"
                     title="حفظ"
                   >

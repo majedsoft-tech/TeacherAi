@@ -58,7 +58,6 @@ import {
   Timer,
   Zap,
   Key,
-  School,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import * as XLSX from "xlsx";
@@ -191,47 +190,7 @@ export default function App() {
   const [teacherPreviewActive, setTeacherPreviewActive] =
     useState<boolean>(false);
 
-  // School Name State
-  const [schoolName, setSchoolName] = useState<string>(() => {
-    return localStorage.getItem("teacher_school_name") || "مدرسة الجش";
-  });
-  const [isEditingSchoolName, setIsEditingSchoolName] = useState<boolean>(false);
-  const [schoolNameInput, setSchoolNameInput] = useState<string>(schoolName);
 
-  const handleSaveSchoolName = async (newName: string) => {
-    const val = newName.trim() || "اسم المدرسة";
-    setSchoolName(val);
-    setSchoolNameInput(val);
-    setIsEditingSchoolName(false);
-
-    localStorage.setItem("teacher_school_name", val);
-
-    if (currentUser) {
-      const emailKey = currentUser.email
-        ? `teacher_school_name_${currentUser.email.toLowerCase()}`
-        : `teacher_school_name_${currentUser.uid}`;
-      localStorage.setItem(emailKey, val);
-
-      try {
-        await setDoc(
-          doc(db, "teachers", currentUser.uid),
-          {
-            uid: currentUser.uid,
-            displayName: currentUser.displayName || currentUser.email?.split("@")[0] || "المعلم",
-            email: currentUser.email || "",
-            schoolName: val,
-          },
-          { merge: true }
-        );
-        triggerToast("تم ربط اسم المدرسة ببريدك الإلكتروني وحفظه بنجاح", "success");
-      } catch (err) {
-        console.warn("Could not save schoolName to Firestore:", err);
-        triggerToast("تم حفظ اسم المدرسة محلياً", "info");
-      }
-    } else {
-      triggerToast("تم حفظ اسم المدرسة محلياً", "info");
-    }
-  };
 
   // Dynamic Grades and Semesters States
   const [grades, setGrades] = useState<string[]>([]);
@@ -867,20 +826,12 @@ export default function App() {
           console.log("Saved original platform UID to localStorage:", user.uid);
         }
 
-        // Save/update teacher profile in Firestore including schoolName tied to teacher's email
-        const emailKey = user.email ? `teacher_school_name_${user.email.toLowerCase()}` : `teacher_school_name_${user.uid}`;
-        const cachedSchoolName = localStorage.getItem(emailKey) || localStorage.getItem("teacher_school_name");
-
-        const teacherData: any = {
+        // Save/update teacher profile in Firestore
+        setDoc(doc(db, "teachers", user.uid), {
           uid: user.uid,
           displayName: user.displayName || user.email?.split("@")[0] || "المعلم",
           email: user.email || ""
-        };
-        if (cachedSchoolName) {
-          teacherData.schoolName = cachedSchoolName;
-        }
-
-        setDoc(doc(db, "teachers", user.uid), teacherData, { merge: true }).catch(err => {
+        }, { merge: true }).catch(err => {
           console.error("Error saving teacher profile:", err);
         });
       }
@@ -1797,40 +1748,7 @@ export default function App() {
     }
   }, [currentUser]);
 
-  // Synchronize school name with logged in account email / Firestore
-  useEffect(() => {
-    if (!currentUser) return;
 
-    const emailKey = currentUser.email
-      ? `teacher_school_name_${currentUser.email.toLowerCase()}`
-      : `teacher_school_name_${currentUser.uid}`;
-
-    const localVal = localStorage.getItem(emailKey);
-    if (localVal) {
-      setSchoolName(localVal);
-      setSchoolNameInput(localVal);
-    }
-
-    const unsub = onSnapshot(
-      doc(db, "teachers", currentUser.uid),
-      (docSnap) => {
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          if (data && data.schoolName) {
-            setSchoolName(data.schoolName);
-            setSchoolNameInput(data.schoolName);
-            localStorage.setItem(emailKey, data.schoolName);
-            localStorage.setItem("teacher_school_name", data.schoolName);
-          }
-        }
-      },
-      (err) => {
-        console.warn("Error listening to teacher schoolName:", err);
-      }
-    );
-
-    return () => unsub();
-  }, [currentUser]);
 
   // Synchronize Review Challenges and Scores
   useEffect(() => {
@@ -7256,74 +7174,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* School Name Element */}
-            <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-2.5 transition-all hover:border-indigo-200 shadow-2xs">
-              {isEditingSchoolName ? (
-                <div className="flex items-center gap-1.5 w-full">
-                  <input
-                    type="text"
-                    value={schoolNameInput}
-                    onChange={(e) => setSchoolNameInput(e.target.value)}
-                    placeholder="أدخل اسم المدرسة..."
-                    className="w-full bg-white border border-indigo-400 rounded-lg px-2 py-1 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                    autoFocus
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        handleSaveSchoolName(schoolNameInput);
-                      } else if (e.key === "Escape") {
-                        setIsEditingSchoolName(false);
-                      }
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => handleSaveSchoolName(schoolNameInput)}
-                    className="p-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors cursor-pointer shrink-0"
-                    title="حفظ"
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSchoolNameInput(schoolName);
-                      setIsEditingSchoolName(false);
-                    }}
-                    className="p-1.5 bg-rose-500 hover:bg-rose-600 text-white rounded-lg transition-colors cursor-pointer shrink-0"
-                    title="إلغاء"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              ) : (
-                <div className="flex items-center justify-between gap-2 w-full">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <div className="w-6 h-6 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 shrink-0">
-                      <School className="w-3.5 h-3.5" />
-                    </div>
-                    <div className="min-w-0">
-                      <span className="text-[10px] text-slate-400 font-bold block leading-none">
-                        المدرسة
-                      </span>
-                      <span className="text-xs font-extrabold text-slate-800 truncate block mt-0.5">
-                        {schoolName}
-                      </span>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSchoolNameInput(schoolName);
-                      setIsEditingSchoolName(true);
-                    }}
-                    className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer shrink-0"
-                    title="تعديل اسم المدرسة"
-                  >
-                    <Pencil className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              )}
-            </div>
+
           </div>
 
           {/* Navigation Tabs */}

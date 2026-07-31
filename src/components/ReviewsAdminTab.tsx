@@ -695,7 +695,7 @@ interface ReviewsAdminTabProps {
   triggerConfirm: (title: string, desc: string, onConfirm: () => void) => void;
 }
 
-// 3 Fixed Games Configuration
+// 4 Fixed Games Configuration
 export const FIXED_GAMES = [
   {
     gameType: "wayground_arena",
@@ -703,6 +703,13 @@ export const FIXED_GAMES = [
     title: "كاهوت التفاعلي 🎪",
     badge: "🎪 كاهوت التفاعلي",
     desc: "مواجهة حية ومباشرة بين كافة الطلاب بنظام خيارات الألوان وسرعة الإجابة"
+  },
+  {
+    gameType: "maze_chase",
+    id: "fixed_game_maze_chase",
+    title: "مطاردة المتاهة 🌀",
+    badge: "🌀 مطاردة المتاهة",
+    desc: "التحرك بالأسهم داخل المتاهة للوصول لغرفة الإجابة الصحيحة وتفادي الوحوش"
   },
   {
     gameType: "space_invaders",
@@ -736,7 +743,7 @@ export default function ReviewsAdminTab({
   const [newSubject, setNewSubject] = useState("");
   const [newGrade, setNewGrade] = useState("جميع الفصول (عام)"); // Available to everyone by default
   const [newSemester, setNewSemester] = useState("عام"); // Default/cancelled semester
-  const [newGameType, setNewGameType] = useState<'quiz_game' | 'time_attack' | 'space_invaders' | 'car_racing' | 'wayground_arena'>("space_invaders");
+  const [newGameType, setNewGameType] = useState<'quiz_game' | 'time_attack' | 'space_invaders' | 'car_racing' | 'maze_chase' | 'wayground_arena'>("space_invaders");
   const [selectedQuizIdForImport, setSelectedQuizIdForImport] = useState("");
   const [selectedQuestions, setSelectedQuestions] = useState<Question[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1768,6 +1775,30 @@ export default function ReviewsAdminTab({
                             </div>
                           </div>
                         </div>
+                      ) : fg.gameType === "maze_chase" ? (
+                        <div className="w-full h-full bg-gradient-to-br from-purple-950 via-slate-900 to-indigo-950 border-b-2 border-indigo-500/50 flex flex-col justify-between p-3.5 relative">
+                          <div className="absolute inset-0 bg-[radial-gradient(#818cf8_1px,transparent_1px)] [background-size:16px_16px] opacity-20 pointer-events-none" />
+                          <div className="relative z-10 flex justify-between items-center">
+                            <span className="text-[10px] font-black text-indigo-200 bg-indigo-900/80 px-2.5 py-1 rounded-full border border-indigo-500/40 shadow-xs">
+                              🌀 MAZE CHASE
+                            </span>
+                            {isActivated ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-500 text-white shadow-xs animate-pulse">
+                                مفعلة 🟢
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-slate-800 text-slate-300 border border-slate-700">
+                                غير مفعلة ⏸️
+                              </span>
+                            )}
+                          </div>
+                          <div className="relative z-10 my-auto text-center space-y-1">
+                            <div className="text-3xl animate-pulse">🌀</div>
+                            <div className="text-[11px] font-black text-indigo-300 tracking-wide uppercase">
+                              مطاردة المتاهة
+                            </div>
+                          </div>
+                        </div>
                       ) : (
                         <div className="w-full h-full bg-gradient-to-br from-purple-950 via-indigo-900 to-purple-900 border-b-2 border-purple-500/50 flex flex-col justify-between p-3.5 relative">
                           <div className="relative z-10 flex justify-between items-center">
@@ -1800,7 +1831,7 @@ export default function ReviewsAdminTab({
                     {/* Full Width Game Type Bar attached to Top Banner */}
                     <div className="w-full bg-gradient-to-r from-indigo-50 via-blue-50 to-indigo-50 border-y border-indigo-200/90 py-2.5 px-4 text-center">
                       <span className="text-sm sm:text-base font-black text-indigo-900 tracking-wide">
-                        {fg.gameType === "space_invaders" ? "الفضاء 🚀" : fg.gameType === "car_racing" ? "السيارات 🏎️" : "كاهوت 🎪"}
+                        {fg.gameType === "space_invaders" ? "الفضاء 🚀" : fg.gameType === "car_racing" ? "السيارات 🏎️" : fg.gameType === "maze_chase" ? "المتاهة 🌀" : "كاهوت 🎪"}
                       </span>
                     </div>
 
@@ -2409,6 +2440,8 @@ export default function ReviewsAdminTab({
                 ? "معركة الفضاء 🚀"
                 : activeChallenge?.gameType === "car_racing"
                 ? "سباق السيارات 🏎️"
+                : activeChallenge?.gameType === "maze_chase"
+                ? "مطاردة المتاهة 🌀"
                 : FIXED_GAMES.find(g => g.gameType === activeChallenge?.gameType)?.title || activeChallenge?.gameType || "لعبة مراجعة";
 
               return (
@@ -3480,6 +3513,8 @@ export default function ReviewsAdminTab({
                               ? "معركة الفضاء 🚀"
                               : targetChallenge?.gameType === "car_racing" || fixedGameMeta.gameType === "car_racing"
                               ? "سباق السيارات 🏎️"
+                              : targetChallenge?.gameType === "maze_chase" || fixedGameMeta.gameType === "maze_chase"
+                              ? "مطاردة المتاهة 🌀"
                               : fixedGameMeta.title
                           }
                         </span>

@@ -83,6 +83,7 @@ import StudentReviewsTab from "./components/StudentReviewsTab";
 import StudentCurriculumReview from "./components/StudentCurriculumReview";
 import CurriculumReviewAdminTab from "./components/CurriculumReviewAdminTab";
 import { UnitLessonMultiSelect } from "./components/UnitLessonMultiSelect";
+import { QuestionBankSmartFilters } from "./components/QuestionBankSmartFilters";
 import { initializeApp, getApp, getApps } from "firebase/app";
 import {
   GoogleAuthProvider,
@@ -560,8 +561,10 @@ export default function App() {
   });
   const [studentLoginSelectId, setStudentLoginSelectId] = useState("");
   const [studentLoginPassword, setStudentLoginPassword] = useState("");
+  const [studentLoginConfirmPassword, setStudentLoginConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [passwordErrorShake, setPasswordErrorShake] = useState(false);
+  const [passwordErrorMessage, setPasswordErrorMessage] = useState("");
   const [studentNameInput, setStudentNameInput] = useState("");
   const [studentEmailInput, setStudentEmailInput] = useState("");
   const [studentNewToggle, setStudentNewToggle] = useState(false);
@@ -738,8 +741,10 @@ export default function App() {
   // Clear password inputs when changing student choices
   useEffect(() => {
     setStudentLoginPassword("");
+    setStudentLoginConfirmPassword("");
     setShowPassword(false);
     setPasswordErrorShake(false);
+    setPasswordErrorMessage("");
   }, [studentLoginSelectId, studentSelectedGrade, studentSelectedSemester, studentSelectedId]);
 
   // Core Data States from Firestore
@@ -942,7 +947,7 @@ export default function App() {
   useEffect(() => {
     // 1. Update Title dynamically
     if (studentPortalActive) {
-      document.title = "بوابة الطالب التعليمية";
+      document.title = "بوابة الطالب الإلكترونية";
     } else {
       document.title = "بوابة المعلم التعليمية";
     }
@@ -987,48 +992,63 @@ export default function App() {
   // Export to Google Sheets directly using the official Sheets API
   const exportToGoogleSheetsDirectly = async (headers: string[], rows: any[][], grade: string, semester: string) => {
     let token = googleAccessToken;
+
+    const exportToExcelFallback = (msg?: string) => {
+      if (msg) triggerToast(msg, "info");
+      try {
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "نتائج الطلاب");
+        XLSX.writeFile(wb, `كشف_درجات_الطلاب_${grade || "العام"}_${semester || "الأول"}.xlsx`);
+        triggerToast("🎉 تم تصدير كشف الدرجات كملف Excel بنجاح!", "success");
+      } catch (excelErr: any) {
+        triggerToast(`فشل تصدير Excel: ${excelErr.message || excelErr}`, "error");
+      }
+    };
+
+    const requestGoogleToken = async () => {
+      triggerToast("💡 جاري طلب صلاحيات Google Sheets...", "info");
+      
+      const provider = new GoogleAuthProvider();
+      provider.addScope("https://www.googleapis.com/auth/spreadsheets");
+      provider.addScope("https://www.googleapis.com/auth/drive.file");
+      
+      provider.setCustomParameters({
+        prompt: "select_account consent",
+        access_type: "offline"
+      });
+      
+      let tempApp;
+      if (getApps().some(app => app.name === "temp-google-sheets")) {
+        tempApp = getApp("temp-google-sheets");
+      } else {
+        tempApp = initializeApp(defaultFirebaseConfig, "temp-google-sheets");
+      }
+      const tempAuth = getAuth(tempApp);
+      
+      // Must call signInWithPopup immediately without async delay to prevent browser popup block
+      const result = await signInWithPopup(tempAuth, provider);
+      const credential = GoogleAuthProvider.credentialFromResult(result);
+      if (credential?.accessToken) {
+        setGoogleAccessToken(credential.accessToken);
+        return credential.accessToken;
+      } else {
+        throw new Error("لم نتمكن من الحصول على رمز الدخول من Google");
+      }
+    };
     
     if (!token) {
       try {
-        triggerToast("💡 تنبيه: يرجى تحديد (الصح) على كافة الصلاحيات المطلوبة لـ Google Sheets في النافذة التالية لضمان نجاح عملية تصدير الملف.", "info");
-        
-        // Wait slightly so they can read the warning toast
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        
-        const provider = new GoogleAuthProvider();
-        provider.addScope("https://www.googleapis.com/auth/spreadsheets");
-        provider.addScope("https://www.googleapis.com/auth/drive.file");
-        
-        // Force account selection and consent prompt to ensure Google displays the scope checkboxes
-        provider.setCustomParameters({
-          prompt: "select_account consent",
-          access_type: "offline"
-        });
-        
-        // Initialize a temporary secondary Firebase app to perform authentication
-        // without affecting the active logged-in user in the main app.
-        let tempApp;
-        if (getApps().some(app => app.name === "temp-google-sheets")) {
-          tempApp = getApp("temp-google-sheets");
-        } else {
-          tempApp = initializeApp(defaultFirebaseConfig, "temp-google-sheets");
-        }
-        const tempAuth = getAuth(tempApp);
-        
-        const result = await signInWithPopup(tempAuth, provider);
-        const credential = GoogleAuthProvider.credentialFromResult(result);
-        if (credential?.accessToken) {
-          token = credential.accessToken;
-          setGoogleAccessToken(token);
-        } else {
-          throw new Error("لم نتمكن من الحصول على رمز الدخول من Google");
-        }
+        token = await requestGoogleToken();
       } catch (error: any) {
         console.error("OAuth error:", error);
-        if (error.code === "auth/popup-closed-by-user") {
-          triggerToast("⚠️ تم إغلاق نافذة تسجيل الدخول قبل منح الصلاحيات. يرجى إعادة المحاولة مع إبقاء النافذة مفتوحة لتصدير البيانات.", "info");
+        setGoogleAccessToken(null);
+        if (error.code === "auth/popup-blocked") {
+          exportToExcelFallback("⚠️ تم حظر النافذة المنبثقة من المتصفح! تم تصدير كشف الدرجات كملف Excel تلقائياً.");
+        } else if (error.code === "auth/popup-closed-by-user") {
+          exportToExcelFallback("⚠️ تم إغلاق نافذة تسجيل الدخول. تم تصدير كشف الدرجات كملف Excel.");
         } else {
-          triggerToast(`فشل الاتصال بـ Google: ${error.message || error}`, "error");
+          exportToExcelFallback(`⚠️ تعذر ربط Google (${error.message || "خطأ صلاحيات"}). تم التصدير إلى Excel تلقائياً.`);
         }
         return;
       }
@@ -1037,7 +1057,7 @@ export default function App() {
     try {
       triggerToast("جاري إنشاء جدول بيانات Google Sheets جديد...", "info");
       
-      const createResponse = await fetch("https://sheets.googleapis.com/v4/spreadsheets", {
+      let createResponse = await fetch("https://sheets.googleapis.com/v4/spreadsheets", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1050,20 +1070,20 @@ export default function App() {
         })
       });
 
+      // If cached token expired or failed authorization, clear it and export to Excel fallback
+      if (!createResponse.ok && (createResponse.status === 401 || createResponse.status === 403)) {
+        setGoogleAccessToken(null);
+        console.warn("Google Sheets token expired or invalid permission, falling back to Excel");
+        exportToExcelFallback("⚠️ انتهاء صلاحية الجلسة أو نقص الصلاحيات في Google Sheets. تم التصدير فورياً كملف Excel بديل!");
+        return;
+      }
+
       if (!createResponse.ok) {
-        const errorData = await createResponse.json();
+        const errorData = await createResponse.json().catch(() => ({}));
         console.error("Create spreadsheet error:", errorData);
-        if (createResponse.status === 401) {
-          setGoogleAccessToken(null);
-          triggerToast("انتهت صلاحية الجلسة، يرجى إعادة الضغط للتصدير وتسجيل الدخول مجدداً.", "info");
-          return;
-        }
-        if (createResponse.status === 403 || JSON.stringify(errorData).includes("insufficient")) {
-          setGoogleAccessToken(null);
-          triggerToast("فشل التصدير: الصلاحيات غير كافية! يرجى إعادة المحاولة مع ضرورة تفعيل (الصح) ومربعات الموافقة على صلاحيات Google Sheets و Google Drive.", "error");
-          return;
-        }
-        throw new Error(errorData.error?.message || "فشل إنشاء جدول البيانات");
+        setGoogleAccessToken(null);
+        exportToExcelFallback("⚠️ تعذر إنشاء جدول Google Sheets. تم التصدير كملف Excel بنجاح!");
+        return;
       }
 
       const spreadsheet = await createResponse.json();
@@ -1089,14 +1109,11 @@ export default function App() {
       );
 
       if (!writeResponse.ok) {
-        const errorData = await writeResponse.json();
+        const errorData = await writeResponse.json().catch(() => ({}));
         console.error("Write spreadsheet values error:", errorData);
-        if (writeResponse.status === 403 || JSON.stringify(errorData).includes("insufficient")) {
-          setGoogleAccessToken(null);
-          triggerToast("فشل كتابة البيانات: صلاحيات غير كافية! يرجى إعادة المحاولة وتفعيل جميع مربعات صلاحيات Google Sheets.", "error");
-          return;
-        }
-        throw new Error(errorData.error?.message || "فشل كتابة البيانات في الجدول");
+        setGoogleAccessToken(null);
+        exportToExcelFallback("⚠️ تعذر كتابة كافة البيانات في Google Sheets. تم تنزيل الملف كاملاً كـ Excel!");
+        return;
       }
 
       triggerToast("🎉 تم إنشاء الجدول بنجاح وتصدير كافة الدرجات إليه مباشرة!", "success");
@@ -1106,10 +1123,9 @@ export default function App() {
       } else {
         window.open(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`, "_blank");
       }
-
-    } catch (error: any) {
-      console.error("Spreadsheet export error:", error);
-      triggerToast(`فشل تصدير البيانات: ${error.message || error}`, "error");
+    } catch (err: any) {
+      console.error("Export directly error:", err);
+      exportToExcelFallback("⚠️ حدث خطأ في عملية التصدير السحابي. تم تصدير كشف الدرجات كملف Excel فوري!");
     }
   };
 
@@ -3419,7 +3435,7 @@ export default function App() {
   const [newStudentEmail, setNewStudentEmail] = useState("");
   const [newStudentScore, setNewStudentScore] = useState(85);
   const [addStudentType, setAddStudentType] = useState<"single" | "bulk">(
-    "single",
+    "bulk",
   );
   const [bulkPasteText, setBulkPasteText] = useState("");
   const [isAddingStudent, setIsAddingStudent] = useState(false);
@@ -3469,6 +3485,44 @@ export default function App() {
       return DEFAULT_SEMESTERS;
     },
     [semesters, semestersLoaded],
+  );
+
+  const getStudentsCountForGrade = useCallback(
+    (gName: string): number => {
+      if (!gName) return 0;
+      return students.filter((student) => {
+        const sGrade =
+          student.grade ||
+          (student.gradeClass && student.gradeClass.includes(" - ")
+            ? student.gradeClass.split(" - ")[0].trim()
+            : "الصف العاشر");
+        return normalizeGradeName(sGrade) === normalizeGradeName(gName);
+      }).length;
+    },
+    [students],
+  );
+
+  const getStudentsCountForSemester = useCallback(
+    (gName: string, semName: string): number => {
+      if (!gName || !semName) return 0;
+      return students.filter((student) => {
+        const sGrade =
+          student.grade ||
+          (student.gradeClass && student.gradeClass.includes(" - ")
+            ? student.gradeClass.split(" - ")[0].trim()
+            : "الصف العاشر");
+        const sSemester =
+          student.semester ||
+          (student.gradeClass && student.gradeClass.includes(" - ")
+            ? student.gradeClass.split(" - ")[1].trim()
+            : "الفصل الأول");
+        return (
+          normalizeGradeName(sGrade) === normalizeGradeName(gName) &&
+          normalizeSemesterName(sSemester) === normalizeSemesterName(semName)
+        );
+      }).length;
+    },
+    [students],
   );
 
   const semestersList = useMemo(() => {
@@ -3773,6 +3827,15 @@ export default function App() {
     e.preventDefault();
     if (!currentUser) return;
 
+    const targetGrade =
+      selectedTabGrade ||
+      newStudentGrade ||
+      (gradesList.length > 0 ? gradesList[0] : "الصف العاشر");
+    const targetSemester =
+      selectedTabSemester ||
+      newStudentSemester ||
+      (semestersList.length > 0 ? semestersList[0] : "الفصل الأول");
+
     // Helper to normalize Names for robust duplicate detection (Arabic characters, spaces, cases)
     const normalizeStudentNameLocal = (nameStr: string) => {
       if (!nameStr) return "";
@@ -3785,14 +3848,15 @@ export default function App() {
       return base;
     };
 
-    if (addStudentType === "bulk") {
-      if (!bulkPasteText.trim()) {
-        triggerToast("الرجاء لصق أسماء الطلاب من ملف إكسل أولاً", "error");
+    const pasteContent = bulkPasteText.trim() || newStudentName.trim();
+    if (addStudentType === "bulk" || pasteContent.length > 0) {
+      if (!pasteContent) {
+        triggerToast("الرجاء إدخال أو لصق أسماء الطلاب أولاً", "error");
         return;
       }
 
       setIsAddingStudent(true);
-      const lines = bulkPasteText.split("\n");
+      const lines = pasteContent.split("\n");
       const parsedStudents = lines
         .map((line) => {
           const parts = line
@@ -3838,8 +3902,8 @@ export default function App() {
           const sSemNorm = (s.semester || "").trim();
           return (
             sNorm === normName &&
-            sGradeNorm === normalizeGradeName(newStudentGrade) &&
-            sSemNorm === newStudentSemester.trim()
+            sGradeNorm === normalizeGradeName(targetGrade) &&
+            sSemNorm === targetSemester.trim()
           );
         });
 
@@ -3869,15 +3933,15 @@ export default function App() {
 
         finalNamesToImport.forEach((name, index) => {
           const nextStudentId = `s-${Date.now()}-${index}-${Math.floor(Math.random() * 1000)}`;
-          const calculatedClass = `${newStudentGrade} - ${newStudentSemester}`;
+          const calculatedClass = `${targetGrade} - ${targetSemester}`;
           const email = `std_${Date.now()}_${index}_${Math.floor(Math.random() * 1000)}@academy.edu`;
 
           const newStudent: Student = {
             id: nextStudentId,
             name: name,
             gradeClass: calculatedClass,
-            grade: newStudentGrade,
-            semester: newStudentSemester,
+            grade: targetGrade,
+            semester: targetSemester,
             email: email,
             averageScore: 0,
             status: "needs_improvement",
@@ -3898,7 +3962,7 @@ export default function App() {
         setBulkPasteText("");
         setNewStudentName("");
 
-        let successMessage = `تم بنجاح استيراد وتسجيل ${successCount} طالب في ${newStudentGrade} - ${newStudentSemester}`;
+        let successMessage = `تم بنجاح استيراد وتسجيل ${successCount} طالب في ${targetGrade} - ${targetSemester}`;
         if (selfDuplicateCount > 0 || alreadyExistsCount > 0) {
           successMessage += ` (تم تلقائياً تصفية وتجاهل ${selfDuplicateCount + alreadyExistsCount} اسماً مكرراً)`;
         }
@@ -3929,8 +3993,8 @@ export default function App() {
       const sSemNorm = (s.semester || "").trim();
       return (
         sNorm === singleNormName &&
-        sGradeNorm === normalizeGradeName(newStudentGrade) &&
-        sSemNorm === newStudentSemester.trim()
+        sGradeNorm === normalizeGradeName(targetGrade) &&
+        sSemNorm === targetSemester.trim()
       );
     });
 
@@ -3944,15 +4008,15 @@ export default function App() {
 
     setIsAddingStudent(true);
     const nextStudentId = `s-${Date.now()}`;
-    const calculatedClass = `${newStudentGrade} - ${newStudentSemester}`;
+    const calculatedClass = `${targetGrade} - ${targetSemester}`;
     const email = `std_${Date.now()}@academy.edu`;
 
     const newStudent: Student = {
       id: nextStudentId,
       name: newStudentName.trim(),
       gradeClass: calculatedClass,
-      grade: newStudentGrade,
-      semester: newStudentSemester,
+      grade: targetGrade,
+      semester: targetSemester,
       email: email,
       averageScore: 0,
       status: "needs_improvement",
@@ -4709,7 +4773,7 @@ export default function App() {
                 <BookOpen className="w-8 h-8" />
               </div>
               <h1 className="text-2xl font-black leading-tight">
-                بوابة الطلاب للاختبارات
+                بوابة الطالب الإلكترونية
               </h1>
               <p className="text-white/80 text-xs mt-2">
                 أهلاً بك في منصة الاختبارات الذكية الخاصة بالطلاب. يرجى إدخال
@@ -4807,6 +4871,129 @@ export default function App() {
         );
       });
 
+      const handleStudentPortalLogin = async (e?: React.FormEvent) => {
+        if (e) e.preventDefault();
+        if (!studentLoginSelectId) {
+          triggerToast(
+            "الرجاء اختيار اسمك من قائمة الكشف المدرسية المدرجة",
+            "error",
+          );
+          return;
+        }
+        const match = students.find(
+          (s) => s.id === studentLoginSelectId,
+        );
+        if (match) {
+          // Check password security if required
+          if (match.passwordRequired) {
+            const hasPassSet = !!match.password;
+            if (!studentLoginPassword) {
+              const errMsg = hasPassSet
+                ? "الرجاء إدخال كلمة المرور المعتمدة الخاصة بك للتحقق"
+                : "الرجاء تحديد واختيار كلمة مرور رقمية جديدة لحسابك لأول مرة";
+              setPasswordErrorShake(true);
+              setTimeout(() => setPasswordErrorShake(false), 500);
+              setPasswordErrorMessage(errMsg);
+              triggerToast(errMsg, "error");
+              return;
+            }
+            if (!hasPassSet && !studentLoginConfirmPassword) {
+              const errMsg = "الرجاء إدخال تأكيد كلمة المرور في المربع الثاني للمطابقة";
+              setPasswordErrorShake(true);
+              setTimeout(() => setPasswordErrorShake(false), 500);
+              setPasswordErrorMessage(errMsg);
+              triggerToast(errMsg, "error");
+              return;
+            }
+            if (!hasPassSet && studentLoginPassword !== studentLoginConfirmPassword) {
+              const errMsg = "كلمتا المرور غير متطابقتين! يرجى التأكد من تطابقهما";
+              setPasswordErrorShake(true);
+              setTimeout(() => setPasswordErrorShake(false), 500);
+              setPasswordErrorMessage(errMsg);
+              triggerToast(errMsg, "error");
+              return;
+            }
+            const numericOnly = studentLoginPassword.replace(
+              /[^0-9]/g,
+              "",
+            );
+            if (numericOnly !== studentLoginPassword) {
+              const errMsg = "عذراً، يجب تسجيل أرقام فقط ككلمة مرور";
+              setPasswordErrorShake(true);
+              setTimeout(() => setPasswordErrorShake(false), 500);
+              setPasswordErrorMessage(errMsg);
+              triggerToast(errMsg, "error");
+              return;
+            }
+            if (studentLoginPassword.length > 10) {
+              const errMsg = "عذراً، يجب أن لا تتجاوز كلمة المرور 10 أرقام فقط";
+              setPasswordErrorShake(true);
+              setTimeout(() => setPasswordErrorShake(false), 500);
+              setPasswordErrorMessage(errMsg);
+              triggerToast(errMsg, "error");
+              return;
+            }
+
+            if (!hasPassSet) {
+              // First time login: Set password in DB and local state
+              try {
+                const studentRef = doc(db, "students", match.id);
+                await updateDoc(studentRef, {
+                  password: studentLoginPassword,
+                });
+                // update matches locally
+                setStudents((prev) =>
+                  prev.map((s) =>
+                    s.id === match.id
+                      ? { ...s, password: studentLoginPassword }
+                      : s,
+                  ),
+                );
+                triggerToast(
+                  "تم تعيين كلمة المرور وحفظها بنجاح لحسابك المستقبلي!",
+                  "success",
+                );
+              } catch (err) {
+                console.error(
+                  "Failed to associate password to student:",
+                  err,
+                );
+                triggerToast(
+                  "خطأ أثناء تعيين كلمة المرور، يرجى إعادة المحاولة.",
+                  "error",
+                );
+                return;
+              }
+            } else {
+              // Subsequent logins: verify password matches
+              if (match.password !== studentLoginPassword) {
+                const errMsg = "كلمة المرور غير صحيحة! يرجى إعادة المحاولة أو مراجعة معلمك لإعادة تعيينها.";
+                setPasswordErrorShake(true);
+                setTimeout(() => setPasswordErrorShake(false), 500);
+                setPasswordErrorMessage(errMsg);
+                triggerToast(errMsg, "error");
+                return;
+              }
+            }
+          }
+
+          localStorage.setItem("seb_student_logged_id", match.id);
+          localStorage.setItem(
+            "seb_student_grade",
+            match.grade || studentSelectedGrade,
+          );
+          localStorage.setItem(
+            "seb_student_semester",
+            match.semester || studentSelectedSemester,
+          );
+          setStudentSelectedId(match.id);
+          triggerToast(
+            `أهلاً بك مجدداً يا ${match.name}! تم الدخول بنجاح.`,
+            "success",
+          );
+        }
+      };
+
       return (
         <div
           className="min-h-screen bg-slate-50/70 py-12 px-4 md:px-6 text-slate-800 flex items-center justify-center animate-fade-in"
@@ -4822,7 +5009,7 @@ export default function App() {
                 <BookOpen className="w-8 h-8" />
               </div>
               <h1 className="text-2xl font-black leading-tight">
-                بوابة الطلاب للاختبارات
+                بوابة الطالب الإلكترونية
               </h1>
               <p className="text-white/80 text-xs mt-2 leading-tight">
                 اختر صفك الدراسي واسمك المعتمد للدخول المباشر إلى كشف اختباراتك
@@ -4831,7 +5018,7 @@ export default function App() {
             </div>
 
             {/* Selection and Details */}
-            <div className="p-8 space-y-6">
+            <form onSubmit={handleStudentPortalLogin} className="p-8 space-y-6">
               <div className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1">
@@ -4918,72 +5105,149 @@ export default function App() {
                           ? { x: [-10, 10, -10, 10, -5, 5, 0], opacity: 1, y: 0 }
                           : { opacity: 1, y: 0, x: 0 }
                       }
-                      transition={{
-                        x: { type: "spring", stiffness: 400, damping: 20 },
-                        default: { duration: 0.2 }
-                      }}
+                      transition={
+                        passwordErrorShake
+                          ? { x: { type: "tween", duration: 0.4 }, default: { duration: 0.2 } }
+                          : { duration: 0.2 }
+                      }
                       className={`p-4 rounded-2xl border ${
                         passwordErrorShake
                           ? "border-rose-450 bg-rose-50/20"
                           : "bg-indigo-50/50 border-indigo-100"
                       } space-y-2 mt-4 transition-all duration-200`}
                     >
-                      <label className="text-indigo-950 font-black text-xs block flex items-center gap-1.5">
-                        <span>🔒</span>
-                        {hasPassSet
-                          ? "مطلوب كلمة المرور لتسجيل الدخول:"
-                          : "إنشاء كلمة المرور الخاصة بك (لأول مرة - أرقام فقط):"}
-                      </label>
-                      <div className="relative">
-                        <input
-                          type={showPassword ? "text" : "password"}
-                          inputMode="numeric"
-                          pattern="[0-9]*"
-                          maxLength={10}
-                          placeholder={
-                            hasPassSet
-                              ? "أدخل كلمة المرور المكونة من أرقام فقط"
-                              : "أدخل كلمة مرور جديدة (أرقام فقط، بحد أقصى 10 أرقام)"
-                          }
-                          value={studentLoginPassword}
-                          onChange={(e) => {
-                            setStudentLoginPassword(
-                              e.target.value.replace(/[^0-9]/g, ""),
-                            );
-                            if (passwordErrorShake) {
-                              setPasswordErrorShake(false);
-                            }
-                          }}
-                          className={`w-full bg-white border ${
-                            passwordErrorShake
-                              ? "border-rose-450 ring-2 ring-rose-200 focus:ring-rose-500"
-                              : "border-indigo-205 focus:ring-indigo-505"
-                          } rounded-xl pl-12 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 font-mono text-center tracking-widest font-black text-slate-800 transition-all`}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowPassword(!showPassword)}
-                          className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-indigo-600 transition-colors p-1 flex items-center justify-center cursor-pointer"
-                          title={showPassword ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"}
-                        >
-                          {showPassword ? (
-                            <EyeOff className="w-4 h-4 shrink-0" />
-                          ) : (
-                            <Eye className="w-4 h-4 shrink-0" />
+                      <div className="space-y-3">
+                        <div>
+                          <label className="text-indigo-950 font-black text-xs block flex items-center gap-1.5 mb-1">
+                            <span>🔒</span>
+                            {hasPassSet
+                              ? "مطلوب كلمة المرور لتسجيل الدخول:"
+                              : "إنشاء كلمة المرور الخاصة بك (لأول مرة - أرقام فقط):"}
+                          </label>
+                          <div className="relative">
+                            <input
+                              type={showPassword ? "text" : "password"}
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              maxLength={10}
+                              placeholder={
+                                hasPassSet
+                                  ? "أدخل كلمة المرور المكونة من أرقام فقط"
+                                  : "أدخل كلمة مرور جديدة (أرقام فقط، بحد أقصى 10 أرقام)"
+                              }
+                              value={studentLoginPassword}
+                              onChange={(e) => {
+                                setStudentLoginPassword(
+                                  e.target.value.replace(/[^0-9]/g, ""),
+                                );
+                                if (passwordErrorShake) {
+                                  setPasswordErrorShake(false);
+                                }
+                                if (passwordErrorMessage) {
+                                  setPasswordErrorMessage("");
+                                }
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  handleStudentPortalLogin();
+                                }
+                              }}
+                              className={`w-full bg-white border ${
+                                passwordErrorShake || !!passwordErrorMessage
+                                  ? "border-rose-500 ring-2 ring-rose-200 focus:ring-rose-500 bg-rose-50/30"
+                                  : "border-indigo-200 focus:ring-indigo-500"
+                              } rounded-xl pl-12 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 font-mono text-center tracking-widest font-black text-slate-800 transition-all`}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowPassword(!showPassword)}
+                              className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-indigo-600 transition-colors p-1 flex items-center justify-center cursor-pointer"
+                              title={showPassword ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"}
+                            >
+                              {showPassword ? (
+                                <EyeOff className="w-4 h-4 shrink-0" />
+                              ) : (
+                                <Eye className="w-4 h-4 shrink-0" />
+                              )}
+                            </button>
+                          </div>
+
+                          {/* Red Error Banner under password input */}
+                          {(passwordErrorMessage || passwordErrorShake) && (
+                            <motion.div 
+                              initial={{ opacity: 0, y: -4, scale: 0.98 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              className="text-rose-700 font-extrabold text-xs flex items-center gap-2 mt-2 bg-rose-100/90 py-2 px-3 rounded-xl border-2 border-rose-300 text-center justify-center shadow-sm"
+                            >
+                              <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600 animate-bounce" />
+                              <span className="leading-tight">
+                                {passwordErrorMessage || "⚠️ يوجد خطأ في كلمة المرور! يرجى إعادة كتابة كلمة المرور مرة أخرى بشكل صحيح."}
+                              </span>
+                            </motion.div>
                           )}
-                        </button>
+                        </div>
+
+                        {!hasPassSet && (
+                          <div className="pt-1">
+                            <label className="text-indigo-950 font-black text-xs block flex items-center gap-1.5 mb-1">
+                              <span>🔑</span>
+                              <span>تأكيد كلمة المرور:</span>
+                            </label>
+                            <div className="relative">
+                              <input
+                                type={showPassword ? "text" : "password"}
+                                inputMode="numeric"
+                                pattern="[0-9]*"
+                                maxLength={10}
+                                placeholder="أعد إدخال كلمة المرور للتأكيد"
+                                value={studentLoginConfirmPassword}
+                                onChange={(e) => {
+                                  setStudentLoginConfirmPassword(
+                                    e.target.value.replace(/[^0-9]/g, ""),
+                                  );
+                                  if (passwordErrorShake) {
+                                    setPasswordErrorShake(false);
+                                  }
+                                  if (passwordErrorMessage) {
+                                    setPasswordErrorMessage("");
+                                  }
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    handleStudentPortalLogin();
+                                  }
+                                }}
+                                className={`w-full bg-white border ${
+                                  passwordErrorShake || !!passwordErrorMessage || (studentLoginConfirmPassword && studentLoginConfirmPassword !== studentLoginPassword)
+                                    ? "border-rose-500 ring-2 ring-rose-200 focus:ring-rose-500 bg-rose-50/30"
+                                    : "border-indigo-200 focus:ring-indigo-500"
+                                } rounded-xl pl-12 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 font-mono text-center tracking-widest font-black text-slate-800 transition-all`}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShowPassword(!showPassword)}
+                                className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-indigo-600 transition-colors p-1 flex items-center justify-center cursor-pointer"
+                                title={showPassword ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"}
+                              >
+                                {showPassword ? (
+                                  <EyeOff className="w-4 h-4 shrink-0" />
+                                ) : (
+                                  <Eye className="w-4 h-4 shrink-0" />
+                                )}
+                              </button>
+                            </div>
+                            {studentLoginConfirmPassword && studentLoginConfirmPassword !== studentLoginPassword && (
+                              <div className="text-rose-700 font-extrabold text-xs flex items-center justify-center gap-1.5 mt-2 bg-rose-100/90 py-1.5 px-3 rounded-xl border border-rose-300">
+                                <span>⚠️ كلمتا المرور غير متطابقتين! يرجى إعادة كتابتهما للتطابق.</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
-                      {passwordErrorShake && (
-                        <motion.span 
-                          initial={{ opacity: 0, y: -5 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          className="text-rose-600 font-extrabold text-[11px] flex items-center gap-1.5 mt-1 justify-center bg-rose-50 p-2 rounded-lg border border-rose-100"
-                        >
-                          <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-rose-500 animate-bounce" />
-                          <span>كلمة المرور المدخلة غير صحيحة! يرجى إعادة المحاولة.</span>
-                        </motion.span>
-                      )}
-                      <span className="text-[10px] text-indigo-600 block font-bold leading-normal">
+
+                      <span className="text-[10px] text-indigo-600 block font-bold leading-normal mt-2">
                         {hasPassSet
                           ? "يرجى كتابة كلمة المرور المكونة من أرقام فقط التي اخترتها سابقاً."
                           : "تنبيه: ستكون كلمة المرور هذه هي المطلوبة منك دائماً لتسجيل دخولك القادم."}
@@ -4995,120 +5259,11 @@ export default function App() {
 
               {/* Start Quiz CTA */}
               <button
-                type="button"
-                onClick={async () => {
-                  if (!studentLoginSelectId) {
-                    triggerToast(
-                      "الرجاء اختيار اسمك من قائمة الكشف المدرسية المدرجة",
-                      "error",
-                    );
-                    return;
-                  }
-                  const match = students.find(
-                    (s) => s.id === studentLoginSelectId,
-                  );
-                  if (match) {
-                    // Check password security if required
-                    if (match.passwordRequired) {
-                      const hasPassSet = !!match.password;
-                      if (!studentLoginPassword) {
-                        setPasswordErrorShake(true);
-                        setTimeout(() => setPasswordErrorShake(false), 500);
-                        triggerToast(
-                          hasPassSet
-                            ? "الرجاء إدخال كلمة المرور المعتمدة الخاصة بك للتحقق"
-                            : "الرجاء تحديد واختيار كلمة مرور رقمية جديدة لحسابك لأول مرة",
-                          "error",
-                        );
-                        return;
-                      }
-                      const numericOnly = studentLoginPassword.replace(
-                        /[^0-9]/g,
-                        "",
-                      );
-                      if (numericOnly !== studentLoginPassword) {
-                        setPasswordErrorShake(true);
-                        setTimeout(() => setPasswordErrorShake(false), 500);
-                        triggerToast(
-                          "عذراً، يجب تسجيل أرقام فقط ككلمة مرور",
-                          "error",
-                        );
-                        return;
-                      }
-                      if (studentLoginPassword.length > 10) {
-                        setPasswordErrorShake(true);
-                        setTimeout(() => setPasswordErrorShake(false), 500);
-                        triggerToast(
-                          "عذراً، يجب أن لا تتجاوز كلمة المرور 10 أرقام فقط",
-                          "error",
-                        );
-                        return;
-                      }
-
-                      if (!hasPassSet) {
-                        // First time login: Set password in DB and local state
-                        try {
-                          const studentRef = doc(db, "students", match.id);
-                          await updateDoc(studentRef, {
-                            password: studentLoginPassword,
-                          });
-                          // update matches locally
-                          setStudents((prev) =>
-                            prev.map((s) =>
-                              s.id === match.id
-                                ? { ...s, password: studentLoginPassword }
-                                : s,
-                            ),
-                          );
-                          triggerToast(
-                            "تم تعيين كلمة المرور وحفظها بنجاح لحسابك المستقبلي!",
-                            "success",
-                          );
-                        } catch (err) {
-                          console.error(
-                            "Failed to associate password to student:",
-                            err,
-                          );
-                          triggerToast(
-                            "خطأ أثناء تعيين كلمة المرور، يرجى إعادة المحاولة.",
-                            "error",
-                          );
-                          return;
-                        }
-                      } else {
-                        // Subsequent logins: verify password matches
-                        if (match.password !== studentLoginPassword) {
-                          setPasswordErrorShake(true);
-                          setTimeout(() => setPasswordErrorShake(false), 500);
-                          triggerToast(
-                            "كلمة المرور غير صحيحة! يرجى إعادة المحاولة أو مراجعة معلمك لإعادة تعيينها.",
-                            "error",
-                          );
-                          return;
-                        }
-                      }
-                    }
-
-                    localStorage.setItem("seb_student_logged_id", match.id);
-                    localStorage.setItem(
-                      "seb_student_grade",
-                      match.grade || studentSelectedGrade,
-                    );
-                    localStorage.setItem(
-                      "seb_student_semester",
-                      match.semester || studentSelectedSemester,
-                    );
-                    setStudentSelectedId(match.id);
-                    triggerToast(
-                      `أهلاً بك مجدداً يا ${match.name}! تم الدخول بنجاح.`,
-                      "success",
-                    );
-                  }
-                }}
+                type="submit"
                 className="w-full flex items-center justify-center gap-3 px-6 py-4 bg-gradient-to-r from-indigo-600 to-indigo-700 text-white rounded-2xl font-black shadow-lg shadow-indigo-500/25 transition-all transform hover:-translate-y-0.5 hover:shadow-indigo-500/40 active:translate-y-0 active:scale-[0.99] cursor-pointer"
               >
                 <BookOpen className="w-5 h-5" />
-                <span>دخول البوابة وتصفح اختباراتي المخصصة</span>
+                <span>دخول البوابة</span>
               </button>
 
               <div className="pt-4 flex flex-col items-center gap-2.5 border-t border-slate-100 mt-2">
@@ -5132,7 +5287,7 @@ export default function App() {
                   <span>التبديل إلى بوابة المعلم (الإدارة)</span>
                 </button>
               </div>
-            </div>
+            </form>
           </motion.div>
         </div>
       );
@@ -5265,7 +5420,7 @@ export default function App() {
                 </div>
                 <div>
                   <h1 className="text-sm font-extrabold text-white leading-none leading-tight">
-                    بوابة الطالب الذكية
+                    بوابة الطالب الإلكترونية
                   </h1>
                   <span className="text-[9px] text-[#818cf8] font-black mt-1 block mb-2">
                     نظام التعلم الفوري
@@ -5470,39 +5625,20 @@ export default function App() {
                 return (
                   <div className="space-y-8 animate-fade-in">
                     {/* Welcome Banner */}
-                    <div className="bg-gradient-to-r from-indigo-900 via-indigo-950 to-slate-900 rounded-3xl p-6 md:p-8 text-white shadow-xl relative overflow-hidden border border-indigo-800">
-                      <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
-                      <div className="absolute bottom-0 left-0 w-64 h-64 bg-purple-500/10 rounded-full blur-3xl pointer-events-none" />
+                    <div className="bg-gradient-to-r from-indigo-900 via-indigo-950 to-slate-900 rounded-2xl p-4 md:px-6 md:py-4 text-white shadow-md relative overflow-hidden border border-indigo-800">
+                      <div className="absolute top-0 right-0 w-48 h-48 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
+                      <div className="absolute bottom-0 left-0 w-48 h-48 bg-purple-500/10 rounded-full blur-2xl pointer-events-none" />
                       
-                      <div className="relative z-10 space-y-4">
-                        <div className="inline-flex items-center gap-2 bg-indigo-500/20 text-indigo-300 px-4 py-1.5 rounded-full text-xs font-black border border-indigo-500/30">
-                          <Sparkles className="w-3.5 h-3.5 text-yellow-300" />
-                          <span>بوابتك إلى المستقبل والنجاح الباهر 🌟</span>
-                        </div>
-                        
-                        <h2 className="text-xl md:text-3xl font-extrabold leading-tight">
-                          أهلاً بك مجدداً يا {activeStudent.name}! 👋
-                        </h2>
-                        
-                        <p className="text-sm text-slate-300 max-w-2xl leading-relaxed">
-                          مرحباً بك في منصتك التعليمية المتكاملة. هنا تجد كل ما تحتاجه لتطوير مهاراتك ومراجعة دروسك بطرق تفاعلية ممتعة ومحفزة. نحن فخورون جداً بمجهودك المستمر ومثابرتك! 🎓✨
-                        </p>
-
-                        <div className="pt-2 flex flex-wrap gap-4 items-center">
-                          <div className="flex items-center gap-2 bg-slate-800/60 border border-slate-700/50 px-4 py-2 rounded-2xl">
-                            <GraduationCap className="w-5 h-5 text-indigo-400" />
-                            <span className="text-xs text-slate-200 font-bold">الصف: <strong className="text-white">{activeStudent.grade || studentSelectedGrade}</strong></span>
+                      <div className="relative z-10 flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <div className="inline-flex items-center gap-1.5 bg-indigo-500/20 text-indigo-300 px-3 py-1 rounded-full text-xs font-black border border-indigo-500/30">
+                            <Sparkles className="w-3.5 h-3.5 text-yellow-300" />
+                            <span>بوابتك التعليمية 🌟</span>
                           </div>
-                          <div className="flex items-center gap-2 bg-slate-800/60 border border-slate-700/50 px-4 py-2 rounded-2xl">
-                            <Trophy className="w-5 h-5 text-yellow-400 animate-bounce" />
-                            <span className="text-xs text-slate-200 font-bold">المعدل العام: <strong className="text-yellow-300">{activeStudent.averageScore}%</strong></span>
-                          </div>
-                          {pendingQuizzesCount > 0 && (
-                            <div className="flex items-center gap-2 bg-rose-500/20 border border-rose-500/30 px-4 py-2 rounded-2xl text-rose-300 font-black animate-pulse">
-                              <AlertCircle className="w-4 h-4" />
-                              <span className="text-xs">لديك {pendingQuizzesCount} اختبار بانتظارك!</span>
-                            </div>
-                          )}
+                          
+                          <h2 className="text-base md:text-lg font-extrabold leading-tight">
+                            أهلاً بك مجدداً يا {activeStudent.name}! 👋
+                          </h2>
                         </div>
                       </div>
                     </div>
@@ -7310,7 +7446,20 @@ export default function App() {
                 }`}
               >
                 <Award className="w-4 h-4 shrink-0 text-amber-500" />
-                <span>نتائج الطلاب</span>
+                <span>نتائج الاختبارات</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab("manage_student_portal")}
+                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-black transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer ${
+                  activeTab === "manage_student_portal"
+                    ? "bg-gradient-to-r from-blue-600 to-[#1e3a8a] text-white shadow-lg"
+                    : "text-slate-650 hover:bg-slate-100 hover:text-[#1e3a8a] font-bold"
+                }`}
+              >
+                <Settings className="w-4 h-4 shrink-0 text-indigo-500" />
+                <span>إدارة اختبارات الطلاب</span>
               </button>
             </div>
 
@@ -7325,19 +7474,6 @@ export default function App() {
             >
               <Users className="w-4 h-4 shrink-0" />
               <span>إضافة الطلاب \ الفصول</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveTab("manage_student_portal")}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-black transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer ${
-                activeTab === "manage_student_portal"
-                  ? "bg-gradient-to-r from-blue-600 to-[#1e3a8a] text-white shadow-lg"
-                  : "text-slate-650 hover:bg-slate-105 hover:text-[#1e3a8a] font-bold"
-              }`}
-            >
-              <Settings className="w-4 h-4 shrink-0 text-indigo-500" />
-              <span>إدارة بوابة الطالب</span>
             </button>
 
 
@@ -8122,184 +8258,25 @@ export default function App() {
                     </div>
 
                         {/* Filters Row */}
-                        <div className="p-6 border-b border-slate-100 bg-slate-50/25 flex flex-col gap-5 transition-all duration-300 hover:bg-indigo-50/5 hover:border-b-indigo-300/60 hover:shadow-xs">
-                          {/* First Row: Main Dropdowns & Search */}
-                          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                            <div className="space-y-2">
-                              <label className="text-xs sm:text-sm font-black text-slate-700 block flex items-center gap-1.5">
-                                <span className={`w-5.5 h-5.5 text-[10px] rounded-full flex items-center justify-center font-sans font-black transition-all duration-300 ${importFilterStage === "all" ? "bg-indigo-600 text-white ring-4 ring-indigo-105 animate-pulse" : "bg-emerald-100 text-emerald-700"}`}>
-                                  {importFilterStage === "all" ? "١" : "✓"}
-                                </span>
-                                <span>المرحلة الدراسية</span>
-                              </label>
-                              <select
-                                value={importFilterStage}
-                                onChange={(e) => {
-                                  setImportFilterStage(e.target.value);
-                                  setImportFilterGrade("all");
-                                  setImportFilterSubject("all");
-                                  setImportFilterSemester("all");
-                                  setImportFilterUnit("all");
-                                  setImportFilterLesson("all");
-                                }}
-                                className={`bg-white border text-sm sm:text-base font-bold rounded-2xl px-3 py-2.5 w-full focus:outline-none transition-all duration-300 ${importFilterStage === "all" ? "border-indigo-500 ring-4 ring-indigo-100 shadow-md scale-[1.01]" : "border-emerald-300 bg-emerald-50/5 text-slate-800 hover:border-emerald-400"}`}
-                              >
-                                <option value="all">الكل</option>
-                                {Array.from(
-                                  new Set(bankQuestions.map((q) => q.stage)),
-                                )
-                                  .filter(Boolean)
-                                  .sort()
-                                  .map((s) => (
-                                    <option key={s} value={s}>
-                                      {s}
-                                    </option>
-                                  ))}
-                              </select>
-                            </div>
-
-                            <div className={`space-y-2 transition-all duration-300 ${importFilterStage === "all" ? "opacity-50 pointer-events-none" : ""}`}>
-                              <label className="text-xs sm:text-sm font-black text-slate-700 block flex items-center gap-1.5">
-                                <span className={`w-5.5 h-5.5 text-[10px] rounded-full flex items-center justify-center font-sans font-black transition-all duration-300 ${importFilterStage !== "all" && importFilterGrade === "all" ? "bg-indigo-600 text-white ring-4 ring-indigo-105 animate-pulse" : importFilterGrade !== "all" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-400"}`}>
-                                  {importFilterGrade === "all" ? "٢" : "✓"}
-                                </span>
-                                <span>الصف</span>
-                              </label>
-                              <select
-                                value={importFilterGrade}
-                                onChange={(e) => {
-                                  setImportFilterGrade(e.target.value);
-                                  setImportFilterSubject("all");
-                                  setImportFilterSemester("all");
-                                  setImportFilterUnit("all");
-                                  setImportFilterLesson("all");
-                                }}
-                                disabled={importFilterStage === "all"}
-                                className={`bg-white border text-sm sm:text-base font-bold rounded-2xl px-3 py-2.5 w-full focus:outline-none transition-all duration-300 ${importFilterStage !== "all" && importFilterGrade === "all" ? "border-indigo-500 ring-4 ring-indigo-100 shadow-md scale-[1.01]" : importFilterGrade !== "all" ? "border-emerald-300 bg-emerald-50/5 text-slate-800 hover:border-emerald-400" : "border-slate-200 text-slate-400"}`}
-                              >
-                                <option value="all">الكل</option>
-                                {Array.from(
-                                  new Set(
-                                    bankQuestions
-                                      .filter(
-                                        (q) =>
-                                          importFilterStage === "all" ||
-                                          q.stage === importFilterStage,
-                                      )
-                                      .map((q) => q.grade),
-                                  ),
-                                )
-                                  .filter(Boolean)
-                                  .sort()
-                                  .map((g) => (
-                                    <option key={g} value={g}>
-                                      {g}
-                                    </option>
-                                  ))}
-                              </select>
-                            </div>
-
-                            <div className={`space-y-2 transition-all duration-300 ${importFilterGrade === "all" ? "opacity-50 pointer-events-none" : ""}`}>
-                              <label className="text-xs sm:text-sm font-black text-slate-700 block flex items-center gap-1.5">
-                                <span className={`w-5.5 h-5.5 text-[10px] rounded-full flex items-center justify-center font-sans font-black transition-all duration-300 ${importFilterGrade !== "all" && importFilterSemester === "all" ? "bg-indigo-600 text-white ring-4 ring-indigo-105 animate-pulse" : importFilterSemester !== "all" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-400"}`}>
-                                  {importFilterSemester === "all" ? "٣" : "✓"}
-                                </span>
-                                <span>الفصل الدراسي</span>
-                              </label>
-                              <select
-                                value={importFilterSemester}
-                                onChange={(e) => {
-                                  setImportFilterSemester(e.target.value);
-                                  setImportFilterSubject("all");
-                                  setImportFilterUnit("all");
-                                  setImportFilterLesson("all");
-                                }}
-                                disabled={importFilterGrade === "all"}
-                                className={`bg-white border text-sm sm:text-base font-bold rounded-2xl px-3 py-2.5 w-full focus:outline-none transition-all duration-300 ${importFilterGrade !== "all" && importFilterSemester === "all" ? "border-indigo-500 ring-4 ring-indigo-100 shadow-md scale-[1.01]" : importFilterSemester !== "all" ? "border-emerald-300 bg-emerald-50/5 text-slate-800 hover:border-emerald-400" : "border-slate-200 text-slate-400"}`}
-                              >
-                                <option value="all">الكل</option>
-                                {Array.from(
-                                  new Set(
-                                    bankQuestions
-                                      .filter(
-                                        (q) =>
-                                          (importFilterStage === "all" ||
-                                            q.stage === importFilterStage) &&
-                                          (importFilterGrade === "all" ||
-                                            q.grade === importFilterGrade),
-                                      )
-                                      .map((q) => q.semester),
-                                  ),
-                                )
-                                  .filter(Boolean)
-                                  .sort()
-                                  .map((sem) => (
-                                    <option key={sem} value={sem}>
-                                      {sem}
-                                    </option>
-                                  ))}
-                              </select>
-                            </div>
-
-                            <div className={`space-y-2 transition-all duration-300 ${importFilterSemester === "all" ? "opacity-50 pointer-events-none" : ""}`}>
-                              <label className="text-xs sm:text-sm font-black text-slate-700 block flex items-center gap-1.5">
-                                <span className={`w-5.5 h-5.5 text-[10px] rounded-full flex items-center justify-center font-sans font-black transition-all duration-300 ${importFilterSemester !== "all" && importFilterSubject === "all" ? "bg-indigo-600 text-white ring-4 ring-indigo-105 animate-pulse" : importFilterSubject !== "all" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-400"}`}>
-                                  {importFilterSubject === "all" ? "٤" : "✓"}
-                                </span>
-                                <span>المادة</span>
-                              </label>
-                              <select
-                                value={importFilterSubject}
-                                onChange={(e) => {
-                                  setImportFilterSubject(e.target.value);
-                                  setImportFilterUnit("all");
-                                  setImportFilterLesson("all");
-                                }}
-                                disabled={importFilterSemester === "all"}
-                                className={`bg-white border text-sm sm:text-base font-bold rounded-2xl px-3 py-2.5 w-full focus:outline-none transition-all duration-300 ${importFilterSemester !== "all" && importFilterSubject === "all" ? "border-indigo-500 ring-4 ring-indigo-100 shadow-md scale-[1.01]" : importFilterSubject !== "all" ? "border-emerald-300 bg-emerald-50/5 text-slate-800 hover:border-emerald-400" : "border-slate-200 text-slate-400"}`}
-                              >
-                                <option value="all">الكل</option>
-                                {Array.from(
-                                  new Set(
-                                    bankQuestions
-                                      .filter(
-                                        (q) =>
-                                          (importFilterStage === "all" ||
-                                            q.stage === importFilterStage) &&
-                                          (importFilterGrade === "all" ||
-                                            q.grade === importFilterGrade) &&
-                                          (importFilterSemester === "all" ||
-                                            q.semester === importFilterSemester),
-                                      )
-                                      .map((q) => q.subject),
-                                  ),
-                                )
-                                  .filter(Boolean)
-                                  .sort()
-                                  .map((s) => (
-                                    <option key={s} value={s}>
-                                      {s}
-                                    </option>
-                                  ))}
-                              </select>
-                            </div>
-
-                            <div className="space-y-2">
-                              <label className="text-xs sm:text-sm font-black text-slate-700 block mb-1.5 h-6 flex items-center">
-                                البحث بالنص
-                              </label>
-                              <input
-                                type="text"
-                                placeholder="ابحث بالنص..."
-                                value={importSearch}
-                                onChange={(e) => setImportSearch(e.target.value)}
-                                className="bg-white border border-slate-200 text-sm sm:text-base font-bold rounded-2xl px-3.5 py-2.5 w-full focus:outline-none focus:ring-4 focus:ring-indigo-50 placeholder-slate-350 font-sans transition-all"
-                              />
-                            </div>
-                          </div>
+                        <div className="p-4 sm:p-6 border-b border-slate-100 bg-slate-50/25 flex flex-col gap-5 transition-all duration-300">
+                          <QuestionBankSmartFilters
+                            questions={bankQuestions}
+                            stage={importFilterStage}
+                            setStage={setImportFilterStage}
+                            grade={importFilterGrade}
+                            setGrade={setImportFilterGrade}
+                            semester={importFilterSemester}
+                            setSemester={setImportFilterSemester}
+                            subject={importFilterSubject}
+                            setSubject={setImportFilterSubject}
+                            setUnit={setImportFilterUnit}
+                            setLesson={setImportFilterLesson}
+                            search={importSearch}
+                            setSearch={setImportSearch}
+                          />
 
                           {/* Second Row: Wide Lesson Multiselect */}
-                          <div className="w-full space-y-4">
+                          <div id="unit-lesson-multiselect-section" className="w-full space-y-4 scroll-mt-6">
                             <UnitLessonMultiSelect
                               questions={bankQuestions.filter(
                                 (q) =>
@@ -9984,6 +9961,7 @@ export default function App() {
                         ) : (
                           gradesList.map((g, idx) => {
                             const isGradeSelected = selectedTabGrade === g;
+                            const gradeCount = getStudentsCountForGrade(g);
                             // Clean display name of grade to match the user's uploaded image ("الاول", "الثاني", "الثالث")
                             const getDisplayName = (gradeStr: string) => {
                               return gradeStr;
@@ -10020,25 +9998,42 @@ export default function App() {
                                     setSelectedTabSemester(null); // Reset semester when changing grade
                                   }
                                 }}
-                                className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-extrabold transition-all duration-200 flex items-center justify-between gap-2.5 cursor-pointer min-w-[110px] ${
+                                className={`flex flex-col rounded-xl overflow-hidden border transition-all duration-200 cursor-pointer min-w-[125px] ${
                                   isGradeSelected
-                                    ? "bg-[#5352ed] text-white border-transparent shadow-md shadow-[#5352ed]/20 transform scale-[1.01]"
-                                    : "bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 shadow-3xs"
+                                    ? "border-[#5352ed] shadow-md shadow-[#5352ed]/20 transform scale-[1.01]"
+                                    : "border-slate-200 hover:border-indigo-400 bg-white shadow-3xs"
                                 }`}
                               >
-                                {/* Right icon (appears first in RTL) */}
-                                {getGradeIcon(g, isGradeSelected)}
+                                {/* Top Section: Grade Name & Icon */}
+                                <div
+                                  className={`px-3 py-2 flex items-center justify-between gap-2 font-black text-xs sm:text-sm ${
+                                    isGradeSelected
+                                      ? "bg-[#5352ed] text-white"
+                                      : "bg-white text-slate-800"
+                                  }`}
+                                >
+                                  {/* Right icon */}
+                                  {getGradeIcon(g, isGradeSelected)}
 
-                                {/* Text label */}
-                                <span className="flex-1 text-center">
-                                  {getDisplayName(g)}
-                                </span>
+                                  {/* Text label */}
+                                  <span className="flex-1 text-center font-black">
+                                    {getDisplayName(g)}
+                                  </span>
 
-                                {/* Left icon (checkmark, visible only when selected) */}
-                                <div className="w-3.5 h-3.5 flex items-center justify-center shrink-0">
-                                  {isGradeSelected && (
-                                    <Check className="w-3.5 h-3.5 text-white" />
-                                  )}
+                                  {/* Left check icon */}
+                                  <div className="w-3.5 h-3.5 flex items-center justify-center shrink-0">
+                                    {isGradeSelected ? (
+                                      <Check className="w-3.5 h-3.5 text-white stroke-[3]" />
+                                    ) : (
+                                      <span className="text-xs text-indigo-400 font-bold">+</span>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Bottom Section: Unified Student count inside same card button */}
+                                <div className="px-2 py-1 bg-rose-50/80 border-t border-rose-100/80 flex items-center justify-center gap-1 text-center">
+                                  <span className="text-xs font-black text-rose-600 leading-none">{gradeCount}</span>
+                                  <span className="text-[10px] font-bold text-rose-500">طالب</span>
                                 </div>
                               </button>
                             );
@@ -10048,7 +10043,7 @@ export default function App() {
 
                       {/* Second row: Classes/Sections selection as modern squarish buttons 1, 2, 3... */}
                       {selectedTabGrade && (
-                        <div className="flex flex-wrap justify-center items-center gap-2.5 pt-2 border-t border-slate-200/50 w-full max-w-md">
+                        <div className="flex flex-wrap justify-center items-center gap-2.5 sm:gap-3 pt-2 border-t border-slate-200/50 w-full max-w-md">
                           {semestersList.map((s, idx) => {
                             const isSemSelected = selectedTabSemester === s;
                             // Map semester string to clean short numeric representations like 1, 2, 3...
@@ -10093,6 +10088,8 @@ export default function App() {
                               return String(index + 1);
                             };
                             const semesterNum = getSemesterNumber(s, idx);
+                            const semCount = getStudentsCountForSemester(selectedTabGrade, s);
+
                             return (
                               <button
                                 key={s}
@@ -10102,14 +10099,38 @@ export default function App() {
                                     isSemSelected ? null : s,
                                   );
                                 }}
-                                className={`w-9 h-9 md:w-10 md:h-10 flex items-center justify-center rounded-xl text-xs sm:text-sm font-black transition-all duration-200 cursor-pointer border ${
+                                className={`flex flex-col rounded-xl overflow-hidden border transition-all duration-200 cursor-pointer min-w-[50px] sm:min-w-[58px] ${
                                   isSemSelected
-                                    ? "bg-[#5352ed] text-white border-transparent shadow-sm scale-105 font-sans"
-                                    : "bg-white hover:bg-slate-50 text-slate-800 border-slate-200 hover:border-slate-350 shadow-3xs font-sans"
+                                    ? "border-[#5352ed] shadow-md shadow-[#5352ed]/20 transform scale-105"
+                                    : "border-indigo-200 hover:border-indigo-400 bg-white shadow-3xs"
                                 }`}
-                                title={s}
+                                title={`${s} - (${semCount} طالب)`}
                               >
-                                {semesterNum}
+                                {/* Top Section: Class number and check/plus */}
+                                <div
+                                  className={`px-3 py-1.5 flex items-center justify-center gap-1 text-sm sm:text-base font-black font-sans ${
+                                    isSemSelected
+                                      ? "bg-[#5352ed] text-white"
+                                      : "bg-white text-[#5352ed] hover:bg-slate-50"
+                                  }`}
+                                >
+                                  <span>{semesterNum}</span>
+                                  {isSemSelected ? (
+                                    <Check className="w-3.5 h-3.5 text-white stroke-[3]" />
+                                  ) : (
+                                    <span className="text-xs text-indigo-400 font-bold">+</span>
+                                  )}
+                                </div>
+
+                                {/* Bottom Section: Unified Student count inside same card button */}
+                                <div className="px-1 py-1 bg-rose-50/80 border-t border-rose-100/80 flex flex-col items-center justify-center leading-tight">
+                                  <span className="text-xs font-black text-rose-600 leading-none">
+                                    {semCount}
+                                  </span>
+                                  <span className="text-[10px] font-bold text-rose-500 mt-0.5">
+                                    طالب
+                                  </span>
+                                </div>
                               </button>
                             );
                           })}
@@ -10184,12 +10205,24 @@ export default function App() {
                                   onClick={() => {
                                     setNewStudentGrade(selectedTabGrade);
                                     setNewStudentSemester(selectedTabSemester);
-                                    setShowAddStudentModal(true);
+                                    setShowAddStudentModal((prev) => !prev);
                                   }}
-                                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-4 py-2.5 rounded-xl transition-all duration-200 flex items-center gap-2 shadow-sm shadow-indigo-150 cursor-pointer"
+                                  className={`font-bold text-xs px-4 py-2.5 rounded-xl transition-all duration-200 flex items-center gap-2 shadow-sm cursor-pointer ${
+                                    showAddStudentModal
+                                      ? "bg-slate-800 hover:bg-slate-900 text-white shadow-slate-200"
+                                      : "bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-150"
+                                  }`}
                                 >
-                                  <Plus className="w-4 h-4" />
-                                  <span>إضافة طالب / طلاب للفصل</span>
+                                  {showAddStudentModal ? (
+                                    <X className="w-4 h-4" />
+                                  ) : (
+                                    <Plus className="w-4 h-4" />
+                                  )}
+                                  <span>
+                                    {showAddStudentModal
+                                      ? "إغلاق نموذج الإضافة"
+                                      : "إضافة طالب / طلاب للفصل"}
+                                  </span>
                                 </button>
                               </>
                             )}
@@ -10239,6 +10272,91 @@ export default function App() {
                             )}
                           </div>
                         </div>
+
+                        {/* INLINE ADD STUDENT FORM PANEL (Opens in the same page) */}
+                        <AnimatePresence>
+                          {showAddStudentModal && (
+                            <motion.form
+                              onSubmit={handleAddStudent}
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: "auto" }}
+                              exit={{ opacity: 0, height: 0 }}
+                              transition={{ duration: 0.25 }}
+                              className="border-b border-indigo-100 bg-gradient-to-b from-indigo-50/80 via-indigo-50/40 to-white p-5 sm:p-6 text-right overflow-hidden shadow-inner"
+                            >
+                              <div className="max-w-3xl mx-auto space-y-4">
+                                {/* Form Top Header */}
+                                <div className="flex justify-between items-center pb-3 border-b border-indigo-100/80">
+                                  <div>
+                                    <h4 className="font-extrabold text-slate-800 text-sm flex items-center gap-2">
+                                      <span>
+                                        إضافة طالب أو مجموعة طلاب (يمكن نسخ ولصق مجموعة من الأسماء من ملف إكسل)
+                                      </span>
+                                    </h4>
+                                    <p className="text-[11px] text-slate-500 mt-0.5">
+                                      سجل الطلاب مباشرة دون مغادرة كشف الفصل الدراسي.
+                                    </p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => setShowAddStudentModal(false)}
+                                    className="p-1.5 hover:bg-slate-200/70 rounded-full transition-colors text-slate-400 cursor-pointer"
+                                    title="إغلاق نموذج الإضافة"
+                                  >
+                                    <X className="w-5 h-5" />
+                                  </button>
+                                </div>
+
+                                {/* Direct Student Names / Excel Paste Input */}
+                                <div className="space-y-2">
+                                  <label className="text-slate-700 font-bold text-xs block">
+                                    أدخل أو انسخ أسماء الطلاب
+                                  </label>
+                                  <p className="text-[11px] text-slate-500 bg-emerald-50/80 p-2.5 rounded-xl border border-emerald-100 font-sans leading-relaxed">
+                                    💡 يمكنك نسخ عمود الأسماء من ملف Excel ولصقها هنا مباشرة، أو كتابة الأسماء بمعدل اسم واحد في كل سطر.
+                                  </p>
+                                  <textarea
+                                    rows={5}
+                                    required
+                                    id="bulk-paste-textarea"
+                                    placeholder="أدخل الأسماء هنا، اسم في كل سطر:&#10;خالد محمد العتيبي&#10;سلطان عبد الله الشمري&#10;سارة فهد السديري"
+                                    value={bulkPasteText}
+                                    onChange={(e) =>
+                                      setBulkPasteText(e.target.value)
+                                    }
+                                    className="w-full bg-white border-2 border-emerald-200 rounded-xl px-4 py-2.5 text-xs font-semibold text-slate-800 placeholder-slate-400 focus:outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100 transition-all font-sans leading-relaxed text-right shadow-xs"
+                                  />
+                                </div>
+
+                                {/* Action Buttons */}
+                                <div className="pt-2 flex justify-end gap-2 border-t border-indigo-100/80">
+                                  <button
+                                    type="button"
+                                    onClick={() => setShowAddStudentModal(false)}
+                                    className="px-4 py-2 hover:bg-slate-200/80 rounded-xl text-xs font-bold text-slate-600 transition-colors cursor-pointer"
+                                  >
+                                    إلغاء الأمر
+                                  </button>
+                                  <button
+                                    type="submit"
+                                    disabled={isAddingStudent}
+                                    id="submit-student-button"
+                                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
+                                  >
+                                    {isAddingStudent ? (
+                                      <>
+                                        <span className="animate-spin inline-block w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full"></span>
+                                        جاري الإضافة والتسجيل...
+                                      </>
+                                    ) : (
+                                      "حفظ وتسجيل الطلاب"
+                                    )}
+                                  </button>
+                                </div>
+                              </div>
+                            </motion.form>
+                          )}
+                        </AnimatePresence>
 
                         {/* Class Stats Summary Indicator */}
                         {activeClassStudents.length > 0 && (
@@ -10371,6 +10489,26 @@ export default function App() {
                                           >
                                             كلمة المرور (مطلوبة)
                                           </label>
+                                        </div>
+                                        <div className="relative group cursor-pointer w-full max-w-[190px]">
+                                          <p className="text-[10px] text-indigo-800 font-medium leading-tight bg-indigo-50/90 hover:bg-indigo-100 border border-indigo-200/80 px-2 py-1 rounded-md text-center transition-all duration-200 group-hover:shadow-sm group-hover:border-indigo-400 group-hover:text-indigo-950">
+                                            💡 ملاحظة: بعد تفعيل كلمة المرور لأول مرة، سوف يتم مطالبة الطالب بإنشاء كلمة المرور لأول مرة عند تسجيل دخوله.
+                                          </p>
+                                          {/* Hover Floating Window / Popup */}
+                                          <div className="pointer-events-none opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 ease-out absolute top-full right-1/2 translate-x-1/2 mt-2 w-72 p-3.5 bg-slate-900/95 text-white text-xs font-medium rounded-2xl shadow-2xl backdrop-blur-md z-50 border border-slate-700/80 text-right leading-relaxed">
+                                            <div className="flex items-start gap-2.5">
+                                              <span className="text-xl shrink-0">💡</span>
+                                              <div className="space-y-1">
+                                                <span className="font-extrabold text-amber-300 block text-xs">
+                                                  ملاحظة مهمة حول كلمة المرور
+                                                </span>
+                                                <p className="text-slate-200 text-xs font-normal leading-relaxed">
+                                                  بعد تفعيل كلمة المرور لأول مرة، سوف يتم مطالبة الطالب بإنشاء كلمة المرور لأول مرة عند أول تسجيل دخول له إلى المنصة.
+                                                </p>
+                                              </div>
+                                            </div>
+                                            <div className="absolute bottom-full right-1/2 translate-x-1/2 -mb-1 border-4 border-transparent border-b-slate-900/95"></div>
+                                          </div>
                                         </div>
                                         <div className="flex flex-col gap-1 w-full max-w-[190px]">
                                           <button
@@ -10870,7 +11008,7 @@ export default function App() {
                       <div>
                         <h3 className="text-xl font-black text-slate-900 flex items-center gap-2">
                           <Settings className="w-5 h-5 text-indigo-600 shrink-0" />
-                          <span>إدارة بوابة الطالب</span>
+                          <span>إدارة اختبارات الطلاب</span>
                         </h3>
                         <p className="text-xs text-slate-400 font-semibold mt-1">
                           أداة الإدارة والتحكم السحابي لحذف ومزامنة الاختبارات
@@ -10910,6 +11048,7 @@ export default function App() {
                           >
                             {gradesList.map((g) => {
                               const isGradeSelected = selectedTabGrade === g;
+                              const gradeCount = getStudentsCountForGrade(g);
                               return (
                                 <button
                                   key={g}
@@ -10926,13 +11065,30 @@ export default function App() {
                                       setSelectedTabSemester(null);
                                     }
                                   }}
-                                  className={`px-4 py-2 rounded-xl text-xs font-black transition-all shrink-0 cursor-pointer ${
+                                  className={`flex flex-col rounded-xl overflow-hidden border transition-all duration-200 cursor-pointer shrink-0 min-w-[110px] ${
                                     isGradeSelected
-                                      ? "bg-indigo-600 text-white shadow-xs"
-                                      : "bg-white border border-slate-200/60 text-slate-650 hover:bg-slate-50"
+                                      ? "border-[#5352ed] shadow-md shadow-[#5352ed]/20"
+                                      : "border-slate-200 hover:border-indigo-400 bg-white shadow-3xs"
                                   }`}
                                 >
-                                  {g}
+                                  <div
+                                    className={`px-3 py-1.5 flex items-center justify-center gap-1.5 font-black text-xs ${
+                                      isGradeSelected
+                                        ? "bg-[#5352ed] text-white"
+                                        : "bg-white text-slate-800"
+                                    }`}
+                                  >
+                                    <span>{g}</span>
+                                    {isGradeSelected ? (
+                                      <Check className="w-3.5 h-3.5 text-white stroke-[3]" />
+                                    ) : (
+                                      <span className="text-xs text-indigo-400 font-bold">+</span>
+                                    )}
+                                  </div>
+                                  <div className="px-2 py-1 bg-rose-50/80 border-t border-rose-100/80 flex items-center justify-center gap-1 text-center">
+                                    <span className="text-xs font-black text-rose-600 leading-none">{gradeCount}</span>
+                                    <span className="text-[10px] font-bold text-rose-500">طالب</span>
+                                  </div>
                                 </button>
                               );
                             })}
@@ -10948,6 +11104,7 @@ export default function App() {
                                 (sem) => {
                                   const isSemSelected =
                                     selectedTabSemester === sem;
+                                  const semCount = getStudentsCountForSemester(selectedTabGrade, sem);
                                   return (
                                     <button
                                       key={sem}
@@ -10955,13 +11112,30 @@ export default function App() {
                                       onClick={() =>
                                         setSelectedTabSemester(sem)
                                       }
-                                      className={`px-3.5 py-1.5 rounded-lg text-xs font-black transition-all shrink-0 cursor-pointer ${
+                                      className={`flex flex-col rounded-xl overflow-hidden border transition-all duration-200 cursor-pointer shrink-0 min-w-[75px] ${
                                         isSemSelected
-                                          ? "bg-slate-800 text-white"
-                                          : "bg-white border border-slate-200/50 text-slate-500 hover:bg-slate-50 text-[11px]"
+                                          ? "border-[#5352ed] shadow-md shadow-[#5352ed]/20"
+                                          : "border-slate-200 hover:border-indigo-400 bg-white shadow-3xs"
                                       }`}
                                     >
-                                      {sem}
+                                      <div
+                                        className={`px-3 py-1.5 flex items-center justify-center gap-1 font-black text-xs ${
+                                          isSemSelected
+                                            ? "bg-[#5352ed] text-white"
+                                            : "bg-white text-[#5352ed]"
+                                        }`}
+                                      >
+                                        <span>{sem}</span>
+                                        {isSemSelected ? (
+                                          <Check className="w-3.5 h-3.5 text-white stroke-[3]" />
+                                        ) : (
+                                          <span className="text-xs text-indigo-400 font-bold">+</span>
+                                        )}
+                                      </div>
+                                      <div className="px-2 py-1 bg-rose-50/80 border-t border-rose-100/80 flex items-center justify-center gap-1 text-center">
+                                        <span className="text-xs font-black text-rose-600 leading-none">{semCount}</span>
+                                        <span className="text-[10px] font-bold text-rose-500">طالب</span>
+                                      </div>
                                     </button>
                                   );
                                 },
@@ -12882,202 +13056,7 @@ export default function App() {
             )}
           </AnimatePresence>
 
-          {/* --- MODAL 3: ADD NEW STUDENT IN-APP DIALOG --- */}
-          <AnimatePresence>
-            {showAddStudentModal && (
-              <div className="fixed inset-0 bg-slate-900/60 z-50 backdrop-blur-xs flex items-center justify-center p-4">
-                <motion.form
-                  onSubmit={handleAddStudent}
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col"
-                >
-                  {/* Header */}
-                  <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
-                    <div>
-                      <h3 className="font-extrabold text-slate-800 text-sm">
-                        إضافة طالب جديد أو مستند إكسل
-                      </h3>
-                      <p className="text-[11px] text-slate-400 mt-0.5">
-                        سجل الطلاب مباشرة في المستوى والفصل المختار.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowAddStudentModal(false)}
-                      className="p-1.5 hover:bg-slate-200 rounded-full transition-colors text-slate-400 cursor-pointer"
-                    >
-                      <X className="w-5 h-5" />
-                    </button>
-                  </div>
 
-                  {/* Tab Switcher */}
-                  <div className="flex p-2 gap-2 bg-slate-100/60 border-b border-slate-200/60">
-                    <button
-                      type="button"
-                      id="single-mode-tab"
-                      onClick={() => setAddStudentType("single")}
-                      className={`flex-1 py-3.5 px-4 rounded-xl text-xs font-black transition-all duration-250 cursor-pointer flex items-center justify-center gap-2 relative ${
-                        addStudentType === "single"
-                          ? "bg-blue-600 text-white shadow-md shadow-blue-500/20 border-2 border-blue-500 scale-[1.02]"
-                          : "bg-white hover:bg-blue-50 text-blue-600 border border-blue-100 hover:border-blue-300"
-                      }`}
-                    >
-                      <span className="text-sm">👤</span>
-                      <span>تسجيل طالب فردي</span>
-                      {addStudentType === "single" && (
-                        <span className="absolute bottom-1 w-1.5 h-1.5 bg-white rounded-full"></span>
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      id="bulk-mode-tab"
-                      onClick={() => setAddStudentType("bulk")}
-                      className={`flex-1 py-3.5 px-4 rounded-xl text-xs font-black transition-all duration-250 cursor-pointer flex items-center justify-center gap-2 relative overflow-hidden ${
-                        addStudentType === "bulk"
-                          ? "bg-emerald-600 text-white shadow-md shadow-emerald-500/20 border-2 border-emerald-500 scale-[1.02]"
-                          : "bg-emerald-50/80 hover:bg-emerald-100/90 text-emerald-700 border border-emerald-200 animate-pulse"
-                      }`}
-                    >
-                      <span className="text-sm">📊</span>
-                      <span className="flex items-center gap-1">
-                        <span>مجموعة من إكسل</span>
-                        <span className="relative flex h-2 w-2">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-300"></span>
-                        </span>
-                      </span>
-                      {addStudentType === "bulk" && (
-                        <span className="absolute bottom-1 w-1.5 h-1.5 bg-white rounded-full"></span>
-                      )}
-                    </button>
-                  </div>
-
-                  {/* Fields */}
-                  <div className="p-6 space-y-4">
-                    {/* Select Grade and Semester First as requested */}
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-1">
-                        <label className="text-slate-600 font-bold text-xs block">
-                          الصف الدراسي المختار
-                        </label>
-                        <select
-                          id="student-grade-select"
-                          value={newStudentGrade}
-                          onChange={(e) => setNewStudentGrade(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-sans cursor-pointer"
-                        >
-                          {gradesList.map((g) => (
-                            <option key={g} value={g}>
-                              {g}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="text-slate-600 font-bold text-xs block">
-                          الفصل الدراسي
-                        </label>
-                        <select
-                          id="student-semester-select"
-                          value={newStudentSemester}
-                          onChange={(e) =>
-                            setNewStudentSemester(e.target.value)
-                          }
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-sans cursor-pointer"
-                        >
-                          {addStudentSemestersList.map((s) => (
-                            <option key={s} value={s}>
-                              {s}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-
-                    {addStudentType === "single" ? (
-                      /* Single Student Mode */
-                      <div className="space-y-1">
-                        <label className="text-slate-600 font-bold text-xs block">
-                          اسم الطالب كاملاً
-                        </label>
-                        <div className="relative">
-                          <input
-                            type="text"
-                            required={addStudentType === "single"}
-                            id="student-name-input"
-                            placeholder="ثلاثي أو رباعي، مثال: خالد عبد العزيز اليوسف"
-                            value={newStudentName}
-                            onChange={(e) => setNewStudentName(e.target.value)}
-                            className="w-full bg-slate-50/70 border-2 border-slate-200 rounded-2xl pr-11 pl-4 py-3 text-sm font-bold text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 transition-all duration-250 shadow-inner"
-                          />
-                          <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-sm">
-                            👤
-                          </span>
-                        </div>
-                      </div>
-                    ) : (
-                      /* Bulk Copy/Paste Excel Mode */
-                      <div className="space-y-2">
-                        <label className="text-slate-600 font-bold text-xs block">
-                          قائمة الطلاب من ملف Excel
-                        </label>
-                        <p className="text-[11px] text-slate-500 bg-indigo-50/50 p-3 rounded-xl border border-indigo-100/50 leading-relaxed font-sans">
-                          💡 انسخ عمود الأسماء من ملف الـ Excel الخاص بك ثم
-                          الصقها هنا مباشرة. سيقوم النظام بفرز الأسماء آلياً
-                          وتسجيل كل طالب بسطر مستقل.
-                        </p>
-                        <div className="relative group">
-                          <textarea
-                            rows={6}
-                            required={addStudentType === "bulk"}
-                            id="bulk-paste-textarea"
-                            placeholder="أدخل الأسماء هنا، اسم في كل سطر:&#10;خالد محمد العتيبي&#10;سلطان عبد الله الشمري&#10;سارة فهد السديري"
-                            value={bulkPasteText}
-                            onChange={(e) => setBulkPasteText(e.target.value)}
-                            className="w-full bg-emerald-50/10 border-2 border-emerald-200/80 rounded-2xl px-4 py-3 text-sm font-semibold text-slate-800 placeholder-slate-400/85 focus:outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100 transition-all duration-250 font-sans leading-relaxed text-right min-h-[160px] shadow-sm group-hover:border-emerald-300"
-                          />
-                          <div className="absolute left-3 bottom-3 text-[10px] font-bold text-emerald-600 bg-emerald-50/80 border border-emerald-100/60 rounded-lg px-2 py-1 select-none pointer-events-none flex items-center gap-1 shadow-3xs">
-                            📊 وضع إكسل النشط
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Footer action */}
-                  <div className="p-4 border-t border-slate-100 gap-2 justify-end flex bg-slate-50/50">
-                    <button
-                      type="button"
-                      onClick={() => setShowAddStudentModal(false)}
-                      className="px-4 py-2 hover:bg-slate-200 border border-transparent rounded-xl text-xs font-bold text-slate-600 transition-colors cursor-pointer"
-                    >
-                      إلغاء الأمر
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={isAddingStudent}
-                      id="submit-student-button"
-                      className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors cursor-pointer"
-                    >
-                      {isAddingStudent ? (
-                        <>
-                          <span className="animate-spin inline-block w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full"></span>
-                          جاري الإضافة والتسجيل...
-                        </>
-                      ) : addStudentType === "bulk" ? (
-                        "استيراد وحفظ مجموعة الطلاب"
-                      ) : (
-                        "تسجيل الطالب بالفصل الدراسي"
-                      )}
-                    </button>
-                  </div>
-                </motion.form>
-              </div>
-            )}
-          </AnimatePresence>
 
           {/* --- TRASH BIN DIALOG --- */}
           <AnimatePresence>
@@ -13584,7 +13563,7 @@ export default function App() {
                       }}
                       className="px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
                     >
-                      إغلاق والعودة للسجلات
+                      حفظ التغييرات وإغلاق
                     </button>
                   </div>
                 </motion.div>

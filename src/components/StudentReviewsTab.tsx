@@ -610,6 +610,23 @@ export default function StudentReviewsTab({
   const [shipX, setShipX] = useState(50);
   const [carAngle, setCarAngle] = useState(0);
   const [isBoostingState, setIsBoostingState] = useState(false);
+
+  // --- MAZE CHASE GAME STATES ---
+  const [mazePlayerPos, setMazePlayerPos] = useState<{ r: number; c: number }>({ r: 3, c: 4 });
+  const [mazeMonsters, setMazeMonsters] = useState<{ id: number; r: number; c: number; type: string }[]>([
+    { id: 1, r: 1, c: 4, type: "👾" },
+    { id: 2, r: 5, c: 4, type: "👹" },
+    { id: 3, r: 3, c: 2, type: "👾" },
+    { id: 4, r: 3, c: 6, type: "👾" }
+  ]);
+  const [mazeLives, setMazeLives] = useState(3);
+  const mazePlayerPosRef = useRef(mazePlayerPos);
+  const mazeMonstersRef = useRef(mazeMonsters);
+  const mazeLivesRef = useRef(mazeLives);
+  const mazeIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  const [showLiveLeaderboardModal, setShowLiveLeaderboardModal] = useState(false);
+
   // Lifelines and streaks for Waygground Arena
   const [doubleScoreActive, setDoubleScoreActive] = useState(false);
   const [doubleScoreUsed, setDoubleScoreUsed] = useState(false);
@@ -668,6 +685,18 @@ export default function StudentReviewsTab({
   useEffect(() => {
     gameStateRef.current = gameState;
   }, [gameState]);
+
+  useEffect(() => {
+    mazePlayerPosRef.current = mazePlayerPos;
+  }, [mazePlayerPos]);
+
+  useEffect(() => {
+    mazeMonstersRef.current = mazeMonsters;
+  }, [mazeMonsters]);
+
+  useEffect(() => {
+    mazeLivesRef.current = mazeLives;
+  }, [mazeLives]);
 
   useEffect(() => {
     isQuestionIntroRef.current = isQuestionIntro;
@@ -1092,6 +1121,16 @@ export default function StudentReviewsTab({
             handleShootMeteor(closestMeteor);
           }
         }
+      } else if (challenge.gameType === "maze_chase") {
+        if (e.key === "ArrowUp" || e.key === "w" || e.key === "W") {
+          handleMoveMazePlayer("up");
+        } else if (e.key === "ArrowDown" || e.key === "s" || e.key === "S") {
+          handleMoveMazePlayer("down");
+        } else if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") {
+          handleMoveMazePlayer("left");
+        } else if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") {
+          handleMoveMazePlayer("right");
+        }
       }
     };
 
@@ -1253,6 +1292,9 @@ export default function StudentReviewsTab({
     } else if (randomizedChallenge.gameType === "car_racing") {
       // Setup road items with 3-second center-of-arena presentation
       startQuestionWithIntro(0, "car_racing", randomizedChallenge);
+    } else if (randomizedChallenge.gameType === "maze_chase") {
+      // Setup maze game with 3-second center-of-arena presentation
+      startQuestionWithIntro(0, "maze_chase", randomizedChallenge);
     } else if (randomizedChallenge.gameType === "wayground_arena") {
       setTimeLeft(15);
       setHasFinishedWaygroundQuestions(false);
@@ -1326,6 +1368,10 @@ export default function StudentReviewsTab({
           } else if (gameType === "car_racing") {
             setupRoadItems(q);
             startInteractiveGameTimer("car_racing");
+          } else if (gameType === "maze_chase") {
+            setupMazeGame(q);
+            startInteractiveGameTimer("maze_chase");
+            startMazeGameLoop();
           }
         }, 800);
       }
@@ -1349,8 +1395,8 @@ export default function StudentReviewsTab({
     }, 1000);
   };
 
-  // Interactive Games (Space Invaders & Car Racing) Question Timer
-  const startInteractiveGameTimer = (gameType: "space_invaders" | "car_racing") => {
+  // Interactive Games (Space Invaders, Car Racing & Maze Chase) Question Timer
+  const startInteractiveGameTimer = (gameType: "space_invaders" | "car_racing" | "maze_chase") => {
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     setTimeLeft(25); // 25 seconds per question for interactive games
     timerIntervalRef.current = setInterval(() => {
@@ -1371,6 +1417,8 @@ export default function StudentReviewsTab({
               y: 80,
               idx: -1
             });
+          } else if (gameType === "maze_chase") {
+            handleMazeDoorEntered(-1);
           }
           return 0;
         }
@@ -1588,6 +1636,154 @@ export default function StudentReviewsTab({
         handleFinishGame();
       }
     }, 2500);
+  };
+
+  // --- MAZE CHASE GAME ENGINE ---
+  // 7 x 9 Grid
+  // 1 = Wall, 0 = Path, 10 = Door 0 (Top-Left), 11 = Door 1 (Top-Right), 12 = Door 2 (Bottom-Left), 13 = Door 3 (Bottom-Right)
+  const MAZE_GRID = [
+    [1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 10, 0, 1, 0, 1, 0, 11, 1],
+    [1, 0, 1, 0, 0, 0, 1, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 1, 0, 0, 0, 1, 0, 1],
+    [1, 12, 0, 1, 0, 1, 0, 13, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1]
+  ];
+
+  const setupMazeGame = (q: Question) => {
+    setMazePlayerPos({ r: 3, c: 4 });
+    mazePlayerPosRef.current = { r: 3, c: 4 };
+    setMazeMonsters([
+      { id: 1, r: 1, c: 4, type: "👾" },
+      { id: 2, r: 5, c: 4, type: "👹" },
+      { id: 3, r: 3, c: 2, type: "👾" },
+      { id: 4, r: 3, c: 6, type: "👾" }
+    ]);
+    setMazeLives(3);
+    mazeLivesRef.current = 3;
+  };
+
+  const startMazeGameLoop = () => {
+    if (mazeIntervalRef.current) clearInterval(mazeIntervalRef.current);
+    mazeIntervalRef.current = setInterval(() => {
+      if (gameStateRef.current !== "playing" || isQuestionIntroRef.current || isAnswerRevealedRef.current) return;
+
+      setMazeMonsters(prev => {
+        const updated = prev.map(m => {
+          const dirs = [
+            { dr: -1, dc: 0 },
+            { dr: 1, dc: 0 },
+            { dr: 0, dc: -1 },
+            { dr: 0, dc: 1 }
+          ];
+          const valid = dirs
+            .map(d => ({ r: m.r + d.dr, c: m.c + d.dc }))
+            .filter(pos => pos.r >= 0 && pos.r < 7 && pos.c >= 0 && pos.c < 9 && MAZE_GRID[pos.r][pos.c] !== 1);
+          if (valid.length === 0) return m;
+          const nextPos = valid[Math.floor(Math.random() * valid.length)];
+          return { ...m, r: nextPos.r, c: nextPos.c };
+        });
+        mazeMonstersRef.current = updated;
+        return updated;
+      });
+
+      const curPlayer = mazePlayerPosRef.current;
+      const curMonsters = mazeMonstersRef.current;
+      const hit = curMonsters.some(m => m.r === curPlayer.r && m.c === curPlayer.c);
+      if (hit) {
+        handleMazeMonsterHit();
+      }
+    }, 650);
+  };
+
+  const handleMazeMonsterHit = () => {
+    if (isAnswerRevealedRef.current) return;
+    sfx.playIncorrect();
+    setScore(s => Math.max(0, s - 30));
+    setMazeLives(prev => {
+      const nextLives = Math.max(0, prev - 1);
+      mazeLivesRef.current = nextLives;
+      if (nextLives <= 0) {
+        handleMazeDoorEntered(-1);
+      }
+      return nextLives;
+    });
+    setMazePlayerPos({ r: 3, c: 4 });
+    mazePlayerPosRef.current = { r: 3, c: 4 };
+  };
+
+  const handleMoveMazePlayer = (dir: 'up' | 'down' | 'left' | 'right') => {
+    if (gameStateRef.current !== "playing" || isQuestionIntroRef.current || isAnswerRevealedRef.current) return;
+
+    let dr = 0, dc = 0;
+    if (dir === 'up') dr = -1;
+    if (dir === 'down') dr = 1;
+    if (dir === 'left') dc = -1;
+    if (dir === 'right') dc = 1;
+
+    const cur = mazePlayerPosRef.current;
+    const newR = cur.r + dr;
+    const newC = cur.c + dc;
+
+    if (newR < 0 || newR >= 7 || newC < 0 || newC >= 9) return;
+    const cellVal = MAZE_GRID[newR][newC];
+    if (cellVal === 1) return;
+
+    setMazePlayerPos({ r: newR, c: newC });
+    mazePlayerPosRef.current = { r: newR, c: newC };
+
+    if (cellVal >= 10 && cellVal <= 13) {
+      const doorIdx = cellVal - 10;
+      handleMazeDoorEntered(doorIdx);
+      return;
+    }
+
+    const curMonsters = mazeMonstersRef.current;
+    const hit = curMonsters.some(m => m.r === newR && m.c === newC);
+    if (hit) {
+      handleMazeMonsterHit();
+    }
+  };
+
+  const handleMazeDoorEntered = (doorIdx: number) => {
+    if (isAnswerRevealedRef.current) return;
+    const challenge = activeChallengeRef.current;
+    if (!challenge) return;
+    const q = challenge.questions[currentQuestionIdxRef.current];
+    if (!q) return;
+
+    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    if (mazeIntervalRef.current) clearInterval(mazeIntervalRef.current);
+
+    const isCorrect = doorIdx >= 0 && doorIdx < (q.options?.length || 0) && checkIsCorrect(q, doorIdx);
+
+    setLastAnswerCorrect(isCorrect);
+    setIsAnswerRevealed(true);
+    isAnswerRevealedRef.current = true;
+
+    if (isCorrect) {
+      sfx.playCorrect();
+      setScore(s => s + 150);
+      setCorrectCount(c => c + 1);
+    } else {
+      sfx.playIncorrect();
+      setScore(s => Math.max(0, s - 30));
+    }
+
+    setTimeout(() => {
+      setIsAnswerRevealed(false);
+      isAnswerRevealedRef.current = false;
+
+      const nextIdx = currentQuestionIdxRef.current + 1;
+      if (nextIdx < challenge.questions.length) {
+        setCurrentQuestionIdx(nextIdx);
+        currentQuestionIdxRef.current = nextIdx;
+        startQuestionWithIntro(nextIdx, "maze_chase");
+      } else {
+        handleFinishGame();
+      }
+    }, 2000);
   };
 
   // Start Waygground Arena Timer
@@ -2004,8 +2200,8 @@ export default function StudentReviewsTab({
                 </span>
               </div>
 
-              {/* 3 Approved Games Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* 4 Approved Games Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                 {[
                   {
                     gameType: "wayground_arena",
@@ -2015,6 +2211,15 @@ export default function StudentReviewsTab({
                     defaultTitle: "كاهوت 🎪",
                     desc: "مواجهة حية ومباشرة بين كافة الطلاب بنظام خيارات الألوان وسرعة الإجابة",
                     headerBg: "bg-gradient-to-br from-purple-950 via-indigo-900 to-purple-900 border-b-2 border-purple-500/50",
+                  },
+                  {
+                    gameType: "maze_chase",
+                    id: "fixed_game_maze_chase",
+                    badgeLabel: "MAZE CHASE 🌀",
+                    gameTitle: "مطاردة المتاهة 🌀",
+                    defaultTitle: "مطاردة المتاهة 🌀",
+                    desc: "التحرك بالأسهم داخل المتاهة للوصول لغرفة الإجابة الصحيحة وتفادي الوحوش",
+                    headerBg: "bg-gradient-to-br from-purple-950 via-slate-900 to-indigo-950 border-b-2 border-indigo-500/50",
                   },
                   {
                     gameType: "space_invaders",
@@ -2077,6 +2282,7 @@ export default function StudentReviewsTab({
                         <div className="relative z-10 my-auto text-center space-y-1">
                           {fg.gameType === "car_racing" && <div className="text-3xl">🏎️</div>}
                           {fg.gameType === "space_invaders" && <div className="text-3xl animate-bounce">🚀</div>}
+                          {fg.gameType === "maze_chase" && <div className="text-3xl animate-pulse">🌀</div>}
                           {fg.gameType === "wayground_arena" && (
                             <div className="space-y-1">
                               <div className="text-2xl">🎪</div>
@@ -2300,6 +2506,17 @@ export default function StudentReviewsTab({
                   )}
 
                   <div className="h-6 w-px bg-slate-200 hidden sm:block" />
+
+                  {/* Live Leaderboard Button */}
+                  <button
+                    type="button"
+                    onClick={() => setShowLiveLeaderboardModal(true)}
+                    className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs rounded-xl shadow-xs border border-amber-300 flex items-center gap-1.5 cursor-pointer transition active:scale-95 shrink-0"
+                    title="عرض جدول المتصدرين الحية"
+                  >
+                    <Trophy className="w-4 h-4 fill-slate-950 text-slate-950" />
+                    <span className="hidden xs:inline">المتصدرين 🏆</span>
+                  </button>
 
                   {/* Sound Toggle */}
                   <button
@@ -3377,6 +3594,202 @@ export default function StudentReviewsTab({
                           >
                             <span>▶ انعطف يميناً 🏎️</span>
                           </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* GAME TYPE 5: MAZE CHASE */}
+                  {activeChallenge.gameType === "maze_chase" && (
+                    <div className="space-y-4 relative z-10" dir="rtl">
+                      {/* Visual Maze Arena */}
+                      <div className="w-full bg-slate-950 rounded-2xl border-2 border-indigo-500/60 p-3 sm:p-5 relative overflow-hidden flex flex-col items-center select-none shadow-2xl shadow-indigo-950/60">
+                        
+                        {/* Maze Header Stats Bar (Lives ❤️, Timer ⏱️, Score ⭐) */}
+                        <div className="w-full flex items-center justify-between bg-slate-900/90 border border-indigo-500/30 px-4 py-2.5 rounded-xl mb-4 text-xs font-black text-white shadow-inner">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-slate-400 font-extrabold">الصحة:</span>
+                            <div className="flex gap-1 text-sm">
+                              {Array.from({ length: 3 }).map((_, i) => (
+                                <span key={i} className={`transition-all duration-300 ${i < mazeLives ? "scale-110 drop-shadow-[0_0_8px_rgba(239,68,68,0.8)]" : "opacity-20 grayscale"}`}>
+                                  ❤️
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 bg-indigo-950/80 border border-indigo-500/40 px-3 py-1 rounded-lg">
+                            <span className="text-amber-400">⏱️</span>
+                            <span className="font-sans text-sm font-black text-amber-300">{timeLeft} ثانية</span>
+                          </div>
+
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-slate-400 font-extrabold">النقاط:</span>
+                            <span className="font-sans text-sm font-black text-emerald-400">⭐ {score}</span>
+                          </div>
+                        </div>
+
+                        {/* Floating Question Box Overlay during Question Intro */}
+                        {isQuestionIntro && (
+                          <div className="absolute inset-0 bg-slate-950/95 z-30 flex flex-col items-center justify-center p-6 text-center">
+                            <div className="space-y-6 max-w-lg flex flex-col items-center">
+                              <span className={`px-3 py-1 bg-indigo-600/30 text-indigo-300 border border-indigo-500/20 rounded-full text-xs font-black tracking-widest uppercase transition-all duration-500 ${isTransitioning ? 'opacity-0 scale-75' : 'opacity-100 animate-pulse'}`}>
+                                دخول المتاهة 🌀
+                              </span>
+                              
+                              <h2 
+                                className={`text-2xl md:text-3xl font-black text-white leading-relaxed drop-shadow-[0_2px_15px_rgba(129,140,248,0.4)] transition-all duration-700 transform ${
+                                  isTransitioning 
+                                    ? '-translate-y-[220px] scale-50 opacity-0 pointer-events-none' 
+                                    : 'translate-y-0 scale-100 opacity-100'
+                                }`}
+                              >
+                                {activeChallenge.questions[currentQuestionIdx]?.text}
+                              </h2>
+
+                              <div className={`flex flex-col items-center gap-2 pt-4 transition-all duration-500 ${isTransitioning ? 'opacity-0 scale-75' : 'opacity-100'}`}>
+                                <span className="text-[10px] text-slate-400 font-extrabold uppercase">الانطلاق خلال</span>
+                                <div className="w-14 h-14 rounded-full bg-indigo-600/20 border-2 border-indigo-500 flex items-center justify-center shadow-lg shadow-indigo-950/50">
+                                  <span className="text-2xl font-sans font-black text-yellow-400 animate-bounce">
+                                    {introCountdown}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* The 7 x 9 Grid Maze Display */}
+                        <div className="w-full max-w-md aspect-[9/7] grid grid-cols-9 grid-rows-7 gap-1 bg-slate-900/90 p-2 rounded-2xl border border-indigo-900/80 shadow-2xl relative select-none">
+                          {MAZE_GRID.map((row, rIdx) => 
+                            row.map((cellVal, cIdx) => {
+                              const isPlayerHere = mazePlayerPos.r === rIdx && mazePlayerPos.c === cIdx;
+                              const monsterHere = mazeMonsters.find(m => m.r === rIdx && m.c === cIdx);
+                              const isWall = cellVal === 1;
+                              const isDoor = cellVal >= 10 && cellVal <= 13;
+                              const doorIdx = isDoor ? cellVal - 10 : -1;
+                              const currentQ = activeChallenge.questions[currentQuestionIdx];
+                              const optionText = doorIdx >= 0 && currentQ?.options?.[doorIdx] ? currentQ.options[doorIdx] : null;
+
+                              return (
+                                <div
+                                  key={`cell-${rIdx}-${cIdx}`}
+                                  onClick={() => {
+                                    if (Math.abs(mazePlayerPos.r - rIdx) + Math.abs(mazePlayerPos.c - cIdx) === 1) {
+                                      if (rIdx < mazePlayerPos.r) handleMoveMazePlayer("up");
+                                      else if (rIdx > mazePlayerPos.r) handleMoveMazePlayer("down");
+                                      else if (cIdx < mazePlayerPos.c) handleMoveMazePlayer("left");
+                                      else if (cIdx > mazePlayerPos.c) handleMoveMazePlayer("right");
+                                    }
+                                  }}
+                                  className={`relative rounded-lg flex flex-col items-center justify-center transition-all duration-200 ${
+                                    isWall 
+                                      ? "bg-gradient-to-b from-indigo-950 via-slate-900 to-indigo-950 border border-indigo-500/40 shadow-inner" 
+                                      : isDoor
+                                      ? "bg-indigo-900/80 border-2 border-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.5)] cursor-pointer hover:scale-105"
+                                      : "bg-slate-950/60 border border-indigo-900/20"
+                                  }`}
+                                >
+                                  {/* Door Room Content */}
+                                  {isDoor && (
+                                    <div className="flex flex-col items-center justify-center text-center p-0.5 z-10 w-full h-full">
+                                      <span className="text-[10px] sm:text-xs font-black text-amber-300 bg-black/60 px-1 py-0.2 rounded border border-amber-400/50">
+                                        غرفة [{doorIdx}]
+                                      </span>
+                                      {optionText && (
+                                        <span className="text-[8px] font-extrabold text-white truncate max-w-[90%] leading-none mt-0.5">
+                                          {optionText}
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {/* Monster Character */}
+                                  {!isPlayerHere && monsterHere && (
+                                    <motion.div 
+                                      animate={{ scale: [1, 1.15, 1] }}
+                                      transition={{ repeat: Infinity, duration: 0.8 }}
+                                      className="absolute z-20 text-xl sm:text-2xl drop-shadow-[0_0_8px_rgba(239,68,68,0.8)] pointer-events-none"
+                                    >
+                                      {monsterHere.type}
+                                    </motion.div>
+                                  )}
+
+                                  {/* Player Hero Character */}
+                                  {isPlayerHere && (
+                                    <motion.div
+                                      layoutId="mazeHero"
+                                      transition={{ type: "spring", stiffness: 400, damping: 28 }}
+                                      className="absolute z-30 w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-indigo-500 border-2 border-yellow-300 flex items-center justify-center text-sm shadow-[0_0_15px_rgba(99,102,241,0.9)] animate-pulse"
+                                    >
+                                      🤖
+                                    </motion.div>
+                                  )}
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+
+                        {/* On-screen Directional D-Pad Controls & Question Box */}
+                        <div className="w-full space-y-3 pt-3">
+                          {/* Directional Controls D-Pad */}
+                          <div className="flex flex-col items-center gap-1 select-none">
+                            <button
+                              type="button"
+                              onClick={() => handleMoveMazePlayer("up")}
+                              className="w-12 h-10 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-black rounded-xl border border-indigo-400 shadow-md flex items-center justify-center text-base cursor-pointer"
+                            >
+                              ⬆️
+                            </button>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleMoveMazePlayer("right")}
+                                className="w-12 h-10 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-black rounded-xl border border-indigo-400 shadow-md flex items-center justify-center text-base cursor-pointer"
+                              >
+                                ➡️
+                              </button>
+                              <div className="w-10 h-10 bg-slate-900/80 rounded-xl border border-indigo-500/30 flex items-center justify-center text-xs text-indigo-300 font-black">
+                                🌀
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleMoveMazePlayer("left")}
+                                className="w-12 h-10 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-black rounded-xl border border-indigo-400 shadow-md flex items-center justify-center text-base cursor-pointer"
+                              >
+                                ⬅️
+                              </button>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleMoveMazePlayer("down")}
+                              className="w-12 h-10 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-black rounded-xl border border-indigo-400 shadow-md flex items-center justify-center text-base cursor-pointer"
+                            >
+                              ⬇️
+                            </button>
+                          </div>
+
+                          {/* Question Footer Info & Answer Guide */}
+                          <div className="bg-slate-900/90 border border-indigo-500/30 p-3.5 rounded-2xl space-y-2 text-center">
+                            <h3 className="text-sm font-black text-amber-300">
+                              {activeChallenge.questions[currentQuestionIdx]?.text}
+                            </h3>
+                            <div className="grid grid-cols-2 gap-2 text-xs font-bold">
+                              {activeChallenge.questions[currentQuestionIdx]?.options?.map((opt, idx) => (
+                                <div 
+                                  key={idx}
+                                  onClick={() => handleMazeDoorEntered(idx)}
+                                  className="p-2 rounded-xl bg-slate-950 border border-indigo-800 text-indigo-200 flex items-center gap-2 cursor-pointer hover:bg-indigo-950/80 transition"
+                                >
+                                  <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[10px] font-black border border-amber-500/30 shrink-0">
+                                    غرفة [{idx}]
+                                  </span>
+                                  <span className="truncate">{opt}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>

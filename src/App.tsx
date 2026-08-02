@@ -451,19 +451,17 @@ export default function App() {
   // Student Portal-wide states
   const [studentPortalActive, setStudentPortalActive] = useState<boolean>(
     () => {
-      // Student portal is active ONLY if student parameters or quiz link are explicitly provided in URL
+      // If teacher portal is explicitly requested via URL parameter
       if (
-        urlParams.get("portal") === "student" ||
-        urlParams.get("quizId") ||
-        urlParams.get("quizid") ||
-        urlParams.get("quizID") ||
-        urlParams.get("teacherId") ||
-        urlParams.get("teacher") === "false"
+        urlParams.get("teacher") === "true" ||
+        urlParams.get("portal") === "teacher" ||
+        urlParams.get("portal") === "bank" ||
+        urlParams.get("bank") === "true"
       ) {
-        return true;
+        return false;
       }
-      // Main site root URL defaults directly to Teacher Login / Portal
-      return false;
+      // Main site root URL opens the main landing page
+      return true;
     },
   );
 
@@ -4915,10 +4913,10 @@ export default function App() {
                   </div>
                   <div>
                     <h2 className="text-sm font-black text-indigo-950">
-                      بوابة المعلم (صفحة المعلم والإدارة)
+                      بوابة الأستاذ الذكية
                     </h2>
                     <p className="text-xs text-slate-500 font-medium">
-                      إنشاء الاختبارات، إدارة الطلاب، وبنك الأسئلة
+                      تسجيل دخول المعلمين وإدارة الاختبارات وبنك الأسئلة
                     </p>
                   </div>
                 </div>
@@ -4930,13 +4928,13 @@ export default function App() {
                     url.searchParams.set("teacher", "true");
                     window.history.pushState({}, "", url.toString());
                     triggerToast(
-                      "تم الانتقال إلى بوابة المعلم بنجاح",
+                      "تم الانتقال إلى بوابة الأستاذ الذكية بنجاح",
                       "success",
                     );
                   }}
                   className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-xl font-extrabold text-xs shadow-md shadow-indigo-200 transition-all cursor-pointer shrink-0 flex items-center gap-1"
                 >
-                  <span>دخول المعلم</span>
+                  <span>دخول الأستاذ</span>
                   <ChevronLeft className="w-4 h-4 shrink-0" />
                 </button>
               </div>

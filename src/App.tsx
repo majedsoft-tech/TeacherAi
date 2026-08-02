@@ -451,17 +451,19 @@ export default function App() {
   // Student Portal-wide states
   const [studentPortalActive, setStudentPortalActive] = useState<boolean>(
     () => {
-      // If explicitly requested teacher portal via URL param, or if we have it in memory/env
+      // Student portal is active ONLY if student parameters or quiz link are explicitly provided in URL
       if (
-        urlParams.get("teacher") === "true" ||
-        urlParams.get("portal") === "teacher" ||
-        urlParams.get("portal") === "bank" ||
-        urlParams.get("bank") === "true"
+        urlParams.get("portal") === "student" ||
+        urlParams.get("quizId") ||
+        urlParams.get("quizid") ||
+        urlParams.get("quizID") ||
+        urlParams.get("teacherId") ||
+        urlParams.get("teacher") === "false"
       ) {
-        return false;
+        return true;
       }
-      // Student portal is active by default in all other cases
-      return true;
+      // Main site root URL defaults directly to Teacher Login / Portal
+      return false;
     },
   );
 
@@ -978,22 +980,7 @@ export default function App() {
     link.href = faviconUrl;
   }, [studentPortalActive]);
 
-  // Auto-switch to teacher portal if logged in and URL is naked (no student parameters)
-  useEffect(() => {
-    if (currentUser) {
-      const params = new URLSearchParams(window.location.search);
-      const isStudentExplicit =
-        params.get("portal") === "student" ||
-        params.get("quizId") ||
-        params.get("quizid") ||
-        params.get("quizID") ||
-        params.get("teacherId");
-      
-      if (!isStudentExplicit && studentPortalActive) {
-        setStudentPortalActive(false);
-      }
-    }
-  }, [currentUser, studentPortalActive]);
+  // Note: Disabled auto-switch so main page always lands on main home portal first
 
   // Export to Google Sheets directly using the official Sheets API
   const exportToGoogleSheetsDirectly = async (headers: string[], rows: any[][], grade: string, semester: string) => {

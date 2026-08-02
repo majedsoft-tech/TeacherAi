@@ -451,17 +451,18 @@ export default function App() {
   // Student Portal-wide states
   const [studentPortalActive, setStudentPortalActive] = useState<boolean>(
     () => {
-      // If teacher portal is explicitly requested via URL parameter
+      // Student portal is active ONLY if student parameters or quiz link are explicitly provided in URL
       if (
-        urlParams.get("teacher") === "true" ||
-        urlParams.get("portal") === "teacher" ||
-        urlParams.get("portal") === "bank" ||
-        urlParams.get("bank") === "true"
+        urlParams.get("portal") === "student" ||
+        urlParams.get("quizId") ||
+        urlParams.get("quizid") ||
+        urlParams.get("quizID") ||
+        urlParams.get("teacherId")
       ) {
-        return false;
+        return true;
       }
-      // Main site root URL opens the main landing page
-      return true;
+      // Default home page opens directly to Teacher Portal / Google Login
+      return false;
     },
   );
 

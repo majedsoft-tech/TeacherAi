@@ -561,6 +561,49 @@ const getCumulativeLeaderboard = (
   return Object.values(studentMap).sort((a, b) => b.score - a.score);
 };
 
+export const DEFAULT_DEMO_QUESTIONS: Question[] = [
+  {
+    id: "demo-q1",
+    text: "ما هو الكوكب الأقرب إلى الشمس في المجموعة الشمسية؟",
+    type: "multiple_choice",
+    options: ["عطارد", "الزهرة", "الأرض", "المريخ"],
+    correctAnswer: "0",
+    points: 100
+  },
+  {
+    id: "demo-q2",
+    text: "ما هي عاصمة المملكة العربية السعودية؟",
+    type: "multiple_choice",
+    options: ["الرياض", "جدة", "مكة المكرمة", "الدمام"],
+    correctAnswer: "0",
+    points: 100
+  },
+  {
+    id: "demo-q3",
+    text: "ما هو أسرع حيوان بري في العالم؟",
+    type: "multiple_choice",
+    options: ["الفهد", "الأسد", "الغزال", "الحصان"],
+    correctAnswer: "0",
+    points: 100
+  },
+  {
+    id: "demo-q4",
+    text: "ما هي العملية التي تصنع بها النباتات غذاءها بمساعدة ضوء الشمس؟",
+    type: "multiple_choice",
+    options: ["البناء الضوئي", "التنفس الخلوي", "التبخر", "التكثف"],
+    correctAnswer: "0",
+    points: 100
+  },
+  {
+    id: "demo-q5",
+    text: "كم عدد أركان الإسلام الخمسة؟",
+    type: "multiple_choice",
+    options: ["خمسة أركان", "ثلاثة أركان", "ستة أركان", "أربعة أركان"],
+    correctAnswer: "0",
+    points: 100
+  }
+];
+
 interface StudentReviewsTabProps {
   activeStudent: any;
   reviewChallenges: ReviewChallenge[];
@@ -569,6 +612,9 @@ interface StudentReviewsTabProps {
   triggerToast: (msg: string, type: "success" | "error" | "info") => void;
   onGameStateChange?: (state: "idle" | "playing" | "finished") => void;
   teacherId?: string;
+  isDemoMode?: boolean;
+  autoStartChallengeId?: string;
+  onExitDemo?: () => void;
 }
 
 export default function StudentReviewsTab({
@@ -578,7 +624,10 @@ export default function StudentReviewsTab({
   students,
   triggerToast,
   onGameStateChange,
-  teacherId
+  teacherId,
+  isDemoMode = false,
+  autoStartChallengeId,
+  onExitDemo
 }: StudentReviewsTabProps) {
   const [activeChallenge, setActiveChallenge] = useState<ReviewChallenge | null>(null);
   const [selectedLeaderboardChallengeId, setSelectedLeaderboardChallengeId] = useState<string | null>(null);
@@ -713,9 +762,21 @@ export default function StudentReviewsTab({
     }
   }, [score, activeChallenge]);
 
+  // Auto-start game if autoStartChallengeId or isDemoMode is enabled
+  useEffect(() => {
+    if (autoStartChallengeId && reviewChallenges && reviewChallenges.length > 0) {
+      const targetCh = reviewChallenges.find(c => c.id === autoStartChallengeId) || reviewChallenges[0];
+      if (targetCh && gameState === "idle") {
+        handleStartGame(targetCh);
+      }
+    } else if (isDemoMode && reviewChallenges && reviewChallenges.length > 0 && gameState === "idle") {
+      handleStartGame(reviewChallenges[0]);
+    }
+  }, [autoStartChallengeId, isDemoMode, reviewChallenges]);
+
   // 2. Sync live playroom presence on game start / state updates / score changes
   useEffect(() => {
-    if (!activeStudent || !activeStudent.id) return;
+    if (!activeStudent || !activeStudent.id || isDemoMode || activeStudent.id === "teacher-demo-user") return;
 
     const presenceRef = doc(db, "livePlayroomPresence", activeStudent.id);
 
@@ -1121,16 +1182,6 @@ export default function StudentReviewsTab({
             handleShootMeteor(closestMeteor);
           }
         }
-      } else if (challenge.gameType === "maze_chase") {
-        if (e.key === "ArrowUp" || e.key === "w" || e.key === "W") {
-          handleMoveMazePlayer("up");
-        } else if (e.key === "ArrowDown" || e.key === "s" || e.key === "S") {
-          handleMoveMazePlayer("down");
-        } else if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") {
-          handleMoveMazePlayer("left");
-        } else if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") {
-          handleMoveMazePlayer("right");
-        }
       }
     };
 
@@ -1292,15 +1343,12 @@ export default function StudentReviewsTab({
     } else if (randomizedChallenge.gameType === "car_racing") {
       // Setup road items with 3-second center-of-arena presentation
       startQuestionWithIntro(0, "car_racing", randomizedChallenge);
-    } else if (randomizedChallenge.gameType === "maze_chase") {
-      // Setup maze game with 3-second center-of-arena presentation
-      startQuestionWithIntro(0, "maze_chase", randomizedChallenge);
     } else if (randomizedChallenge.gameType === "wayground_arena") {
       setTimeLeft(15);
       setHasFinishedWaygroundQuestions(false);
       setPodiumSecondsLeft(null);
-      if (randomizedChallenge.liveState === "playing") {
-        startWaygroundTimer();
+      if (isDemoMode || randomizedChallenge.liveState === "playing") {
+        startWaygroundCountdown();
       }
     } else {
       // Classic Quiz Show Question timer (e.g., 15s per question)
@@ -1368,10 +1416,6 @@ export default function StudentReviewsTab({
           } else if (gameType === "car_racing") {
             setupRoadItems(q);
             startInteractiveGameTimer("car_racing");
-          } else if (gameType === "maze_chase") {
-            setupMazeGame(q);
-            startInteractiveGameTimer("maze_chase");
-            startMazeGameLoop();
           }
         }, 800);
       }
@@ -1395,8 +1439,8 @@ export default function StudentReviewsTab({
     }, 1000);
   };
 
-  // Interactive Games (Space Invaders, Car Racing & Maze Chase) Question Timer
-  const startInteractiveGameTimer = (gameType: "space_invaders" | "car_racing" | "maze_chase") => {
+  // Interactive Games (Space Invaders & Car Racing) Question Timer
+  const startInteractiveGameTimer = (gameType: "space_invaders" | "car_racing") => {
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     setTimeLeft(25); // 25 seconds per question for interactive games
     timerIntervalRef.current = setInterval(() => {
@@ -1417,8 +1461,6 @@ export default function StudentReviewsTab({
               y: 80,
               idx: -1
             });
-          } else if (gameType === "maze_chase") {
-            handleMazeDoorEntered(-1);
           }
           return 0;
         }
@@ -1812,6 +1854,11 @@ export default function StudentReviewsTab({
 
     if (!activeChallenge) return;
 
+    if (isDemoMode || activeStudent?.id === "teacher-demo-user") {
+      triggerToast(`🧪 تم تجربة وإكمال اللعبة بنجاح! النقاط التجريبية: ${score}`, "info");
+      return;
+    }
+
     const scoreId = `${activeChallenge.id}_${activeStudent.id}`;
     const finalScoreData: ReviewScore = {
       id: scoreId,
@@ -2086,6 +2133,11 @@ export default function StudentReviewsTab({
 
     if (!activeChallenge) return;
 
+    if (isDemoMode || activeStudent?.id === "teacher-demo-user") {
+      triggerToast(`🧪 تم تجربة وإكمال اللعبة بنجاح! نتيجتك الافتراضية: ${score} نقطة`, "info");
+      return;
+    }
+
     // Check if score is higher than their previous score for this challenge
     const scoreId = `${activeChallenge.id}_${activeStudent.id}`;
     
@@ -2128,10 +2180,33 @@ export default function StudentReviewsTab({
 
     setGameState("idle");
     setActiveChallenge(null);
+
+    if (onExitDemo) {
+      onExitDemo();
+    }
   };
 
   return (
     <div className="space-y-6" dir="rtl">
+      {/* Demo Mode Top Header Banner */}
+      {isDemoMode && (
+        <div className="bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-white p-3.5 px-5 rounded-2xl shadow-lg flex flex-wrap items-center justify-between gap-3 border border-amber-300/40 animate-fade-in">
+          <div className="flex items-center gap-3">
+            <span className="p-2 bg-white/20 rounded-xl text-xl backdrop-blur-xs">🧪</span>
+            <div>
+              <h3 className="font-black text-sm sm:text-base">وضع التجربة والمعاينة للمعلم (بيانات ونقاط تجريبية)</h3>
+              <p className="text-[11px] text-amber-100 font-bold">تجري الآن محاكاة حية لتجربة الطالب في اللعبة دون تسجيل أي نتائج للطلاب الفعليين.</p>
+            </div>
+          </div>
+          <button
+            onClick={handleExitGame}
+            className="px-4 py-2 bg-white text-slate-900 hover:bg-amber-100 font-black text-xs rounded-xl shadow-md transition transform hover:scale-105 active:scale-95 flex items-center gap-1.5 cursor-pointer"
+          >
+            <span>🚪 إنهاء اللعبة والعودة</span>
+          </button>
+        </div>
+      )}
+
       {/* Sound Controller & Next Challenge Float (Visible in Idle state) */}
       {gameState === "idle" && (
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 rounded-2xl bg-white border border-slate-200 shadow-3xs">
@@ -2213,15 +2288,6 @@ export default function StudentReviewsTab({
                     headerBg: "bg-gradient-to-br from-purple-950 via-indigo-900 to-purple-900 border-b-2 border-purple-500/50",
                   },
                   {
-                    gameType: "maze_chase",
-                    id: "fixed_game_maze_chase",
-                    badgeLabel: "MAZE CHASE 🌀",
-                    gameTitle: "مطاردة المتاهة 🌀",
-                    defaultTitle: "مطاردة المتاهة 🌀",
-                    desc: "التحرك بالأسهم داخل المتاهة للوصول لغرفة الإجابة الصحيحة وتفادي الوحوش",
-                    headerBg: "bg-gradient-to-br from-purple-950 via-slate-900 to-indigo-950 border-b-2 border-indigo-500/50",
-                  },
-                  {
                     gameType: "space_invaders",
                     id: "fixed_game_space_invaders",
                     badgeLabel: "SPACE INVADERS 🚀",
@@ -2282,7 +2348,6 @@ export default function StudentReviewsTab({
                         <div className="relative z-10 my-auto text-center space-y-1">
                           {fg.gameType === "car_racing" && <div className="text-3xl">🏎️</div>}
                           {fg.gameType === "space_invaders" && <div className="text-3xl animate-bounce">🚀</div>}
-                          {fg.gameType === "maze_chase" && <div className="text-3xl animate-pulse">🌀</div>}
                           {fg.gameType === "wayground_arena" && (
                             <div className="space-y-1">
                               <div className="text-2xl">🎪</div>
@@ -2739,7 +2804,7 @@ export default function StudentReviewsTab({
                             </motion.div>
                           </AnimatePresence>
                         </div>
-                      ) : (!activeChallenge.liveState || activeChallenge.liveState === "waiting") ? (
+                      ) : (!activeChallenge.liveState || activeChallenge.liveState === "waiting") && !isDemoMode ? (
                         /* LOBBY VIEW */
                         <div className="flex flex-col flex-1 justify-between p-4 space-y-6 text-center">
                           <div className="space-y-2 mt-6">
@@ -3594,202 +3659,6 @@ export default function StudentReviewsTab({
                           >
                             <span>▶ انعطف يميناً 🏎️</span>
                           </button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* GAME TYPE 5: MAZE CHASE */}
-                  {activeChallenge.gameType === "maze_chase" && (
-                    <div className="space-y-4 relative z-10" dir="rtl">
-                      {/* Visual Maze Arena */}
-                      <div className="w-full bg-slate-950 rounded-2xl border-2 border-indigo-500/60 p-3 sm:p-5 relative overflow-hidden flex flex-col items-center select-none shadow-2xl shadow-indigo-950/60">
-                        
-                        {/* Maze Header Stats Bar (Lives ❤️, Timer ⏱️, Score ⭐) */}
-                        <div className="w-full flex items-center justify-between bg-slate-900/90 border border-indigo-500/30 px-4 py-2.5 rounded-xl mb-4 text-xs font-black text-white shadow-inner">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-slate-400 font-extrabold">الصحة:</span>
-                            <div className="flex gap-1 text-sm">
-                              {Array.from({ length: 3 }).map((_, i) => (
-                                <span key={i} className={`transition-all duration-300 ${i < mazeLives ? "scale-110 drop-shadow-[0_0_8px_rgba(239,68,68,0.8)]" : "opacity-20 grayscale"}`}>
-                                  ❤️
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-2 bg-indigo-950/80 border border-indigo-500/40 px-3 py-1 rounded-lg">
-                            <span className="text-amber-400">⏱️</span>
-                            <span className="font-sans text-sm font-black text-amber-300">{timeLeft} ثانية</span>
-                          </div>
-
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-slate-400 font-extrabold">النقاط:</span>
-                            <span className="font-sans text-sm font-black text-emerald-400">⭐ {score}</span>
-                          </div>
-                        </div>
-
-                        {/* Floating Question Box Overlay during Question Intro */}
-                        {isQuestionIntro && (
-                          <div className="absolute inset-0 bg-slate-950/95 z-30 flex flex-col items-center justify-center p-6 text-center">
-                            <div className="space-y-6 max-w-lg flex flex-col items-center">
-                              <span className={`px-3 py-1 bg-indigo-600/30 text-indigo-300 border border-indigo-500/20 rounded-full text-xs font-black tracking-widest uppercase transition-all duration-500 ${isTransitioning ? 'opacity-0 scale-75' : 'opacity-100 animate-pulse'}`}>
-                                دخول المتاهة 🌀
-                              </span>
-                              
-                              <h2 
-                                className={`text-2xl md:text-3xl font-black text-white leading-relaxed drop-shadow-[0_2px_15px_rgba(129,140,248,0.4)] transition-all duration-700 transform ${
-                                  isTransitioning 
-                                    ? '-translate-y-[220px] scale-50 opacity-0 pointer-events-none' 
-                                    : 'translate-y-0 scale-100 opacity-100'
-                                }`}
-                              >
-                                {activeChallenge.questions[currentQuestionIdx]?.text}
-                              </h2>
-
-                              <div className={`flex flex-col items-center gap-2 pt-4 transition-all duration-500 ${isTransitioning ? 'opacity-0 scale-75' : 'opacity-100'}`}>
-                                <span className="text-[10px] text-slate-400 font-extrabold uppercase">الانطلاق خلال</span>
-                                <div className="w-14 h-14 rounded-full bg-indigo-600/20 border-2 border-indigo-500 flex items-center justify-center shadow-lg shadow-indigo-950/50">
-                                  <span className="text-2xl font-sans font-black text-yellow-400 animate-bounce">
-                                    {introCountdown}
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* The 7 x 9 Grid Maze Display */}
-                        <div className="w-full max-w-md aspect-[9/7] grid grid-cols-9 grid-rows-7 gap-1 bg-slate-900/90 p-2 rounded-2xl border border-indigo-900/80 shadow-2xl relative select-none">
-                          {MAZE_GRID.map((row, rIdx) => 
-                            row.map((cellVal, cIdx) => {
-                              const isPlayerHere = mazePlayerPos.r === rIdx && mazePlayerPos.c === cIdx;
-                              const monsterHere = mazeMonsters.find(m => m.r === rIdx && m.c === cIdx);
-                              const isWall = cellVal === 1;
-                              const isDoor = cellVal >= 10 && cellVal <= 13;
-                              const doorIdx = isDoor ? cellVal - 10 : -1;
-                              const currentQ = activeChallenge.questions[currentQuestionIdx];
-                              const optionText = doorIdx >= 0 && currentQ?.options?.[doorIdx] ? currentQ.options[doorIdx] : null;
-
-                              return (
-                                <div
-                                  key={`cell-${rIdx}-${cIdx}`}
-                                  onClick={() => {
-                                    if (Math.abs(mazePlayerPos.r - rIdx) + Math.abs(mazePlayerPos.c - cIdx) === 1) {
-                                      if (rIdx < mazePlayerPos.r) handleMoveMazePlayer("up");
-                                      else if (rIdx > mazePlayerPos.r) handleMoveMazePlayer("down");
-                                      else if (cIdx < mazePlayerPos.c) handleMoveMazePlayer("left");
-                                      else if (cIdx > mazePlayerPos.c) handleMoveMazePlayer("right");
-                                    }
-                                  }}
-                                  className={`relative rounded-lg flex flex-col items-center justify-center transition-all duration-200 ${
-                                    isWall 
-                                      ? "bg-gradient-to-b from-indigo-950 via-slate-900 to-indigo-950 border border-indigo-500/40 shadow-inner" 
-                                      : isDoor
-                                      ? "bg-indigo-900/80 border-2 border-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.5)] cursor-pointer hover:scale-105"
-                                      : "bg-slate-950/60 border border-indigo-900/20"
-                                  }`}
-                                >
-                                  {/* Door Room Content */}
-                                  {isDoor && (
-                                    <div className="flex flex-col items-center justify-center text-center p-0.5 z-10 w-full h-full">
-                                      <span className="text-[10px] sm:text-xs font-black text-amber-300 bg-black/60 px-1 py-0.2 rounded border border-amber-400/50">
-                                        غرفة [{doorIdx}]
-                                      </span>
-                                      {optionText && (
-                                        <span className="text-[8px] font-extrabold text-white truncate max-w-[90%] leading-none mt-0.5">
-                                          {optionText}
-                                        </span>
-                                      )}
-                                    </div>
-                                  )}
-
-                                  {/* Monster Character */}
-                                  {!isPlayerHere && monsterHere && (
-                                    <motion.div 
-                                      animate={{ scale: [1, 1.15, 1] }}
-                                      transition={{ repeat: Infinity, duration: 0.8 }}
-                                      className="absolute z-20 text-xl sm:text-2xl drop-shadow-[0_0_8px_rgba(239,68,68,0.8)] pointer-events-none"
-                                    >
-                                      {monsterHere.type}
-                                    </motion.div>
-                                  )}
-
-                                  {/* Player Hero Character */}
-                                  {isPlayerHere && (
-                                    <motion.div
-                                      layoutId="mazeHero"
-                                      transition={{ type: "spring", stiffness: 400, damping: 28 }}
-                                      className="absolute z-30 w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-indigo-500 border-2 border-yellow-300 flex items-center justify-center text-sm shadow-[0_0_15px_rgba(99,102,241,0.9)] animate-pulse"
-                                    >
-                                      🤖
-                                    </motion.div>
-                                  )}
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-
-                        {/* On-screen Directional D-Pad Controls & Question Box */}
-                        <div className="w-full space-y-3 pt-3">
-                          {/* Directional Controls D-Pad */}
-                          <div className="flex flex-col items-center gap-1 select-none">
-                            <button
-                              type="button"
-                              onClick={() => handleMoveMazePlayer("up")}
-                              className="w-12 h-10 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-black rounded-xl border border-indigo-400 shadow-md flex items-center justify-center text-base cursor-pointer"
-                            >
-                              ⬆️
-                            </button>
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => handleMoveMazePlayer("right")}
-                                className="w-12 h-10 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-black rounded-xl border border-indigo-400 shadow-md flex items-center justify-center text-base cursor-pointer"
-                              >
-                                ➡️
-                              </button>
-                              <div className="w-10 h-10 bg-slate-900/80 rounded-xl border border-indigo-500/30 flex items-center justify-center text-xs text-indigo-300 font-black">
-                                🌀
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => handleMoveMazePlayer("left")}
-                                className="w-12 h-10 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-black rounded-xl border border-indigo-400 shadow-md flex items-center justify-center text-base cursor-pointer"
-                              >
-                                ⬅️
-                              </button>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => handleMoveMazePlayer("down")}
-                              className="w-12 h-10 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-black rounded-xl border border-indigo-400 shadow-md flex items-center justify-center text-base cursor-pointer"
-                            >
-                              ⬇️
-                            </button>
-                          </div>
-
-                          {/* Question Footer Info & Answer Guide */}
-                          <div className="bg-slate-900/90 border border-indigo-500/30 p-3.5 rounded-2xl space-y-2 text-center">
-                            <h3 className="text-sm font-black text-amber-300">
-                              {activeChallenge.questions[currentQuestionIdx]?.text}
-                            </h3>
-                            <div className="grid grid-cols-2 gap-2 text-xs font-bold">
-                              {activeChallenge.questions[currentQuestionIdx]?.options?.map((opt, idx) => (
-                                <div 
-                                  key={idx}
-                                  onClick={() => handleMazeDoorEntered(idx)}
-                                  className="p-2 rounded-xl bg-slate-950 border border-indigo-800 text-indigo-200 flex items-center gap-2 cursor-pointer hover:bg-indigo-950/80 transition"
-                                >
-                                  <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[10px] font-black border border-amber-500/30 shrink-0">
-                                    غرفة [{idx}]
-                                  </span>
-                                  <span className="truncate">{opt}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
                         </div>
                       </div>
                     </div>

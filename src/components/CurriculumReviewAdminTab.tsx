@@ -23,7 +23,9 @@ import {
   BarChart3,
   Target,
   TrendingUp,
-  CheckCircle2
+  CheckCircle2,
+  Sliders,
+  Filter
 } from "lucide-react";
 import { doc, onSnapshot, setDoc, collection } from "firebase/firestore";
 import { db, handleFirestoreError, OperationType } from "../firebase";
@@ -36,6 +38,8 @@ interface CurriculumReviewAdminTabProps {
   students: Student[];
   grades: string[];
   triggerToast: (msg: string, type: "success" | "error" | "info" | "warning") => void;
+  isFullScreenResults?: boolean;
+  onToggleFullScreen?: (val: boolean) => void;
 }
 
 export default function CurriculumReviewAdminTab({
@@ -43,7 +47,9 @@ export default function CurriculumReviewAdminTab({
   bankQuestions,
   students = [],
   grades = [],
-  triggerToast
+  triggerToast,
+  isFullScreenResults: externalIsFullScreen,
+  onToggleFullScreen
 }: CurriculumReviewAdminTabProps) {
   // Current Tab selection
   const [activeSubTab, setActiveSubTab] = useState<"settings" | "results">("results");
@@ -78,7 +84,17 @@ export default function CurriculumReviewAdminTab({
   const [selectedClass, setSelectedClass] = useState<string>("الكل");
 
   // States for full screen and compact table layout
-  const [isFullScreenResults, setIsFullScreenResults] = useState<boolean>(false);
+  const [internalFullScreen, setInternalFullScreen] = useState<boolean>(false);
+  const isFullScreenResults = externalIsFullScreen !== undefined ? externalIsFullScreen : internalFullScreen;
+
+  const handleToggleFullScreen = (val?: boolean) => {
+    const nextVal = val !== undefined ? val : !isFullScreenResults;
+    setInternalFullScreen(nextVal);
+    if (onToggleFullScreen) {
+      onToggleFullScreen(nextVal);
+    }
+  };
+
   const [tableDensity, setTableDensity] = useState<"ultra-compact" | "compact" | "normal">("normal");
   const [showFilters, setShowFilters] = useState<boolean>(true);
 
@@ -444,46 +460,55 @@ export default function CurriculumReviewAdminTab({
     switch (tableDensity) {
       case "ultra-compact":
         return {
-          thUnit: "px-2 py-1.5 text-[10px]",
-          thLesson: "px-1 py-1 text-[9px] min-w-[75px] max-w-[95px]",
+          trUnit: "h-8",
+          trLesson: "h-[44px]",
+          thUnit: "px-2 text-[10px] h-8 align-middle",
+          thLesson: "px-1 py-1 text-[9px] min-w-[75px] max-w-[95px] h-[44px]",
           td: "px-1 py-1 text-[9px]",
           fontClass: "text-[9px]",
           badgeClass: "px-1.5 py-0.5 text-[8.5px] rounded-md",
-          studentCell: "px-3 py-1 min-w-[130px] max-w-[150px]",
+          studentCell: "px-2.5 py-1 min-w-[185px] max-w-[210px]",
           studentName: "text-[10px]",
           studentMeta: "text-[8px]",
           numCell: "px-2 py-1 text-[10px] w-8",
           studentRight: "right-8",
-          lessonTop: "top-[27px]"
+          unitTop: "top-0",
+          lessonTop: "top-[32px]"
         };
       case "compact":
         return {
-          thUnit: "px-2.5 py-2 text-[10.5px]",
-          thLesson: "px-1.5 py-1.5 text-[9.5px] min-w-[100px] max-w-[120px]",
+          trUnit: "h-9",
+          trLesson: "h-[52px]",
+          thUnit: "px-2.5 text-[10.5px] h-9 align-middle",
+          thLesson: "px-1.5 py-1.5 text-[9.5px] min-w-[100px] max-w-[120px] h-[52px]",
           td: "px-1.5 py-1.5 text-[10px]",
           fontClass: "text-[10px]",
           badgeClass: "px-2 py-0.5 text-[9.5px] rounded-lg",
-          studentCell: "px-4 py-2 min-w-[160px] max-w-[180px]",
+          studentCell: "px-3 py-1.5 min-w-[200px] max-w-[230px]",
           studentName: "text-xs",
           studentMeta: "text-[9px]",
           numCell: "px-3 py-2 text-xs w-10",
           studentRight: "right-10",
-          lessonTop: "top-[33px]"
+          unitTop: "top-0",
+          lessonTop: "top-[36px]"
         };
       case "normal":
       default:
         return {
-          thUnit: "px-3 py-3 text-[11px]",
-          thLesson: "px-2 py-3 text-center text-[10px] min-w-[120px] max-w-[150px]",
-          td: "px-2 py-3.5 text-center",
+          trUnit: "h-10",
+          trLesson: "h-[56px]",
+          thUnit: "px-3 text-[11px] h-10 align-middle",
+          thLesson: "px-2 py-1.5 text-center text-[10px] min-w-[120px] max-w-[150px] h-[56px]",
+          td: "px-2 py-1 text-center",
           fontClass: "text-[11px]",
-          badgeClass: "px-2.5 py-1.5 text-[11px] rounded-lg",
-          studentCell: "px-5 py-4 min-w-[200px] max-w-[240px]",
+          badgeClass: "px-2 py-1 text-[10.5px] rounded-lg",
+          studentCell: "px-3 py-1 min-w-[210px] max-w-[240px]",
           studentName: "text-xs",
-          studentMeta: "text-[9.5px]",
-          numCell: "px-4 py-4 text-xs w-12",
-          studentRight: "right-12",
-          lessonTop: "top-[41px]"
+          studentMeta: "text-[9px]",
+          numCell: "px-3 py-1 text-xs w-10",
+          studentRight: "right-10",
+          unitTop: "top-0",
+          lessonTop: "top-[40px]"
         };
     }
   }, [tableDensity]);
@@ -544,35 +569,37 @@ export default function CurriculumReviewAdminTab({
   const hiddenCount = allSubjects.length - visibleCount;
 
   return (
-    <div className="space-y-6 text-right font-sans" dir="rtl">
-      {/* Top Sub-Tab Navigation Bar */}
-      <div className="sticky top-0 z-40 bg-slate-50/90 backdrop-blur-md p-1.5 rounded-2xl border border-slate-200/80 w-fit mr-auto shadow-2xs">
-        <button
-          type="button"
-          onClick={() => setActiveSubTab("settings")}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
-            activeSubTab === "settings"
-              ? "bg-white text-indigo-700 shadow-sm border border-slate-200/80"
-              : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/60"
-          }`}
-        >
-          <Settings className="w-4 h-4 text-indigo-500" />
-          <span>إعدادات المواد وحالة العرض ⚙️</span>
-        </button>
+    <div className={`space-y-6 text-right font-sans ${isFullScreenResults ? "flex-1 min-h-0 flex flex-col" : ""}`} dir="rtl">
+      {/* Top Sub-Tab Navigation Bar - Nested Tabs Design */}
+      {(!isFullScreenResults || showFilters) && (
+        <div className="bg-slate-100/80 p-1.5 rounded-2xl border border-slate-200/90 flex items-center gap-1.5 w-full sm:w-fit shadow-xs font-sans">
+          <button
+            type="button"
+            onClick={() => setActiveSubTab("settings")}
+            className={`flex-1 sm:flex-initial flex items-center justify-center gap-2.5 px-5 py-2.5 rounded-xl text-xs sm:text-sm font-black transition-all duration-200 cursor-pointer ${
+              activeSubTab === "settings"
+                ? "bg-white text-indigo-700 shadow-md border border-indigo-100 scale-[1.02]"
+                : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/70"
+            }`}
+          >
+            <Settings className={`w-4 h-4 ${activeSubTab === "settings" ? "text-indigo-600 animate-spin-hover" : "text-slate-500"}`} />
+            <span>إعدادات المواد وحالة العرض ⚙️</span>
+          </button>
 
-        <button
-          type="button"
-          onClick={() => setActiveSubTab("results")}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
-            activeSubTab === "results"
-              ? "bg-white text-emerald-700 shadow-sm border border-slate-200/80"
-              : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/60"
-          }`}
-        >
-          <Activity className="w-4 h-4 text-emerald-500 animate-pulse" />
-          <span>سجل نتائج المراجعة الشاملة 📊</span>
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={() => setActiveSubTab("results")}
+            className={`flex-1 sm:flex-initial flex items-center justify-center gap-2.5 px-5 py-2.5 rounded-xl text-xs sm:text-sm font-black transition-all duration-200 cursor-pointer ${
+              activeSubTab === "results"
+                ? "bg-white text-emerald-700 shadow-md border border-emerald-100 scale-[1.02]"
+                : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/70"
+            }`}
+          >
+            <Activity className={`w-4 h-4 ${activeSubTab === "results" ? "text-emerald-600 animate-pulse" : "text-slate-500"}`} />
+            <span>سجل نتائج المراجعة الشاملة 📊</span>
+          </button>
+        </div>
+      )}
 
       <AnimatePresence mode="wait">
         {activeSubTab === "settings" ? (
@@ -710,7 +737,7 @@ export default function CurriculumReviewAdminTab({
             </div>
           </motion.div>
         ) : (
-          <div className={isFullScreenResults ? "fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs p-3 md:p-5 flex items-center justify-center text-right font-sans" : "contents"}>
+          <div className={`w-full text-right font-sans ${isFullScreenResults ? "flex-1 min-h-0 flex flex-col" : ""}`}>
             <motion.div
               key="results-section"
               initial={{ opacity: 0, y: 10 }}
@@ -718,101 +745,11 @@ export default function CurriculumReviewAdminTab({
               exit={{ opacity: 0, y: -10 }}
               className={
                 isFullScreenResults
-                  ? "bg-slate-50 border border-slate-200 w-full h-full rounded-3xl shadow-2xl flex flex-col p-5 overflow-hidden relative gap-4"
+                  ? "bg-slate-50 border border-slate-200 w-full rounded-3xl shadow-xs flex flex-col p-4 md:p-6 gap-4 flex-1 min-h-0"
                   : "space-y-6"
               }
             >
-              {/* Header Area styled like attached image (non-sticky during scroll as requested) */}
-              <div className="bg-purple-650 text-white p-4.5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-md relative">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-3 h-3 rounded-full bg-emerald-400 animate-ping shrink-0" />
-                  <h2 className="text-sm md:text-base font-black tracking-wide leading-none bg-gradient-to-r from-white via-amber-200 to-emerald-200 bg-clip-text text-transparent drop-shadow-sm flex items-center gap-1.5 flex-wrap">
-                    <span>لوحة الإدارة | سجل نتائج المراجعة الشاملة</span>
-                    <span className="text-white/80 text-[10px] md:text-xs font-bold bg-white/10 px-2 py-0.5 rounded-md border border-white/5 select-none font-sans shrink-0">(مزامنة حية وتحديث تلقائي ⚡)</span>
-                  </h2>
-                </div>
-                
-                <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-                  {/* Density selector buttons */}
-                  <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-xl border border-slate-200 text-slate-900 shadow-inner">
-                    <span className="text-[10.5px] font-black px-2.5 py-1 bg-slate-200/65 text-slate-900 rounded-lg border border-slate-300/50 hidden md:inline-block tracking-tight">حجم الجدول 📏:</span>
-                    <button
-                      type="button"
-                      onClick={() => setTableDensity("normal")}
-                      className={`px-3 py-1.5 rounded-lg text-[10.5px] font-black transition-all cursor-pointer ${
-                        tableDensity === "normal"
-                          ? "bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md scale-[1.05] border border-blue-400/20"
-                          : "text-slate-900 hover:bg-slate-200"
-                      }`}
-                    >
-                      عادي
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setTableDensity("compact")}
-                      className={`px-3 py-1.5 rounded-lg text-[10.5px] font-black transition-all cursor-pointer ${
-                        tableDensity === "compact"
-                          ? "bg-gradient-to-r from-violet-500 to-fuchsia-600 text-white shadow-md scale-[1.05] border border-violet-400/20"
-                          : "text-slate-900 hover:bg-slate-200"
-                      }`}
-                    >
-                      مكثف
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setTableDensity("ultra-compact")}
-                      className={`px-3 py-1.5 rounded-lg text-[10.5px] font-black transition-all cursor-pointer ${
-                        tableDensity === "ultra-compact"
-                          ? "bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-md scale-[1.05] border border-amber-400/20"
-                          : "text-slate-900 hover:bg-slate-200"
-                      }`}
-                    >
-                      دقيق جداً 🔬
-                    </button>
-                  </div>
 
-                  {/* Toggle filters button inside full screen */}
-                  {isFullScreenResults && (
-                    <button
-                      type="button"
-                      onClick={() => setShowFilters(!showFilters)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-white/15 hover:bg-white/25 active:scale-95 text-white text-[11px] font-black rounded-lg transition-all border border-white/10 cursor-pointer"
-                      title={showFilters ? "إخفاء الفلاتر لتوسيع الجدول" : "إظهار فلاتر البحث والصفوف"}
-                    >
-                      <span>{showFilters ? "إخفاء الفلاتر 👁️" : "عرض الفلاتر 🔍"}</span>
-                    </button>
-                  )}
-
-                  {/* Maximize / Minimize button */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsFullScreenResults(!isFullScreenResults);
-                      if (!isFullScreenResults) {
-                        setShowFilters(true); // Reset show filters when maximizing
-                      }
-                    }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-[11px] font-black rounded-lg transition-all border border-emerald-400 cursor-pointer shadow-xs"
-                    title={isFullScreenResults ? "تصغير الشاشة" : "تكبير ملء الشاشة"}
-                  >
-                    {isFullScreenResults ? (
-                      <>
-                        <Minimize2 className="w-3.5 h-3.5" />
-                        <span>تصغير ↩</span>
-                      </>
-                    ) : (
-                      <>
-                        <Maximize2 className="w-3.5 h-3.5" />
-                        <span>ملء الشاشة ⛶</span>
-                      </>
-                    )}
-                  </button>
-
-                  <div className="text-[11px] font-black bg-white/15 px-3 py-1.5 rounded-lg border border-white/10 hidden sm:block">
-                    مجموع الطلاب: {filteredStudents.length}
-                  </div>
-                </div>
-              </div>
 
             {/* Selector Filters Grid resembling attached image layout */}
             {(!isFullScreenResults || showFilters) && (
@@ -959,112 +896,7 @@ export default function CurriculumReviewAdminTab({
                   </div>
                 </div>
 
-                {/* Row 4: Sticky Question Count & Solve Progress Stages Banner */}
-                {selectedSubject && (
-                  <div className="border-t border-slate-100 pt-4 mt-2 space-y-3 sticky top-0 z-20 bg-white/95 backdrop-blur-xs pb-3 shadow-2xs rounded-2xl p-3 border border-slate-100">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex items-center gap-2">
-                        <HelpCircle className="w-4.5 h-4.5 text-indigo-600 shrink-0" />
-                        <span className="text-xs font-black text-slate-700">احصائيات الأسئلة ومراحل تقدم الحل:</span>
-                      </div>
 
-                      <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-slate-600">
-                        <span className="bg-indigo-50 text-indigo-700 px-3 py-1 rounded-lg border border-indigo-100 flex items-center gap-1.5 shadow-2xs">
-                          <HelpCircle className="w-3.5 h-3.5 text-indigo-500" />
-                          <span>عدد الأسئلة الكلي: <strong className="font-black text-indigo-900 font-mono text-sm">{progressStats.totalQuestions}</strong> سؤال</span>
-                        </span>
-                        <span className="bg-purple-50 text-purple-700 px-3 py-1 rounded-lg border border-purple-100 flex items-center gap-1.5 shadow-2xs">
-                          <Layers className="w-3.5 h-3.5 text-purple-500" />
-                          <span>التقسيم: <strong className="font-black text-purple-900">{progressStats.totalUnits} وحدات ({progressStats.totalLessons} درس)</strong></span>
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Overall Progress Bar & Stages Grid */}
-                    <div className="bg-slate-50/80 p-4 rounded-2xl border border-slate-200/80 space-y-3 shadow-2xs">
-                      {/* Top row: Progress bar */}
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                        <div className="flex items-center gap-2">
-                          <TrendingUp className="w-4 h-4 text-emerald-600 shrink-0" />
-                          <span className="font-black text-slate-800">مراحل تقدم حل الأسئلة إجمالاً:</span>
-                          <span className="font-mono font-black text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md text-xs border border-emerald-200">
-                            {progressStats.overallProgressPercent}% مكتمل
-                          </span>
-                        </div>
-                        <span className="text-[11px] font-extrabold text-slate-500">
-                          تم إنجاز {progressStats.totalSolvedLessons} من أصل {progressStats.totalPossibleLessons} درس مخصص للطلاب
-                        </span>
-                      </div>
-
-                      {/* Progress track */}
-                      <div className="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden p-0.5 border border-slate-300/60">
-                        <div
-                          className="bg-gradient-to-r from-emerald-500 via-teal-500 to-indigo-600 h-full rounded-full transition-all duration-500 shadow-2xs"
-                          style={{ width: `${progressStats.overallProgressPercent}%` }}
-                        />
-                      </div>
-
-                      {/* Stages breakdown cards */}
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
-                        {/* Stage 1: Completed / Mastered */}
-                        <div className="bg-white p-2.5 rounded-xl border border-emerald-200 shadow-2xs flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-1.5">
-                            <Trophy className="w-4 h-4 text-amber-500 shrink-0" />
-                            <div className="flex flex-col">
-                              <span className="text-[10px] font-black text-slate-500">مرحلة الإكتمال (100%)</span>
-                              <span className="text-xs font-black text-emerald-700">{progressStats.completedStudentsCount} طالب</span>
-                            </div>
-                          </div>
-                          <span className="text-[10px] font-mono font-extrabold bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded-md border border-emerald-100">
-                            أكملوا
-                          </span>
-                        </div>
-
-                        {/* Stage 2: In Progress */}
-                        <div className="bg-white p-2.5 rounded-xl border border-blue-200 shadow-2xs flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-1.5">
-                            <Activity className="w-4 h-4 text-blue-500 shrink-0 animate-pulse" />
-                            <div className="flex flex-col">
-                              <span className="text-[10px] font-black text-slate-500">مرحلة قيد التقدم</span>
-                              <span className="text-xs font-black text-blue-700">{progressStats.inProgressStudentsCount} طالب</span>
-                            </div>
-                          </div>
-                          <span className="text-[10px] font-mono font-extrabold bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded-md border border-blue-100">
-                            جاري الحل
-                          </span>
-                        </div>
-
-                        {/* Stage 3: Not Started */}
-                        <div className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-1.5">
-                            <Info className="w-4 h-4 text-slate-400 shrink-0" />
-                            <div className="flex flex-col">
-                              <span className="text-[10px] font-black text-slate-500">لم يبدأوا بعد</span>
-                              <span className="text-xs font-black text-slate-700">{progressStats.notStartedStudentsCount} طالب</span>
-                            </div>
-                          </div>
-                          <span className="text-[10px] font-mono font-extrabold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-md border border-slate-200">
-                            بانتظار البدء
-                          </span>
-                        </div>
-
-                        {/* Stage 4: Full Score Lessons */}
-                        <div className="bg-white p-2.5 rounded-xl border border-amber-200 shadow-2xs flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-1.5">
-                            <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
-                            <div className="flex flex-col">
-                              <span className="text-[10px] font-black text-slate-500">دروس بالدرجة الكاملة</span>
-                              <span className="text-xs font-black text-amber-700">{progressStats.perfectScoresCount} إجابة</span>
-                            </div>
-                          </div>
-                          <span className="text-[10px] font-mono font-extrabold bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded-md border border-amber-100">
-                            علامة كاملة
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
             )}
 
@@ -1099,13 +931,103 @@ export default function CurriculumReviewAdminTab({
                 isFullScreenResults ? "flex-1 min-h-0 flex flex-col" : ""
               }`}>
                 {/* Horizontal & Vertical Scroll wrapper for dense table matrix */}
-                <div className={`overflow-auto ${isFullScreenResults ? "flex-1 min-h-0" : "max-h-[75vh]"}`}>
+                <div className={`overflow-auto ${
+                  isFullScreenResults 
+                    ? showFilters 
+                      ? "flex-1 min-h-[300px] max-h-[calc(100vh-300px)]" 
+                      : "flex-1 min-h-[400px] max-h-[calc(100vh-140px)]" 
+                    : "max-h-[85vh]"
+                }`}>
                   <table className="w-full border-collapse min-w-[900px]">
                     <thead>
                       {/* Row 1: Units Super-Headers */}
-                      <tr className="bg-slate-100 border-b border-slate-200">
-                        <th rowSpan={2} className={`${tableClasses.numCell} text-right font-black text-slate-800 border-l border-slate-200 bg-slate-100 sticky top-0 right-0 z-30 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]`}>#</th>
-                        <th rowSpan={2} className={`${tableClasses.studentCell} text-right font-black text-slate-800 border-l border-slate-200 bg-slate-100 sticky top-0 ${tableClasses.studentRight} z-30 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]`}>اسم الطالب</th>
+                      <tr className={`bg-slate-100 border-b border-slate-200 ${tableClasses.trUnit}`}>
+                        <th rowSpan={2} className={`${tableClasses.numCell} text-right font-black text-slate-800 border-l border-slate-200 bg-slate-100 sticky top-0 right-0 z-40 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]`}>#</th>
+                        <th rowSpan={2} className={`${tableClasses.studentCell} text-right font-black text-slate-800 border-l border-slate-200 bg-slate-100 sticky top-0 ${tableClasses.studentRight} z-40 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] align-middle`}>
+                          <div className="flex flex-col gap-1.5 py-0.5">
+                            {/* Top row: Fullscreen & Filters toggle button */}
+                            <div className="flex flex-col gap-1 items-center justify-center">
+                              {/* Maximize / Minimize button */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const nextFS = !isFullScreenResults;
+                                  handleToggleFullScreen(nextFS);
+                                  if (nextFS) {
+                                    setShowFilters(false);
+                                  } else {
+                                    setShowFilters(true);
+                                  }
+                                }}
+                                className="flex items-center justify-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-sm font-black rounded-xl transition-all border border-emerald-500 cursor-pointer shadow-md shrink-0 w-full"
+                                title={isFullScreenResults ? "تصغير الشاشة" : "تكبير ملء الشاشة"}
+                              >
+                                {isFullScreenResults ? (
+                                  <>
+                                    <Minimize2 className="w-5 h-5" />
+                                    <span>تصغير ↩</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Maximize2 className="w-5 h-5" />
+                                    <span>ملء الشاشة ⛶</span>
+                                  </>
+                                )}
+                              </button>
+
+                              {isFullScreenResults && (
+                                <button
+                                  type="button"
+                                  onClick={() => setShowFilters(!showFilters)}
+                                  className="flex items-center justify-center gap-1.5 px-2 py-1 bg-slate-200/90 hover:bg-slate-300 text-slate-800 text-[10.5px] font-black rounded-lg transition-all border border-slate-300/80 cursor-pointer w-full shadow-2xs"
+                                  title={showFilters ? "إخفاء فلاتر التصفية" : "إظهار فلاتر التصفية"}
+                                >
+                                  <Filter className="w-3.5 h-3.5 text-slate-600" />
+                                  <span>{showFilters ? "طوي الفلاتر 🔼" : "عرض الفلاتر 🔽"}</span>
+                                </button>
+                              )}
+                            </div>
+
+                            {/* Density options inside header */}
+                            <div className="flex items-center gap-0.5 bg-white p-0.5 rounded-lg border border-slate-200/90 text-slate-900 shadow-2xs w-full">
+                              <button
+                                type="button"
+                                onClick={() => setTableDensity("normal")}
+                                className={`flex-1 py-0.5 text-[9px] sm:text-[9.5px] font-black rounded transition-all cursor-pointer text-center ${
+                                  tableDensity === "normal"
+                                    ? "bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-2xs"
+                                    : "text-slate-600 hover:bg-slate-100"
+                                }`}
+                              >
+                                عادي
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setTableDensity("compact")}
+                                className={`flex-1 py-0.5 text-[9px] sm:text-[9.5px] font-black rounded transition-all cursor-pointer text-center ${
+                                  tableDensity === "compact"
+                                    ? "bg-gradient-to-r from-violet-500 to-fuchsia-600 text-white shadow-2xs"
+                                    : "text-slate-600 hover:bg-slate-100"
+                                }`}
+                              >
+                                مكثف
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setTableDensity("ultra-compact")}
+                                className={`flex-1 py-0.5 text-[9px] sm:text-[9.5px] font-black rounded transition-all cursor-pointer text-center ${
+                                  tableDensity === "ultra-compact"
+                                    ? "bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-2xs"
+                                    : "text-slate-600 hover:bg-slate-100"
+                                }`}
+                              >
+                                دقيق
+                              </button>
+                            </div>
+
+
+                          </div>
+                        </th>
                         
                         {activeSyllabus.units.map((unit, index) => {
                           const colColor = UNIT_COLORS[index % UNIT_COLORS.length];
@@ -1113,7 +1035,7 @@ export default function CurriculumReviewAdminTab({
                             <th
                               key={unit.name}
                               colSpan={unit.lessons.length}
-                              className={`${tableClasses.thUnit} text-center font-black border-l border-slate-200 ${colColor} sticky top-0 z-20`}
+                              className={`${tableClasses.thUnit} text-center font-black border-l border-slate-200 ${colColor} sticky top-0 z-30`}
                             >
                               {unit.name}
                             </th>
@@ -1122,7 +1044,7 @@ export default function CurriculumReviewAdminTab({
                       </tr>
 
                       {/* Row 2: Lessons Headers */}
-                      <tr className="bg-slate-50 border-b border-slate-250">
+                      <tr className={`bg-slate-50 border-b border-slate-250 ${tableClasses.trLesson}`}>
                         {flatLessons.map((lesson, idx) => (
                           <th
                             key={`${lesson.unitName}-${lesson.lessonName}-${idx}`}

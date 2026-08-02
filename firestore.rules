@@ -13,8 +13,7 @@ service cloud.firestore {
 
     // Teachers profile & settings
     match /teachers/{teacherId} {
-      allow read: if true;
-      allow write: if isSignedIn() && request.auth.uid == teacherId;
+      allow read, write: if true;
     }
 
     match /curriculum_settings/{teacherId} {
@@ -22,13 +21,12 @@ service cloud.firestore {
       allow write: if isSignedIn() && request.auth.uid == teacherId;
     }
 
-    // Question Bank
+    // Question Bank (Protected - Only authenticated teachers can read or write directly)
     match /question_bank/{questionId} {
-      allow read: if true;
-      allow write: if isSignedIn();
+      allow read, write: if isSignedIn();
     }
 
-    // Quizzes
+    // Quizzes (Readable for quiz links and server endpoints, write restricted to authenticated teachers)
     match /quizzes/{quizId} {
       allow read: if true;
       allow write: if isSignedIn();

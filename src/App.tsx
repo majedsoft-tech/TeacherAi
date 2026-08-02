@@ -58,6 +58,7 @@ import {
   Timer,
   Zap,
   Key,
+  UserCheck,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import * as XLSX from "xlsx";
@@ -82,6 +83,7 @@ import ReviewsAdminTab from "./components/ReviewsAdminTab";
 import StudentReviewsTab from "./components/StudentReviewsTab";
 import StudentCurriculumReview from "./components/StudentCurriculumReview";
 import CurriculumReviewAdminTab from "./components/CurriculumReviewAdminTab";
+import { RegisteredTeachersTab } from "./components/RegisteredTeachersTab";
 import { UnitLessonMultiSelect } from "./components/UnitLessonMultiSelect";
 import { QuestionBankSmartFilters } from "./components/QuestionBankSmartFilters";
 import { initializeApp, getApp, getApps } from "firebase/app";
@@ -187,9 +189,12 @@ export default function App() {
     | "manage_student_portal"
     | "reviews_admin"
     | "curriculum_review_admin"
+    | "registered_teachers"
   >("dashboard");
   const [quizViewMode, setQuizViewMode] = useState<"grid" | "list">("grid");
   const [teacherPreviewActive, setTeacherPreviewActive] =
+    useState<boolean>(false);
+  const [isCurriculumAdminFullScreen, setIsCurriculumAdminFullScreen] =
     useState<boolean>(false);
 
 
@@ -599,6 +604,7 @@ export default function App() {
     const savedIdx = localStorage.getItem(`seb_student_${activeId}_quiz_question_idx`);
     return savedIdx ? parseInt(savedIdx, 10) : 0;
   });
+  const [reviewResultQuestionIdx, setReviewResultQuestionIdx] = useState(0);
 
   // Load/synchronize state when active student changes
   useEffect(() => {
@@ -1167,9 +1173,31 @@ export default function App() {
 
         if (targetQuizId && targetQuizId !== "portal") {
           try {
-            const quizDoc = await getDoc(doc(db, "quizzes", targetQuizId));
-            if (quizDoc.exists()) {
-              const qData = quizDoc.data() as Quiz;
+            let loadedQuiz: Quiz | null = null;
+            
+            // 1. Try secure backend API first (strips answers for students)
+            try {
+              const res = await fetch(`/api/student/get-quiz/${encodeURIComponent(targetQuizId)}`);
+              if (res.ok) {
+                const resJson = await res.json();
+                if (resJson.success && resJson.quiz) {
+                  loadedQuiz = resJson.quiz as Quiz;
+                }
+              }
+            } catch (apiErr) {
+              console.warn("Secure API fetch failed, trying direct Firestore fallback:", apiErr);
+            }
+
+            // 2. Direct Firestore fallback (for logged-in teachers previewing)
+            if (!loadedQuiz) {
+              const quizDoc = await getDoc(doc(db, "quizzes", targetQuizId));
+              if (quizDoc.exists()) {
+                loadedQuiz = quizDoc.data() as Quiz;
+              }
+            }
+
+            if (loadedQuiz) {
+              const qData = loadedQuiz;
               setStudentQuiz(qData);
               setQuizTimer(qData.durationMinutes * 60);
               const qTeacherId = (qData as any).teacherId;
@@ -1471,23 +1499,93 @@ export default function App() {
       }
     }
 
-    let earnedPoints = 0;
-    let totalPoints = 0;
-
-    studentQuiz.questions.forEach((q) => {
-      totalPoints += q.points;
-      const ans = quizAnswers[q.id];
-      if (ans !== undefined && ans === q.correctAnswer) {
-        earnedPoints += q.points;
-      }
-    });
-
-    const pct = Math.round((earnedPoints / (totalPoints || 1)) * 100);
-    setQuizScore(earnedPoints);
-    setQuizTotalPoints(totalPoints);
-    setQuizPercentage(pct);
-
     try {
+      // 1. Submit answers to secure server endpoint for evaluation
+      const response = await fetch("/api/student/submit-quiz", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          quizId: studentQuiz.id,
+          answers: quizAnswers,
+          studentInfo: {
+            studentId: targetStudentId,
+            name: currentStudentName,
+            email: currentStudentEmail,
+            gradeClass: currentStudentClass,
+            grade: studentSelectedGrade,
+            semester: studentSelectedSemester,
+            isNewStudent: studentNewToggle || !studentSelectedId,
+          },
+        }),
+      });
+
+      if (response.ok) {
+        const resData = await response.json();
+        if (resData.success) {
+          setQuizScore(resData.score);
+          setQuizTotalPoints(resData.totalPoints);
+          setQuizPercentage(resData.percentage);
+
+          if (resData.targetStudentId) {
+            setStudentSelectedId(resData.targetStudentId);
+            localStorage.setItem("seb_student_logged_id", resData.targetStudentId);
+          }
+          if (studentNewToggle) {
+            setStudentNewToggle(false);
+          }
+
+          // If detailed results with answers were returned for post-test review, populate them in studentQuiz
+          if (Array.isArray(resData.detailedQuestionResults) && resData.detailedQuestionResults.length > 0) {
+            setStudentQuiz((prev) => {
+              if (!prev) return prev;
+              const updatedQs = prev.questions.map((q) => {
+                const evaluated = resData.detailedQuestionResults.find((r: any) => r.questionId === q.id);
+                if (evaluated && evaluated.correctAnswer !== undefined) {
+                  return { ...q, correctAnswer: evaluated.correctAnswer };
+                }
+                return q;
+              });
+              return { ...prev, questions: updatedQs };
+            });
+          }
+
+          setStudentQuizFinished(true);
+          const qKey = studentQuiz.id || studentQuiz.title;
+          localStorage.setItem(`seb_student_${targetStudentId}_quiz_${qKey}_finished`, "true");
+          setQuizSubmitting(false);
+
+          if (isAutoSubmit) {
+            triggerToast(
+              "انتهى الوقت المحدد للاختبار! تم تسليم وتصحيح ورقة إجابتك في الخادم تلقائياً.",
+              "info",
+            );
+          } else {
+            triggerToast(
+              "تم تسليم وتصحيح ورقة إجابتك في الخادم بنجاح! رائع جداً.",
+              "success",
+            );
+          }
+          return;
+        }
+      }
+
+      // 2. Client-side fallback if server endpoint is unavailable
+      let earnedPoints = 0;
+      let totalPoints = 0;
+
+      studentQuiz.questions.forEach((q) => {
+        totalPoints += q.points;
+        const ans = quizAnswers[q.id];
+        if (ans !== undefined && q.correctAnswer && ans === q.correctAnswer) {
+          earnedPoints += q.points;
+        }
+      });
+
+      const pct = Math.round((earnedPoints / (totalPoints || 1)) * 100);
+      setQuizScore(earnedPoints);
+      setQuizTotalPoints(totalPoints);
+      setQuizPercentage(pct);
+
       const gRecord = {
         quizTitle: studentQuiz.title,
         score: earnedPoints,
@@ -1574,6 +1672,9 @@ export default function App() {
       }
 
       setStudentQuizFinished(true);
+      const qKey = studentQuiz.id || studentQuiz.title;
+      localStorage.setItem(`seb_student_${targetStudentId}_quiz_${qKey}_finished`, "true");
+
       if (isAutoSubmit) {
         triggerToast(
           "انتهى الوقت المحدود للاجابة، وتم تسليم اختبارك تلقائياً بنجاح!",
@@ -3009,34 +3110,68 @@ export default function App() {
 
   const handleAddGrade = async () => {
     if (!currentUser || !newGradeInput.trim()) return;
-    const addedGradeName = newGradeInput.trim();
 
-    // Check if grade already exists
-    const isDuplicate = grades.some(
-      (g) => normalizeGradeName(g) === normalizeGradeName(addedGradeName)
-    );
-    if (isDuplicate) {
-      triggerToast(`الصف الدراسي "${addedGradeName}" مضاف مسبقاً!`, "info");
+    // Split input by newlines to support batch multi-line input (typed or copy-pasted from Excel)
+    const lines = newGradeInput
+      .split(/[\r\n]+/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+
+    if (lines.length === 0) return;
+
+    // Filter out duplicates against existing grades and batch list
+    const newGradesToAdd: string[] = [];
+    const skippedDuplicates: string[] = [];
+
+    for (const rawName of lines) {
+      const isDupInExisting = grades.some(
+        (g) => normalizeGradeName(g) === normalizeGradeName(rawName)
+      );
+      const isDupInBatch = newGradesToAdd.some(
+        (g) => normalizeGradeName(g) === normalizeGradeName(rawName)
+      );
+
+      if (isDupInExisting || isDupInBatch) {
+        skippedDuplicates.push(rawName);
+      } else {
+        newGradesToAdd.push(rawName);
+      }
+    }
+
+    if (newGradesToAdd.length === 0) {
+      if (skippedDuplicates.length > 0) {
+        triggerToast(`الصفوف المدخلة (${skippedDuplicates.join(", ")}) مضافة مسبقاً!`, "info");
+      }
       return;
     }
 
     try {
       await runWithProgress(
         async () => {
-          const id = `grade-${Math.random().toString(36).substr(2, 9)}`;
-          await setDoc(doc(db, "grades", id), {
-            id,
-            teacherId: currentUser.uid,
-            name: addedGradeName,
-            createdAt: Date.now(),
-          });
-          setGrades((prev) => [...prev, addedGradeName]);
+          const addedNames: string[] = [];
+          for (const name of newGradesToAdd) {
+            const id = `grade-${Math.random().toString(36).substr(2, 9)}`;
+            await setDoc(doc(db, "grades", id), {
+              id,
+              teacherId: currentUser.uid,
+              name,
+              createdAt: Date.now(),
+            });
+            addedNames.push(name);
+          }
+          setGrades((prev) => [...prev, ...addedNames]);
           setNewGradeInput("");
-          setSelectedManageGrade(addedGradeName);
-          setSelectedSemesterNumbers([]);
+          if (addedNames.length > 0) {
+            setSelectedManageGrade(addedNames[addedNames.length - 1]);
+            setSelectedSemesterNumbers([]);
+          }
         },
-        `جاري إضافة الصف الدراسي "${addedGradeName}"...`,
-        `تمت إضافة الصف الدراسي "${addedGradeName}" بنجاح ✨`
+        newGradesToAdd.length === 1
+          ? `جاري إضافة الصف الدراسي "${newGradesToAdd[0]}"...`
+          : `جاري إضافة ${newGradesToAdd.length} صفوف دراسية...`,
+        newGradesToAdd.length === 1
+          ? `تمت إضافة الصف الدراسي "${newGradesToAdd[0]}" بنجاح ✨`
+          : `تمت إضافة ${newGradesToAdd.length} صفوف دراسية بنجاح ✨`
       );
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, "grades");
@@ -4760,72 +4895,46 @@ export default function App() {
     if (!studentPortalTeacherId && !studentQuizId) {
       return (
         <div
-          className="min-h-screen bg-slate-50/70 py-12 px-4 md:px-6 text-slate-800 flex items-center justify-center animate-fade-in"
+          className="min-h-screen bg-slate-50/80 py-12 px-4 md:px-6 text-slate-800 flex flex-col items-center justify-center animate-fade-in"
           dir="rtl"
         >
           <motion.div
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
-            className="bg-white rounded-3xl border border-slate-200/60 shadow-xl max-w-md w-full overflow-hidden"
+            className="bg-white rounded-3xl border border-slate-200/80 shadow-2xl max-w-lg w-full overflow-hidden"
           >
-            <div className="p-8 bg-gradient-to-tr from-indigo-750 to-indigo-600 text-white text-center relative font-sans">
-              <div className="w-16 h-16 bg-white/10 backdrop-blur-md rounded-2xl flex items-center justify-center text-white mx-auto mb-4 border border-white/10">
-                <BookOpen className="w-8 h-8" />
+            {/* Top Main Site Header */}
+            <div className="p-8 bg-gradient-to-tr from-[#1e3a8a] via-indigo-700 to-blue-600 text-white text-center relative font-sans">
+              <div className="w-16 h-16 bg-white/10 backdrop-blur-md rounded-2xl flex items-center justify-center text-white mx-auto mb-4 border border-white/20 shadow-inner">
+                <GraduationCap className="w-9 h-9 text-amber-300" />
               </div>
-              <h1 className="text-2xl font-black leading-tight">
-                بوابة الطالب الإلكترونية
+              <span className="inline-block px-3 py-1 rounded-full bg-white/15 text-amber-300 text-xs font-black tracking-wide mb-2 backdrop-blur-xs border border-white/10">
+                منصة SmartCloud التعليمية
+              </span>
+              <h1 className="text-2xl md:text-3xl font-black leading-tight text-white">
+                منصة الاختبارات والتقييم الذكي
               </h1>
-              <p className="text-white/80 text-xs mt-2">
-                أهلاً بك في منصة الاختبارات الذكية الخاصة بالطلاب. يرجى إدخال
-                رمز ومفتاح الاختبار المقدم من معلمك المعتمد.
+              <p className="text-white/85 text-xs md:text-sm mt-2 max-w-md mx-auto font-medium">
+                البوابة الإلكترونية المتكاملة لإدارة ونشر الاختبارات التفاعلية ورصد النتائج
               </p>
             </div>
 
-            <div className="p-6 space-y-4">
-              <div className="space-y-1.5">
-                <label className="text-slate-500 font-bold text-xs block">
-                  رمز الاختبار (أو الرابط السحابي):
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={studentCustomExamCode}
-                    onChange={(e) => setStudentCustomExamCode(e.target.value)}
-                    placeholder="مثال: Ff-1738734 أو الصق الرابط كاملاً"
-                    className="w-full bg-slate-50 border border-slate-205 rounded-xl pl-3 pr-10 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 pr-4 text-right font-sans placeholder-slate-400"
-                  />
-                  <div className="absolute inset-y-0 right-0 pr-3.5 flex items-center pointer-events-none text-slate-400">
-                    <Link className="w-4 h-4" />
+            <div className="p-6 md:p-8 space-y-6">
+              {/* Direct Link to Teacher Page / Portal */}
+              <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-50/90 to-blue-50/80 border border-indigo-150 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 bg-indigo-600 rounded-xl flex items-center justify-center text-white shrink-0 shadow-md shadow-indigo-200">
+                    <LayoutDashboard className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-black text-indigo-950">
+                      بوابة المعلم (صفحة المعلم والإدارة)
+                    </h2>
+                    <p className="text-xs text-slate-500 font-medium">
+                      إنشاء الاختبارات، إدارة الطلاب، وبنك الأسئلة
+                    </p>
                   </div>
                 </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  if (!studentCustomExamCode.trim()) {
-                    triggerToast(
-                      "الرجاء كتابة رمز أو تفاصيل رابط الاختبار للمتابعة",
-                      "error",
-                    );
-                    return;
-                  }
-                  let parsedValue = studentCustomExamCode.trim();
-                  if (parsedValue.includes("quizId=") || parsedValue.includes("quizid=") || parsedValue.includes("quizld=") || parsedValue.includes("quizID=")) {
-                    const match = parsedValue.match(/[?&]quiz(?:I|l)d=([^&]+)/i);
-                    if (match && match[1]) {
-                      parsedValue = match[1];
-                    }
-                  }
-                  window.location.search = `?quizId=${parsedValue}`;
-                }}
-                className="w-full flex items-center justify-center gap-2 px-6 py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-md shadow-indigo-100 transition-all cursor-pointer"
-              >
-                <span>دخول قاعة الاختبارات والتحقق</span>
-                <ChevronLeft className="w-4 h-4 shrink-0" />
-              </button>
-
-              <div className="pt-4 text-center border-t border-slate-100 mt-2">
                 <button
                   type="button"
                   onClick={() => {
@@ -4838,10 +4947,64 @@ export default function App() {
                       "success",
                     );
                   }}
-                  className="text-xs text-slate-400 hover:text-indigo-600 font-bold transition-all cursor-pointer inline-flex items-center gap-1.5"
+                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-xl font-extrabold text-xs shadow-md shadow-indigo-200 transition-all cursor-pointer shrink-0 flex items-center gap-1"
                 >
-                  <LayoutDashboard className="w-4 h-4 shrink-0" />
-                  <span>التبديل إلى بوابة المعلم (الإدارة)</span>
+                  <span>دخول المعلم</span>
+                  <ChevronLeft className="w-4 h-4 shrink-0" />
+                </button>
+              </div>
+
+              <div className="relative flex items-center justify-center my-2">
+                <div className="border-t border-slate-200 w-full" />
+                <span className="bg-white px-3 text-xs font-bold text-slate-400 shrink-0">
+                  أو دخول الطالب برمز الاختبار
+                </span>
+              </div>
+
+              {/* Student Exam Entry Box */}
+              <div className="space-y-3 bg-slate-50 p-4 rounded-2xl border border-slate-200/70">
+                <div className="space-y-1.5">
+                  <label className="text-slate-700 font-black text-xs block flex items-center gap-1.5">
+                    <BookOpen className="w-4 h-4 text-indigo-600" />
+                    <span>رمز الاختبار (أو الرابط السحابي):</span>
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={studentCustomExamCode}
+                      onChange={(e) => setStudentCustomExamCode(e.target.value)}
+                      placeholder="مثال: Ff-1738734 أو الصق الرابط كاملاً"
+                      className="w-full bg-white border border-slate-300 rounded-xl pl-3 pr-10 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 text-right font-sans placeholder-slate-400 font-bold shadow-2xs"
+                    />
+                    <div className="absolute inset-y-0 right-0 pr-3.5 flex items-center pointer-events-none text-slate-400">
+                      <Link className="w-4 h-4" />
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!studentCustomExamCode.trim()) {
+                      triggerToast(
+                        "الرجاء كتابة رمز أو تفاصيل رابط الاختبار للمتابعة",
+                        "error",
+                      );
+                      return;
+                    }
+                    let parsedValue = studentCustomExamCode.trim();
+                    if (parsedValue.includes("quizId=") || parsedValue.includes("quizid=") || parsedValue.includes("quizld=") || parsedValue.includes("quizID=")) {
+                      const match = parsedValue.match(/[?&]quiz(?:I|l)d=([^&]+)/i);
+                      if (match && match[1]) {
+                        parsedValue = match[1];
+                      }
+                    }
+                    window.location.search = `?quizId=${parsedValue}`;
+                  }}
+                  className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl font-black text-sm shadow-md shadow-emerald-100 transition-all cursor-pointer"
+                >
+                  <span>دخول قاعة الاختبارات والتحقق</span>
+                  <ChevronLeft className="w-4 h-4 shrink-0" />
                 </button>
               </div>
             </div>
@@ -6158,6 +6321,11 @@ export default function App() {
                                             });
                                             finalQuizToSet.questions = shuffled;
                                           }
+                                          const safeQuestions = finalQuizToSet.questions.map(q => {
+                                            const { correctAnswer, ...safeQ } = q;
+                                            return safeQ as Question;
+                                          });
+                                          finalQuizToSet.questions = safeQuestions;
                                           setStudentQuiz(finalQuizToSet);
                                         }
                                         
@@ -6548,10 +6716,12 @@ export default function App() {
                       onClick={() => setCurrentStudentQuestionIdx(idx)}
                       className={`w-11 h-11 rounded-xl font-mono text-xs font-black flex flex-col items-center justify-center relative transition-all duration-150 cursor-pointer ${
                         isCurrent
-                          ? "bg-amber-500 hover:bg-amber-600 text-white font-extrabold shadow-md scale-110 border-2 border-amber-600 ring-2 ring-amber-200/60 z-10"
+                          ? isAnswered
+                            ? "bg-blue-600 text-white border-2 border-blue-800 ring-4 ring-blue-200 scale-110 z-10 shadow-md font-black"
+                            : "bg-white text-blue-700 border-2 border-blue-600 ring-4 ring-blue-200 scale-110 z-10 shadow-md font-black"
                           : isAnswered
-                            ? "bg-emerald-500 hover:bg-emerald-600 text-white border-2 border-emerald-600 shadow-xs"
-                            : "bg-white hover:bg-indigo-100/50 text-indigo-950 border border-indigo-200/70 shadow-xs hover:border-indigo-300 hover:scale-105"
+                            ? "bg-blue-600 hover:bg-blue-700 text-white border-2 border-blue-700 shadow-xs font-black"
+                            : "bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 shadow-xs font-bold"
                       }`}
                     >
                       <span className="text-sm font-black">{idx + 1}</span>
@@ -6683,6 +6853,26 @@ export default function App() {
                           }`}
                         >
                           خطأ (False)
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Clear selection button in yellow for reviewing later */}
+                    {selectedAnswer !== undefined && (
+                      <div className="pt-3 border-t border-slate-100 flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setQuizAnswers((prev) => {
+                              const updated = { ...prev };
+                              delete updated[question.id];
+                              return updated;
+                            });
+                          }}
+                          className="px-3.5 py-1.5 bg-amber-400 hover:bg-amber-500 active:scale-95 text-amber-950 font-black text-xs rounded-xl border border-amber-500 flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                        >
+                          <Eraser className="w-3.5 h-3.5 text-amber-950" />
+                          <span>إلغاء الاختيار للمراجعة لاحقا</span>
                         </button>
                       </div>
                     )}
@@ -6834,279 +7024,292 @@ export default function App() {
     }
 
     // C. Student Completed/Result Feedback Page
-    const passGoal = quizPercentage >= 60;
-    const showDetailedResult = studentQuiz.showResultToStudent !== false;
+    const activeStudent = students.find((s) => s.id === studentSelectedId);
+    const studentName = activeStudent?.name || "طالب اختبار";
+    const studentClass = activeStudent?.gradeClass || studentSelectedGrade;
+    const totalCount = studentQuiz.questions.length;
+
     return (
       <div
-        className="min-h-screen bg-slate-50/70 py-12 px-4 md:px-6 text-slate-800 flex items-center justify-center"
+        className="min-h-screen bg-slate-50 flex flex-col text-slate-800 pb-20 justify-start"
         dir="rtl"
       >
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="bg-white rounded-3xl border border-slate-200/60 shadow-2xl max-w-3xl w-full overflow-hidden"
-        >
-          {/* Top Result Banner */}
-          <div
-            className={`p-8 text-white text-center relative ${
-              !showDetailedResult
-                ? "bg-gradient-to-tr from-indigo-600 to-violet-600"
-                : passGoal
-                  ? "bg-gradient-to-tr from-emerald-600 to-teal-600"
-                  : "bg-gradient-to-tr from-rose-600 to-amber-600"
-            }`}
-          >
-            <div className="w-20 h-20 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white mx-auto shadow-xl mb-4">
-              {!showDetailedResult ? (
-                <CheckCircle2 className="w-11 h-11" />
-              ) : passGoal ? (
-                <Award className="w-11 h-11" />
-              ) : (
-                <HelpCircle className="w-11 h-11" />
-              )}
-            </div>
-
-            <h1 className="text-3xl font-black leading-tight">
-              {!showDetailedResult
-                ? "تم تسليم ورقة الإجابة بنجاح! 📝"
-                : passGoal
-                  ? "تهانينا الحارة! تم اجتياز الاختبار بنجاح"
-                  : "تقرير أداء الاختبار والنتيجة التراكمية"}
-            </h1>
-            <p className="text-white/85 text-xs mt-2 font-sans font-medium">
-              تم تخزين ورصد نتائجك وتسليمها للمعلم فورياً بأمان عبر السحابة
-            </p>
-          </div>
-
-          {/* Core Score Display Cards */}
-          <div className="p-8 space-y-8">
-            {showDetailedResult ? (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {/* Stat 1 Score */}
-                <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100 text-center">
-                  <span className="text-[10px] font-bold text-slate-400 block mb-1">
-                    الدرجة المحرزة
-                  </span>
-                  <span className="text-2xl font-black text-slate-800 font-sans tracking-tight">
-                    {quizScore}{" "}
-                    <span className="text-xs font-bold text-slate-500">
-                      من {quizTotalPoints}
-                    </span>
-                  </span>
-                </div>
-
-                {/* Stat 2 Percentage */}
-                <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100 text-center">
-                  <span className="text-[10px] font-bold text-slate-400 block mb-1">
-                    نسبة النجاح والتحصيل
-                  </span>
-                  <span
-                    className={`text-2xl font-black font-sans tracking-tight ${passGoal ? "text-emerald-600" : "text-rose-600"}`}
-                  >
-                    {quizPercentage}%
-                  </span>
-                </div>
-
-                {/* Stat 3 Status Row */}
-                <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100 text-center flex flex-col items-center justify-center">
-                  <span className="text-[10px] font-bold text-slate-400 block mb-1">
-                    حالة تقديم الورقة
-                  </span>
-                  <div className="pt-0.5">
-                    {passGoal ? (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 border border-emerald-150 text-emerald-700 font-extrabold text-xs rounded-full">
-                        اجتاز بنجاح
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-rose-50 border border-rose-150 text-rose-700 font-extrabold text-xs rounded-full">
-                        يحتاج دعم ومراجعة
-                      </span>
-                    )}
-                  </div>
-                </div>
+        {/* Top Header Sticky Bar with Student & Test Data */}
+        <header className="sticky top-0 z-40 bg-white border-b border-slate-200 shadow-sm px-6 py-4">
+          <div className="max-w-4xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
+            {/* Right: Student details & Quiz title */}
+            <div className="flex items-center gap-3.5">
+              <div className="w-11 h-11 bg-indigo-50 rounded-xl border border-indigo-100 flex items-center justify-center shrink-0">
+                <GraduationCap className="w-6 h-6 text-indigo-600" />
               </div>
-            ) : (
-              <div className="bg-slate-50 border border-indigo-100/80 rounded-2xl p-8 text-center text-slate-700 space-y-4 max-w-xl mx-auto">
-                <div className="w-14 h-14 bg-indigo-50 border border-indigo-100 text-indigo-600 flex items-center justify-center rounded-2xl mx-auto shadow-sm">
-                  <Lock className="w-6 h-6" />
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-black text-slate-800">
+                    {studentName}
+                  </span>
+                  <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md font-bold select-none">
+                    {studentClass}
+                  </span>
                 </div>
-                <h4 className="font-extrabold text-slate-900 text-sm">سرية النتائج مفعلة ومقيدة</h4>
-                <p className="text-xs text-slate-500 leading-relaxed font-medium">
-                  تم رصد إجاباتك وحفظها بنجاح في قاعدة البيانات السحابية للمعلم. بناءً على إعدادات وضوابط هذا الاختبار المحددة مسبقاً من قبل المعلم، فإنه لا يتم عرض الدرجات التفصيلية أو الإجابات الصحيحة والخاطئة مباشرة بعد التسليم لتأمين سرية وجودة الاختبار.
-                </p>
-              </div>
-            )}
-
-            {/* Answer reviewer container */}
-            {showDetailedResult && (
-              <div className="space-y-4">
-              <h3 className="font-extrabold text-slate-800 text-sm">
-                مراجعة كشف الأسئلة والإجابات المعتمدة:
-              </h3>
-
-              <div className="space-y-3.5">
-                {studentQuiz.questions.map((q, idx) => {
-                  const studentAns = quizAnswers[q.id];
-                  const isCorrect =
-                    studentAns !== undefined && studentAns === q.correctAnswer;
-
-                  return (
-                    <div
-                      key={q.id}
-                      className="p-5 rounded-2xl border border-slate-105 bg-slate-50/20 space-y-3"
-                    >
-                      <div className="flex justify-between items-start gap-4 flex-wrap sm:flex-nowrap">
-                        <div className="flex items-center gap-2.5 flex-wrap">
-                          <span className="font-bold text-xs font-sans text-indigo-600">
-                            س{idx + 1}.
-                          </span>
-                          <span className="font-bold text-sm text-slate-800 leading-relaxed">
-                            {q.text}
-                          </span>
-
-                          {/* Green check icon for correct response / Red cross icon for wrong response */}
-                          {isCorrect ? (
-                            <span
-                              className="inline-flex items-center gap-1.5 text-[11px] font-black text-emerald-750 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-0.5"
-                              dir="rtl"
-                            >
-                              <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                              <span>صحيح</span>
-                            </span>
-                          ) : (
-                            <span
-                              className="inline-flex items-center gap-1.5 text-[11px] font-black text-rose-750 bg-rose-50 border border-rose-220 rounded-lg px-2 py-0.5"
-                              dir="rtl"
-                            >
-                              <XCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-                              <span>خطأ</span>
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Grade badge */}
-                        <div className="shrink-0 mr-auto sm:mr-0 pl-1">
-                          {isCorrect ? (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-100 rounded px-2 py-0.5">
-                              + {q.points} د
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-500 bg-rose-50 border border-rose-100 rounded px-2 py-0.5">
-                              0 من {q.points} د
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Display choices highlighting differences without pointing out correct answer */}
-                      {q.type === "multiple_choice" ? (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-1 pr-4">
-                          {(q.options || [])
-                            .map((opt, oIdx) => ({ opt, oIdx }))
-                            .filter(item => {
-                              if (!item.opt) return false;
-                              const t = item.opt.trim();
-                              return t !== '' && 
-                                t !== 'الخيار الثالث' && 
-                                t !== 'الخيار الرابع' && 
-                                t !== 'الخيار الثالث...' && 
-                                t !== 'الخيار الرابع...' &&
-                                t !== 'option 3' &&
-                                t !== 'option 4' &&
-                                t !== 'option3' &&
-                                t !== 'option4';
-                            })
-                            .map(({ opt, oIdx }) => {
-                              const optVal = String(oIdx);
-                              const wasChosenByStudent = studentAns === optVal;
-
-                              let optStyle =
-                                "bg-white border-slate-100 text-slate-500";
-                              let indicator = null;
-
-                              if (wasChosenByStudent) {
-                                // Highlight what they selected neutrally as their selected answer
-                                optStyle =
-                                  "bg-indigo-50 border-indigo-250 text-indigo-850 font-bold";
-                                indicator = (
-                                  <span className="text-[10px] bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-md font-sans font-black">
-                                    إجابتك المختارة
-                                  </span>
-                                );
-                              }
-                              return (
-                                <div
-                                  key={oIdx}
-                                  className={`p-2.5 rounded-xl border flex items-center justify-between gap-3 ${optStyle}`}
-                                >
-                                  <span className="leading-relaxed">{opt}</span>
-                                  {indicator}
-                                </div>
-                              );
-                            })}
-                        </div>
-                      ) : (
-                        <div className="flex gap-4 pt-1 pr-4 text-xs font-bold">
-                          {["true", "false"].map((optVal) => {
-                            const wasChosenByStudent = studentAns === optVal;
-
-                            let optStyle =
-                              "bg-white border-slate-105 text-slate-400";
-                            let badgeLabel =
-                              optVal === "true" ? "صحيح (True)" : "خطأ (False)";
-
-                            if (wasChosenByStudent) {
-                              optStyle =
-                                "bg-indigo-50 border-indigo-250 text-indigo-850 ring-1 ring-indigo-250 font-bold";
-                              badgeLabel = `${badgeLabel} (إجابتك)`;
-                            }
-
-                            return (
-                              <span
-                                key={optVal}
-                                className={`px-4 py-2 rounded-xl border ${optStyle}`}
-                              >
-                                {badgeLabel}
-                              </span>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                <div className="text-[11px] text-slate-400 font-bold mt-1 flex items-center gap-2 flex-wrap">
+                  <span>
+                    الاختبار:{" "}
+                    <strong className="text-slate-700 font-extrabold">
+                      {studentQuiz.title}
+                    </strong>
+                  </span>
+                  <span className="text-slate-200">|</span>
+                  <span>
+                    المادة:{" "}
+                    <strong className="text-indigo-600 font-extrabold">
+                      {studentQuiz.subject}
+                    </strong>
+                  </span>
+                  <span className="text-slate-200">|</span>
+                  <span className="font-sans">عدد الأسئلة: {totalCount}</span>
+                </div>
               </div>
             </div>
-            )}
 
-            {/* Call To action buttons */}
-            <div className="pt-4 flex flex-col sm:flex-row gap-3.5 justify-end">
-              <button
-                type="button"
-                onClick={() => {
-                  window.close();
-                  setTimeout(() => {
-                    triggerToast("إذا لم يغلق التبويب تلقائياً، يرجى إغلاقه يدوياً من المتصفح ❌", "info");
-                  }, 400);
-                }}
-                className="px-5 py-3 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl font-black text-xs text-rose-700 flex items-center justify-center gap-2 transition cursor-pointer"
-              >
-                <XCircle className="w-4 h-4" />
-                <span>إغلاق المتصفح</span>
-              </button>
-
-
+            {/* Left: Score Badge and Return to Home Button */}
+            <div className="flex flex-wrap items-center justify-start md:justify-end gap-3 shrink-0">
+              <div className="flex items-center gap-2 px-3.5 py-2 bg-indigo-50 rounded-xl border border-indigo-100 font-bold text-xs">
+                <span className="text-slate-500 font-medium">النتيجة:</span>
+                <span className="font-sans font-black text-indigo-700">
+                  {quizScore} من {quizTotalPoints} ({quizPercentage}%)
+                </span>
+              </div>
 
               <button
                 type="button"
                 onClick={resetActiveQuizState}
-                className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition cursor-pointer shadow-sm shadow-indigo-155"
+                className="px-3.5 py-2 bg-slate-150 hover:bg-slate-200 text-slate-700 text-xs font-black rounded-xl border border-slate-200/50 flex items-center gap-2 transition cursor-pointer"
               >
-                <span>العودة لصفحة البوابة الرئيسية</span>
+                <Home className="w-4 h-4 text-indigo-600" />
+                <span>العودة للرئيسية</span>
               </button>
             </div>
           </div>
-        </motion.div>
+        </header>
+
+        {/* Main Result Content */}
+        <main className="max-w-4xl mx-auto w-full p-4 md:p-6 space-y-6 flex-1">
+          {/* Question Index Strip (Square rounded badges like test view) */}
+          <div className="bg-gradient-to-br from-indigo-50/90 via-slate-50 to-indigo-50/40 rounded-2xl border-2 border-indigo-200 shadow-md p-5 space-y-4">
+            <div className="flex justify-between items-center text-xs text-indigo-950 font-bold select-none">
+              <span className="flex items-center gap-1.5">
+                <ClipboardList className="w-4 h-4 text-indigo-600" />
+                قائمة الأسئلة (اضغط على رقم السؤال للتنقل السريع):
+              </span>
+              <span className="font-sans font-black text-indigo-800 bg-indigo-100/80 px-2.5 py-1 rounded-full border border-indigo-200">
+                السؤال {reviewResultQuestionIdx + 1} من {totalCount}
+              </span>
+            </div>
+
+            <div className="flex flex-wrap gap-2.5 pt-1">
+              {studentQuiz.questions.map((q, idx) => {
+                const isCurrent = idx === reviewResultQuestionIdx;
+                const studentAns = quizAnswers[q.id];
+                const isAnswered = studentAns !== undefined;
+                const isCorrect = isAnswered && studentAns === q.correctAnswer;
+
+                return (
+                  <button
+                    key={q.id}
+                    type="button"
+                    onClick={() => setReviewResultQuestionIdx(idx)}
+                    className={`w-11 h-11 rounded-xl font-mono text-xs font-black flex flex-col items-center justify-center relative transition-all duration-150 cursor-pointer ${
+                      isCurrent
+                        ? isCorrect
+                          ? "bg-emerald-500 text-white ring-4 ring-emerald-300 scale-110 z-10 border-2 border-emerald-700 shadow-md font-black"
+                          : !isAnswered
+                            ? "bg-amber-400 text-slate-900 ring-4 ring-amber-300 scale-110 z-10 border-2 border-amber-600 shadow-md font-black"
+                            : "bg-red-500 text-white ring-4 ring-red-300 scale-110 z-10 border-2 border-red-700 shadow-md font-black"
+                        : isCorrect
+                          ? "bg-emerald-500 hover:bg-emerald-600 text-white border-2 border-emerald-600 shadow-xs font-black"
+                          : !isAnswered
+                            ? "bg-amber-400 hover:bg-amber-500 text-slate-900 border-2 border-amber-500 shadow-xs font-black"
+                            : "bg-red-500 hover:bg-red-600 text-white border-2 border-red-600 shadow-xs font-black"
+                    }`}
+                  >
+                    <span className="text-sm font-black">{idx + 1}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Question Display Card (Styled exactly like test questions) */}
+          {(() => {
+            const currentQ =
+              studentQuiz.questions[reviewResultQuestionIdx] ||
+              studentQuiz.questions[0];
+            if (!currentQ) return null;
+            const studentAns = quizAnswers[currentQ.id];
+            const isAnswered = studentAns !== undefined;
+            const isCorrect = isAnswered && studentAns === currentQ.correctAnswer;
+
+            return (
+              <div className="space-y-4">
+                <motion.div
+                  key={currentQ.id}
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className={`bg-white rounded-2xl border-2 p-6 space-y-4 shadow-sm transition-all ${
+                    isCorrect
+                      ? "border-emerald-500 bg-emerald-50/10"
+                      : !isAnswered
+                        ? "border-amber-400 bg-amber-50/10"
+                        : "border-red-500 bg-red-50/10"
+                  }`}
+                >
+                  {/* Question Title Header */}
+                  <div className="flex justify-between items-start gap-3">
+                    <div className="flex gap-2.5 items-start">
+                      <span className="w-7 h-7 bg-indigo-50 border border-indigo-100 rounded-lg text-indigo-700 flex items-center justify-center font-bold text-xs shrink-0 font-sans mt-0.5">
+                        {reviewResultQuestionIdx + 1}
+                      </span>
+                      <h4 className="font-extrabold text-slate-800 text-sm md:text-base leading-relaxed flex items-center gap-2">
+                        <span>{currentQ.text}</span>
+                        <span className="text-base shrink-0">
+                          {isCorrect ? "✔️" : !isAnswered ? "⚠️" : "❌"}
+                        </span>
+                      </h4>
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-500 px-2 py-0.5 bg-slate-50 border border-slate-200 rounded-md font-sans shrink-0">
+                      {currentQ.points} نقاط
+                    </span>
+                  </div>
+
+                  {/* Options Display */}
+                  {currentQ.type === "multiple_choice" ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                      {(currentQ.options || [])
+                        .map((option, oIdx) => ({ option, oIdx }))
+                        .filter((item) => {
+                          if (!item.option) return false;
+                          const t = item.option.trim();
+                          return (
+                            t !== "" &&
+                            t !== "الخيار الثالث" &&
+                            t !== "الخيار الرابع" &&
+                            t !== "الخيار الثالث..." &&
+                            t !== "الخيار الرابع..." &&
+                            t !== "option 3" &&
+                            t !== "option 4" &&
+                            t !== "option3" &&
+                            t !== "option4"
+                          );
+                        })
+                        .map(({ option, oIdx }) => {
+                          const optVal = String(oIdx);
+                          const isSelectedByStudent = studentAns === optVal;
+
+                          return (
+                            <div
+                              key={oIdx}
+                              className={`p-3.5 rounded-xl border text-right text-xs transition-all duration-155 flex items-center justify-between font-bold ${
+                                isSelectedByStudent
+                                  ? "bg-indigo-50 border-indigo-300 text-indigo-900 ring-1 ring-indigo-300 font-extrabold"
+                                  : "bg-white border-slate-200 text-slate-600"
+                              }`}
+                            >
+                              <span className="flex-1 leading-relaxed">
+                                {option}
+                              </span>
+                              <div
+                                className={`w-4 h-4 rounded-full border shrink-0 flex items-center justify-center transition-all ${
+                                  isSelectedByStudent
+                                    ? "border-indigo-600 bg-indigo-600"
+                                    : "border-slate-300 bg-white"
+                                }`}
+                              >
+                                {isSelectedByStudent && (
+                                  <div className="w-1.5 h-1.5 rounded-full bg-white" />
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  ) : (
+                    <div className="flex flex-col sm:flex-row gap-4 pt-2">
+                      <div
+                        className={`flex-1 p-3.5 rounded-xl border text-center text-xs font-bold transition-all flex items-center justify-center ${
+                          studentAns === "true"
+                            ? "bg-indigo-50 border-indigo-300 text-indigo-900 ring-1 ring-indigo-300 font-extrabold"
+                            : "bg-white border-slate-200 text-slate-600"
+                        }`}
+                      >
+                        صحيح (True)
+                      </div>
+                      <div
+                        className={`flex-1 p-3.5 rounded-xl border text-center text-xs font-bold transition-all flex items-center justify-center ${
+                          studentAns === "false"
+                            ? "bg-indigo-50 border-indigo-300 text-indigo-900 ring-1 ring-indigo-300 font-extrabold"
+                            : "bg-white border-slate-200 text-slate-600"
+                        }`}
+                      >
+                        خطأ (False)
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Message for Skipped Questions */}
+                  {!isAnswered && (
+                    <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-xs font-bold flex items-center gap-2 justify-center">
+                      <span>⚠️ تم تركه فارغاً</span>
+                    </div>
+                  )}
+                </motion.div>
+
+                {/* Navigation Buttons Below Question */}
+                <div className="flex items-center justify-between gap-4 pt-2">
+                  <button
+                    type="button"
+                    disabled={reviewResultQuestionIdx === 0}
+                    onClick={() =>
+                      setReviewResultQuestionIdx((prev) => Math.max(0, prev - 1))
+                    }
+                    className="flex items-center gap-2 px-5 py-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 text-xs font-black transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed select-none"
+                  >
+                    <ChevronRight className="w-4 h-4 shrink-0" />
+                    <span>السؤال السابق</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={
+                      reviewResultQuestionIdx === studentQuiz.questions.length - 1
+                    }
+                    onClick={() =>
+                      setReviewResultQuestionIdx((prev) =>
+                        Math.min(studentQuiz.questions.length - 1, prev + 1)
+                      )
+                    }
+                    className="flex items-center gap-2 px-5 py-3 rounded-xl border border-indigo-150 bg-indigo-50/50 hover:bg-indigo-50 text-indigo-700 text-xs font-black transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed select-none"
+                  >
+                    <span>السؤال التالي</span>
+                    <ChevronLeft className="w-4 h-4 shrink-0" />
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Bottom Return to Home Button */}
+          <div className="pt-4">
+            <button
+              type="button"
+              onClick={resetActiveQuizState}
+              className="w-full bg-blue-700 hover:bg-blue-800 active:scale-[0.99] text-white font-black text-sm py-3.5 px-6 rounded-xl shadow-md transition-all cursor-pointer text-center flex items-center justify-center gap-2"
+            >
+              <Home className="w-4 h-4" />
+              <span>العودة للرئيسية</span>
+            </button>
+          </div>
+        </main>
       </div>
     );
   }
@@ -7360,7 +7563,8 @@ export default function App() {
       </AnimatePresence>
 
       {/* Modern Right side menu for teacher (similar structure to Student portal) */}
-      <aside className="w-full md:w-64 bg-white border-l border-slate-200/80 text-slate-800 shrink-0 flex flex-col justify-between p-5 md:sticky md:top-0 md:h-screen relative overflow-y-auto overflow-x-hidden shadow-xs">
+      {!(isCurriculumAdminFullScreen && activeTab === "curriculum_review_admin") && (
+        <aside className="w-full md:w-64 bg-white border-l border-slate-200/80 text-slate-800 shrink-0 flex flex-col justify-between p-5 md:sticky md:top-0 md:h-screen relative overflow-y-auto overflow-x-hidden shadow-xs">
         {/* Subtle background glow */}
         <div className="absolute top-0 left-0 w-32 h-32 bg-blue-500/5 rounded-full blur-3xl pointer-events-none" />
         <div className="absolute bottom-0 right-0 w-32 h-32 bg-purple-500/5 rounded-full blur-2xl pointer-events-none" />
@@ -7393,7 +7597,7 @@ export default function App() {
           {/* Navigation Tabs */}
           <nav className="space-y-1.5">
             {/* Grouped Games & Comprehensive Review Section */}
-            <div className="p-1.5 bg-slate-50/80 border border-slate-200/90 rounded-2xl space-y-1 shadow-2xs">
+            <div className="p-1.5 bg-slate-100/90 border border-slate-200 rounded-2xl space-y-1 shadow-2xs">
               <button
                 type="button"
                 onClick={() => setActiveTab("curriculum_review_admin")}
@@ -7422,7 +7626,7 @@ export default function App() {
             </div>
 
             {/* Grouped Exams & Results Section */}
-            <div className="p-1.5 bg-slate-50/80 border border-slate-200/90 rounded-2xl space-y-1 shadow-2xs">
+            <div className="p-1.5 bg-slate-100/90 border border-slate-200 rounded-2xl space-y-1 shadow-2xs">
               <button
                 type="button"
                 onClick={() => setActiveTab("dashboard")}
@@ -7473,31 +7677,49 @@ export default function App() {
               }`}
             >
               <Users className="w-4 h-4 shrink-0" />
-              <span>إضافة الطلاب \ الفصول</span>
+              <span>إضافة الطلاب/الفصول</span>
             </button>
 
 
 
             {currentUser && currentUser.email?.trim().toLowerCase() === "majedsoft@gmail.com" && (
-              <button
-                type="button"
-                onClick={() => {
-                  setBankPortalActive(true);
-                  setStudentPortalActive(false);
-                  const url = new URL(window.location.href);
-                  url.searchParams.set("portal", "bank");
-                  url.searchParams.delete("teacher");
-                  window.history.pushState({}, "", url.toString());
-                  triggerToast("تم الانتقال لبوابة بنك الأسئلة المستقلة السحابية ⚡", "success");
-                }}
-                className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-xs font-black transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800"
-              >
-                <div className="flex items-center gap-3">
-                  <Database className="w-4 h-4 shrink-0 text-emerald-600 animate-pulse" />
-                  <span>بنك الأسئلة المستقل 🔗</span>
-                </div>
-                <span className="text-[9px] font-sans font-bold bg-emerald-200/60 text-emerald-800 px-1.5 py-0.5 rounded-md shrink-0">بوابة مستقلة</span>
-              </button>
+              <div className="space-y-1.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("registered_teachers")}
+                  className={`w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-xs font-black transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer ${
+                    activeTab === "registered_teachers"
+                      ? "bg-gradient-to-r from-indigo-600 to-[#1e3a8a] text-white shadow-lg"
+                      : "bg-indigo-50/70 hover:bg-indigo-100/90 text-indigo-950 border border-indigo-200/80 font-bold"
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <UserCheck className="w-4 h-4 shrink-0 text-indigo-600" />
+                    <span>إدارة المعلمين المسجلين</span>
+                  </div>
+                  <span className="text-[9px] font-sans font-bold bg-indigo-200/70 text-indigo-900 px-1.5 py-0.5 rounded-md shrink-0">المسؤول</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBankPortalActive(true);
+                    setStudentPortalActive(false);
+                    const url = new URL(window.location.href);
+                    url.searchParams.set("portal", "bank");
+                    url.searchParams.delete("teacher");
+                    window.history.pushState({}, "", url.toString());
+                    triggerToast("تم الانتقال لبوابة بنك الأسئلة المستقلة السحابية ⚡", "success");
+                  }}
+                  className="w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-xs font-black transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800"
+                >
+                  <div className="flex items-center gap-3">
+                    <Database className="w-4 h-4 shrink-0 text-emerald-600 animate-pulse" />
+                    <span>بنك الأسئلة المستقل 🔗</span>
+                  </div>
+                  <span className="text-[9px] font-sans font-bold bg-emerald-200/60 text-emerald-800 px-1.5 py-0.5 rounded-md shrink-0">بوابة مستقلة</span>
+                </button>
+              </div>
             )}
           </nav>
 
@@ -7576,10 +7798,11 @@ export default function App() {
           </button>
         </div>
       </aside>
+      )}
 
       {/* --- MAIN BODY WORKSPACE --- */}
       <div className="flex-1 flex flex-col min-h-screen overflow-x-hidden">
-        <main className="flex-1 flex flex-col p-6 md:p-10 max-w-7xl mx-auto w-full overflow-x-hidden">
+        <main className={`flex-1 flex flex-col ${isCurriculumAdminFullScreen && activeTab === "curriculum_review_admin" ? "p-3 md:p-6 max-w-none w-full" : "p-6 md:p-10 max-w-7xl mx-auto w-full"} overflow-x-hidden`}>
           {/* UPPER STATUS BAR */}
           {activeTab === "builder" ? (
             <header className="flex flex-col sm:flex-row justify-end items-center gap-4 mb-8">
@@ -7877,10 +8100,14 @@ export default function App() {
                               </div>
 
                               {/* Stats line with bullets exactly like screenshot */}
-                              <div className="text-[10px] font-extrabold text-[#475569] font-sans flex items-center flex-wrap gap-1 pt-0.5">
+                              <div className="text-[11px] font-extrabold text-[#475569] font-sans flex items-center flex-wrap gap-1.5 pt-0.5">
                                 <span>{quiz.questions.length || 0} سؤال</span>
                                 <span className="text-slate-300">•</span>
                                 <span>{totalPoints} درجة</span>
+                                <span className="text-slate-300">•</span>
+                                <span className="text-indigo-700 font-extrabold text-xs">
+                                  {quiz.durationMinutes === 9999 ? "مفتوح (بدون وقت)" : `${quiz.durationMinutes || 15} دقيقة`}
+                                </span>
                                 <span className="text-slate-300">•</span>
                                 <span>{quiz.dateCreated}</span>
                               </div>
@@ -8006,10 +8233,14 @@ export default function App() {
                               </div>
 
                               {/* Question count, marks, date created indicators */}
-                              <div className="text-[10px] font-extrabold text-[#475569] flex items-center gap-1">
+                              <div className="text-[11px] font-extrabold text-[#475569] flex items-center gap-1.5">
                                 <span>{quiz.questions.length || 0} سؤال</span>
                                 <span className="text-slate-300">•</span>
                                 <span>{totalPoints} درجة</span>
+                                <span className="text-slate-300">•</span>
+                                <span className="text-indigo-700 font-extrabold text-xs">
+                                  {quiz.durationMinutes === 9999 ? "مفتوح (بدون وقت)" : `${quiz.durationMinutes || 15} دقيقة`}
+                                </span>
                                 <span className="text-slate-300">•</span>
                                 <span>{quiz.dateCreated}</span>
                               </div>
@@ -9926,29 +10157,31 @@ export default function App() {
                   >
                     {/* TWO-STEP SELECTION FLOW - CARD CHIPS EXACTLY LIKE THE REQUESTED IMAGE */}
                     <div className="bg-slate-50 rounded-2xl p-4 md:p-5 flex flex-col gap-4 border border-slate-200 shadow-3xs select-none font-sans w-full">
-                      {/* Top Header Row with Title and Manage/Edit Button */}
-                      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 w-full border-b border-slate-200/60 pb-3">
-                        <div className="flex items-center gap-2">
-                          <Layers className="w-4 h-4 text-indigo-600" />
-                          <span className="text-xs font-black text-slate-700">تحديد الصف والفصل الدراسي:</span>
+                      {/* Top Header Row with Title and Manage/Edit Button (Shown only in Students management tab) */}
+                      {activeTab === "students" && (
+                        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 w-full border-b border-slate-200/60 pb-3">
+                          <div className="flex items-center gap-2">
+                            <Layers className="w-4 h-4 text-indigo-600" />
+                            <span className="text-xs font-black text-slate-700">تحديد الصف والفصل الدراسي:</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              ensureSeededGradesAndSemesters();
+                              setSelectedManageGrade(null);
+                              setSelectedSemesterNumbers([]);
+                              setNewGradeInput("");
+                              setShowGradesSemestersModal(true);
+                            }}
+                            className="px-3.5 py-2 flex items-center gap-2 rounded-xl text-white bg-amber-500 hover:bg-amber-600 border border-amber-400 hover:border-amber-500 active:scale-95 transition-all duration-200 cursor-pointer shadow-sm shadow-amber-200 shrink-0 text-xs font-black"
+                            title="إضافة / تعديل الصفوف والفصول"
+                            id="manage-semesters-top-btn"
+                          >
+                            <Settings className="w-3.5 h-3.5 md:w-4 md:h-4 text-white animate-spin-hover" />
+                            <span>إضافة / تعديل الصفوف والفصول</span>
+                          </button>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            ensureSeededGradesAndSemesters();
-                            setSelectedManageGrade(null);
-                            setSelectedSemesterNumbers([]);
-                            setNewGradeInput("");
-                            setShowGradesSemestersModal(true);
-                          }}
-                          className="px-3.5 py-2 flex items-center gap-2 rounded-xl text-white bg-amber-500 hover:bg-amber-600 border border-amber-400 hover:border-amber-500 active:scale-95 transition-all duration-200 cursor-pointer shadow-sm shadow-amber-200 shrink-0 text-xs font-black"
-                          title="إضافة / تعديل الصفوف والفصول"
-                          id="manage-semesters-top-btn"
-                        >
-                          <Settings className="w-3.5 h-3.5 md:w-4 md:h-4 text-white animate-spin-hover" />
-                          <span>إضافة / تعديل الصفوف والفصول</span>
-                        </button>
-                      </div>
+                      )}
 
                       {/* First row: Grade selection */}
                       <div className="flex flex-wrap justify-center items-center gap-2.5 w-full">
@@ -10022,10 +10255,8 @@ export default function App() {
 
                                   {/* Left check icon */}
                                   <div className="w-3.5 h-3.5 flex items-center justify-center shrink-0">
-                                    {isGradeSelected ? (
+                                    {isGradeSelected && (
                                       <Check className="w-3.5 h-3.5 text-white stroke-[3]" />
-                                    ) : (
-                                      <span className="text-xs text-indigo-400 font-bold">+</span>
                                     )}
                                   </div>
                                 </div>
@@ -10115,10 +10346,8 @@ export default function App() {
                                   }`}
                                 >
                                   <span>{semesterNum}</span>
-                                  {isSemSelected ? (
+                                  {isSemSelected && (
                                     <Check className="w-3.5 h-3.5 text-white stroke-[3]" />
-                                  ) : (
-                                    <span className="text-xs text-indigo-400 font-bold">+</span>
                                   )}
                                 </div>
 
@@ -11079,10 +11308,8 @@ export default function App() {
                                     }`}
                                   >
                                     <span>{g}</span>
-                                    {isGradeSelected ? (
+                                    {isGradeSelected && (
                                       <Check className="w-3.5 h-3.5 text-white stroke-[3]" />
-                                    ) : (
-                                      <span className="text-xs text-indigo-400 font-bold">+</span>
                                     )}
                                   </div>
                                   <div className="px-2 py-1 bg-rose-50/80 border-t border-rose-100/80 flex items-center justify-center gap-1 text-center">
@@ -11126,10 +11353,8 @@ export default function App() {
                                         }`}
                                       >
                                         <span>{sem}</span>
-                                        {isSemSelected ? (
+                                        {isSemSelected && (
                                           <Check className="w-3.5 h-3.5 text-white stroke-[3]" />
-                                        ) : (
-                                          <span className="text-xs text-indigo-400 font-bold">+</span>
                                         )}
                                       </div>
                                       <div className="px-2 py-1 bg-rose-50/80 border-t border-rose-100/80 flex items-center justify-center gap-1 text-center">
@@ -11473,6 +11698,23 @@ export default function App() {
                   bankQuestions={bankQuestions}
                   students={students}
                   grades={grades}
+                  triggerToast={triggerToast}
+                  isFullScreenResults={isCurriculumAdminFullScreen}
+                  onToggleFullScreen={(isFull) => setIsCurriculumAdminFullScreen(isFull)}
+                />
+              </motion.div>
+            )}
+
+            {activeTab === "registered_teachers" && (
+              <motion.div
+                key="registered-teachers-tab"
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -15 }}
+                transition={{ duration: 0.25 }}
+              >
+                <RegisteredTeachersTab
+                  currentUser={currentUser}
                   triggerToast={triggerToast}
                 />
               </motion.div>
@@ -13228,11 +13470,10 @@ export default function App() {
                   <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
                     <div>
                       <h3 className="font-extrabold text-slate-800 text-sm">
-                        تخصيص وإدارة الخيارات الأكاديمية
+                        إدارة صفوف وفصول المدرسة
                       </h3>
                       <p className="text-[11px] text-slate-400 mt-0.5">
-                        أضف، احذف، وعدّل الصفوف والفصول الدراسية لتتناسب مع خطتك
-                        الأكاديمية المحددة.
+                        إضافة وتعديل وحذف الفصول الأكاديمية والمستويات الدراسية في المدرسة.
                       </p>
                     </div>
                     <button
@@ -13260,32 +13501,53 @@ export default function App() {
                     <div className="p-6 overflow-y-auto space-y-6 flex-1">
                       <div className="space-y-4 pt-2">
                         <div className="space-y-4 pt-4 md:pt-0">
-                          <div className="flex items-center justify-between">
+                          {/* Batch Add Grade Container (Multi-line / Excel Paste) */}
+                          <div className="bg-slate-50/90 border border-slate-200/90 rounded-2xl p-4 space-y-3 shadow-3xs">
+                            <div className="flex items-center justify-between flex-wrap gap-2">
+                              <label className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
+                                <span>إضافة صفوف دراسية (كل صف في سطر):</span>
+                              </label>
+                              <span className="text-[10.5px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200/80 px-2.5 py-1 rounded-xl flex items-center gap-1 shadow-2xs">
+                                <span>سطر لكل صف او يمكنك نسخ ولصق من ملف اكسل</span>
+                              </span>
+                            </div>
+
+                            <textarea
+                              rows={3}
+                              placeholder={`مثال:\nالصف الأول الثانوي\nالصف الثاني الثانوي\nالصف الثالث الثانوي`}
+                              value={newGradeInput}
+                              onChange={(e) => setNewGradeInput(e.target.value)}
+                              onKeyDown={(e) => {
+                                if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                                  e.preventDefault();
+                                  handleAddGrade();
+                                }
+                              }}
+                              className="w-full bg-white border border-slate-200 rounded-xl p-3 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 font-sans resize-none placeholder:text-slate-400 leading-relaxed"
+                            />
+
+                            <div className="flex items-center justify-between flex-wrap gap-2 pt-0.5">
+                              <button
+                                type="button"
+                                onClick={handleAddGrade}
+                                className="bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-black text-xs px-4 py-2 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+                              >
+                                <Plus className="w-4 h-4" />
+                                <span>إضافة الصفوف</span>
+                              </button>
+                              <span className="text-[11px] font-medium text-slate-400">
+                                ملاحظة: اضغط Ctrl + Enter أو زر الإضافة للحفظ
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between pt-2">
                             <h4 className="font-bold text-xs text-indigo-600 flex items-center gap-1.5 pb-2">
                               <Layers className="w-4 h-4" />
                               <span>
                                 الصفوف الدراسية المتاحة ({gradesList.length})
                               </span>
                             </h4>
-                          </div>
-
-                          {/* Add Grade Form */}
-                          <div className="flex gap-2">
-                            <input
-                              type="text"
-                              placeholder="مثال: الصف الثاني عشر..."
-                              value={newGradeInput}
-                              onChange={(e) => setNewGradeInput(e.target.value)}
-                              className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                            />
-                            <button
-                              type="button"
-                              onClick={handleAddGrade}
-                              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-3 py-2 rounded-xl transition-all flex items-center gap-1 cursor-pointer"
-                            >
-                              <Plus className="w-3.5 h-3.5" />
-                              <span>إضافة صف</span>
-                            </button>
                           </div>
 
                           {/* List */}

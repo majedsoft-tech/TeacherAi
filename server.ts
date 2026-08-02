@@ -1,10 +1,13 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import mammoth from "mammoth";
 import * as XLSX from "xlsx";
+import { initializeApp, getApps } from "firebase/app";
+import { getFirestore, doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
 
 dotenv.config();
 
@@ -26,6 +29,27 @@ function getGeminiClient(): GoogleGenAI {
     });
   }
   return aiClient;
+}
+
+// Lazy/Safe Server Firestore Instance
+let firestoreDbInstance: any = null;
+function getServerDb() {
+  if (!firestoreDbInstance) {
+    try {
+      const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+      if (fs.existsSync(configPath)) {
+        const firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+        const existingApps = getApps();
+        const appInstance = existingApps.length > 0 
+          ? existingApps[0] 
+          : initializeApp(firebaseConfig, "server-app");
+        firestoreDbInstance = getFirestore(appInstance, firebaseConfig.firestoreDatabaseId || "(default)");
+      }
+    } catch (err) {
+      console.error("Error initializing server Firestore:", err);
+    }
+  }
+  return firestoreDbInstance;
 }
 
 const app = express();
@@ -252,7 +276,9 @@ ${optionsStr ? `- الخيارات المتاحة:\n${optionsStr}` : ""}
 اكتب تلميحاً وإرشاداً تربوياً ذكياً ومبسطاً للغاية يساعد الطالب على التفكير الصحيح وفهم فكرة السؤال وتوجيهه للحل، دون إعطائه الإجابة المباشرة أو الحل الجاهز بشكل صريح.
 اجعل الأسلوب مشجعاً ومحفزاً باللغة العربية الفصحى البسيطة في 2 إلى 3 جمل قصيرة وواضحة.`;
 
-      const candidateModels = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
+      const candidateModels = [
+        "gemini-3.6-flash"
+      ];
       let hintText = "";
 
       for (const modelName of candidateModels) {
@@ -286,6 +312,159 @@ ${optionsStr ? `- الخيارات المتاحة:\n${optionsStr}` : ""}
         success: true,
         hint: "تذكر القواعد والتعاريف الأساسية في هذا الدرس وحاول تحليل المعطيات للوصول للحل الصحيح."
       });
+    }
+  });
+
+  // Secure Student Quiz Fetching Endpoint (Server-Side Answer Stripping)
+  app.get("/api/student/get-quiz/:id", async (req, res) => {
+    try {
+      const quizId = req.params.id;
+      if (!quizId) {
+        return res.status(400).json({ error: "معرّف الاختبار مفقود" });
+      }
+
+      const firestoreDb = getServerDb();
+      if (!firestoreDb) {
+        return res.status(500).json({ error: "قاعدة البيانات غير متصلة بالخادم" });
+      }
+
+      const quizDoc = await getDoc(doc(firestoreDb, "quizzes", quizId));
+      if (!quizDoc.exists()) {
+        return res.status(404).json({ error: "لم يتم العثور على الاختبار المطلوب" });
+      }
+
+      const quizData = quizDoc.data() as any;
+
+      // Strip correctAnswer from questions before sending to student client
+      const sanitizedQuestions = (quizData.questions || []).map((q: any) => {
+        const { correctAnswer, ...safeQuestion } = q;
+        return safeQuestion;
+      });
+
+      const sanitizedQuiz = {
+        ...quizData,
+        id: quizDoc.id,
+        questions: sanitizedQuestions,
+      };
+
+      return res.json({ success: true, quiz: sanitizedQuiz });
+    } catch (error: any) {
+      console.error("Error in /api/student/get-quiz:", error);
+      return res.status(500).json({ error: "فشل جلب بيانات الاختبار بشكل آمن من الخادم" });
+    }
+  });
+
+  // Secure Student Quiz Submission & Evaluation Endpoint
+  app.post("/api/student/submit-quiz", async (req, res) => {
+    try {
+      const { quizId, answers, studentInfo } = req.body;
+      if (!quizId || !answers || !studentInfo) {
+        return res.status(400).json({ error: "بيانات تسليم الاختبار غير مكتملة" });
+      }
+
+      const firestoreDb = getServerDb();
+      if (!firestoreDb) {
+        return res.status(500).json({ error: "قاعدة البيانات غير متصلة بالخادم" });
+      }
+
+      const quizDoc = await getDoc(doc(firestoreDb, "quizzes", quizId));
+      if (!quizDoc.exists()) {
+        return res.status(404).json({ error: "لم يتم العثور على الاختبار المطلوب للتقييم" });
+      }
+
+      const quizData = quizDoc.data() as any;
+      const questions: any[] = quizData.questions || [];
+
+      let earnedPoints = 0;
+      let totalPoints = 0;
+      const detailedQuestionResults: any[] = [];
+
+      questions.forEach((q: any) => {
+        const qPoints = typeof q.points === "number" ? q.points : 1;
+        totalPoints += qPoints;
+        const studentAns = answers[q.id];
+        const isCorrect = studentAns !== undefined && String(studentAns).trim() === String(q.correctAnswer).trim();
+
+        if (isCorrect) {
+          earnedPoints += qPoints;
+        }
+
+        detailedQuestionResults.push({
+          questionId: q.id,
+          text: q.text,
+          type: q.type,
+          options: q.options,
+          points: qPoints,
+          isCorrect,
+          studentAnswer: studentAns ?? null,
+          correctAnswer: quizData.showResultToStudent !== false ? q.correctAnswer : undefined,
+        });
+      });
+
+      const pct = Math.round((earnedPoints / (totalPoints || 1)) * 100);
+      const passed = pct >= 60;
+
+      const gRecord = {
+        quizTitle: quizData.title || "اختبار مدرسي",
+        score: earnedPoints,
+        maxScore: totalPoints,
+        date: new Date().toISOString().split("T")[0],
+        passed,
+      };
+
+      const targetStudentId = studentInfo.studentId || `s-${Date.now()}`;
+      const teacherUid = quizData.teacherId || "";
+
+      if (studentInfo.isNewStudent || !studentInfo.studentId) {
+        const newStudentObj = {
+          id: targetStudentId,
+          name: studentInfo.name,
+          gradeClass: studentInfo.gradeClass || `${studentInfo.grade || ""} - ${studentInfo.semester || ""}`,
+          grade: studentInfo.grade || "",
+          semester: studentInfo.semester || "",
+          email: studentInfo.email || `${Date.now()}@student.edu`,
+          averageScore: pct,
+          status: pct >= 90 ? "excellent" : pct >= 75 ? "good" : pct >= 60 ? "average" : "needs_improvement",
+          detailedGrades: [gRecord],
+          teacherId: teacherUid,
+        };
+
+        await setDoc(doc(firestoreDb, "students", targetStudentId), newStudentObj);
+      } else {
+        const studentDocRef = doc(firestoreDb, "students", targetStudentId);
+        const sDoc = await getDoc(studentDocRef);
+        if (sDoc.exists()) {
+          const sData = sDoc.data() as any;
+          const updatedGrades = [...(sData.detailedGrades || []), gRecord];
+          let sumEarned = 0;
+          let sumMax = 0;
+          updatedGrades.forEach((g: any) => {
+            sumEarned += g.score || 0;
+            sumMax += g.maxScore || 0;
+          });
+          const newAvg = Math.round((sumEarned / (sumMax || 1)) * 100);
+          const newStatus = newAvg >= 90 ? "excellent" : newAvg >= 75 ? "good" : newAvg >= 60 ? "average" : "needs_improvement";
+
+          await updateDoc(studentDocRef, {
+            detailedGrades: updatedGrades,
+            averageScore: newAvg,
+            status: newStatus,
+          });
+        }
+      }
+
+      return res.json({
+        success: true,
+        score: earnedPoints,
+        totalPoints,
+        percentage: pct,
+        passed,
+        targetStudentId,
+        detailedQuestionResults: quizData.showResultToStudent !== false ? detailedQuestionResults : [],
+      });
+    } catch (error: any) {
+      console.error("Error in /api/student/submit-quiz:", error);
+      return res.status(500).json({ error: "فشل تسليم وتقييم الاختبار في الخادم" });
     }
   });
 

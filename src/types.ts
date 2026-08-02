@@ -87,7 +87,7 @@ export interface ReviewChallenge {
   status: 'active' | 'completed';
   teacherId: string;
   createdAt: string;
-  gameType: 'time_attack' | 'space_invaders' | 'quiz_game' | 'car_racing' | 'maze_chase' | 'wayground_arena';
+  gameType: 'time_attack' | 'space_invaders' | 'quiz_game' | 'car_racing' | 'wayground_arena';
   liveState?: 'waiting' | 'playing' | 'podium';
   podiumAt?: string;
 }

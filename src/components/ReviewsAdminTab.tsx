@@ -37,6 +37,7 @@ import { isTrueFalseQuestion, normalizeQuestion } from "../utils/questionUtils";
 import { db, handleFirestoreError, OperationType } from "../firebase";
 import { addDoc, collection, doc, updateDoc, deleteDoc, writeBatch, getDocs, query, where, onSnapshot, deleteField, setDoc } from "firebase/firestore";
 import { UnitLessonMultiSelect } from "./UnitLessonMultiSelect";
+import StudentReviewsTab, { DEFAULT_DEMO_QUESTIONS } from "./StudentReviewsTab";
 
 class AdminSoundSynth {
   private ctx: AudioContext | null = null;
@@ -705,13 +706,6 @@ export const FIXED_GAMES = [
     desc: "مواجهة حية ومباشرة بين كافة الطلاب بنظام خيارات الألوان وسرعة الإجابة"
   },
   {
-    gameType: "maze_chase",
-    id: "fixed_game_maze_chase",
-    title: "مطاردة المتاهة 🌀",
-    badge: "🌀 مطاردة المتاهة",
-    desc: "التحرك بالأسهم داخل المتاهة للوصول لغرفة الإجابة الصحيحة وتفادي الوحوش"
-  },
-  {
     gameType: "space_invaders",
     id: "fixed_game_space_invaders",
     title: "حرب الفضاء - المركبة الفضائية 🚀",
@@ -737,13 +731,43 @@ export default function ReviewsAdminTab({
   triggerConfirm
 }: ReviewsAdminTabProps) {
   const [activeSubTab, setActiveSubTab] = useState<"list" | "create" | "leaderboard">("list");
+  const [teacherDemoState, setTeacherDemoState] = useState<{ gameType: string; gameTitle: string; challenge: ReviewChallenge } | null>(null);
+
+  const handleStartTeacherGameDemo = (fgGameType: string) => {
+    const fgMeta = FIXED_GAMES.find(g => g.gameType === fgGameType) || FIXED_GAMES[0];
+    const existingChallenge = reviewChallenges.find(c => c.id === fgMeta.id || c.gameType === fgMeta.gameType);
+
+    const demoQuestions = (existingChallenge?.questions && existingChallenge.questions.length > 0)
+      ? existingChallenge.questions
+      : DEFAULT_DEMO_QUESTIONS;
+
+    const demoChallengeObj: ReviewChallenge = {
+      id: existingChallenge?.id || fgMeta.id,
+      title: existingChallenge?.title || fgMeta.title,
+      gameType: fgMeta.gameType as any,
+      questions: demoQuestions,
+      status: "active",
+      teacherId: currentUser.uid || "teacher",
+      subject: existingChallenge?.subject || "عام (معاينة)",
+      grade: existingChallenge?.grade || "معاينة",
+      semester: existingChallenge?.semester || "عام",
+      createdAt: new Date().toISOString(),
+      liveState: "playing"
+    };
+
+    setTeacherDemoState({
+      gameType: fgMeta.gameType,
+      gameTitle: fgMeta.title,
+      challenge: demoChallengeObj
+    });
+  };
   
   // Create Challenge form states
   const [newTitle, setNewTitle] = useState("");
   const [newSubject, setNewSubject] = useState("");
   const [newGrade, setNewGrade] = useState("جميع الفصول (عام)"); // Available to everyone by default
   const [newSemester, setNewSemester] = useState("عام"); // Default/cancelled semester
-  const [newGameType, setNewGameType] = useState<'quiz_game' | 'time_attack' | 'space_invaders' | 'car_racing' | 'maze_chase' | 'wayground_arena'>("space_invaders");
+  const [newGameType, setNewGameType] = useState<'quiz_game' | 'time_attack' | 'space_invaders' | 'car_racing' | 'wayground_arena'>("space_invaders");
   const [selectedQuizIdForImport, setSelectedQuizIdForImport] = useState("");
   const [selectedQuestions, setSelectedQuestions] = useState<Question[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1679,34 +1703,85 @@ export default function ReviewsAdminTab({
             exit={{ opacity: 0, y: -15 }}
             className="space-y-4"
           >
-            {/* Fixed Games List Header */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200">
-              <div>
-                <h3 className="text-base sm:text-lg font-black text-slate-800 flex items-center gap-2">
-                  <Gamepad2 className="w-5 h-5 text-indigo-600" />
-                  الألعاب والتحديات التفاعلية المثبتة (3 ألعاب)
-                </h3>
-                <p className="text-xs text-slate-500 font-bold mt-0.5">
-                  الألعاب مثبتة بصفحة المعلم والطالب. اضغط "تغيير الأسئلة" لتعديل أو استيراد أسئلة اللعبة وتفعيلها فوراً للطلاب!
-                </p>
-              </div>
-              <button
-                onClick={() => {
-                  if (reviewChallenges.length > 0) {
-                    setSelectedChallengeId(reviewChallenges[0].id);
-                    setActiveSubTab("leaderboard");
-                  } else {
-                    triggerToast("يرجى تفعيل لعبة وتحديد أسئلتها أولاً لفتح المتصدرين", "info");
-                  }
-                }}
-                className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-black transition flex items-center gap-2 cursor-pointer shadow-xs self-start sm:self-auto shrink-0"
-              >
-                <Trophy className="w-4 h-4 text-yellow-400" />
-                <span>شاشة النتائج والمتصدرين</span>
-              </button>
-            </div>
+            {teacherDemoState ? (
+              <div className="space-y-4 animate-fade-in">
+                {/* Floating Header Banner for Demo Mode */}
+                <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border-2 border-indigo-500/80 rounded-3xl p-4 sm:p-5 text-white shadow-2xl flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-2xl bg-indigo-600/30 border border-indigo-400/50 flex items-center justify-center text-2xl shadow-inner">
+                      🧪
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-500 text-slate-950 uppercase tracking-wider animate-pulse">
+                          معاينة وتجربة حية للمعلم
+                        </span>
+                        <span className="text-xs text-indigo-300 font-bold">بيانات تجريبية • نقاط محاكاة</span>
+                      </div>
+                      <h2 className="text-lg sm:text-xl font-black text-white mt-0.5 flex items-center gap-2">
+                        معاينة وتجربة لعبة: {teacherDemoState.gameTitle}
+                      </h2>
+                    </div>
+                  </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <button
+                    onClick={() => setTeacherDemoState(null)}
+                    className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl font-black text-xs sm:text-sm transition transform hover:scale-105 active:scale-95 shadow-lg flex items-center gap-2 cursor-pointer border border-rose-400/30"
+                  >
+                    <span>إنهاء اللعبة والعودة لصفحة الألعاب 🚪</span>
+                  </button>
+                </div>
+
+                {/* Live Game Component in Demo Mode */}
+                <div className="bg-white rounded-3xl border-2 border-slate-200 p-2 sm:p-4 shadow-xl">
+                  <StudentReviewsTab
+                    activeStudent={{
+                      id: "teacher-demo-user",
+                      name: currentUser.name ? `${currentUser.name} (معاينة)` : "المعلم (معاينة وتجربة)",
+                      gradeClass: "معاينة تجريبية",
+                      grade: "معاينة",
+                      semester: "ديمو"
+                    }}
+                    reviewChallenges={[teacherDemoState.challenge]}
+                    reviewScores={[]}
+                    students={[]}
+                    triggerToast={triggerToast}
+                    isDemoMode={true}
+                    autoStartChallengeId={teacherDemoState.challenge.id}
+                    onExitDemo={() => setTeacherDemoState(null)}
+                  />
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* Fixed Games List Header */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200">
+                  <div>
+                    <h3 className="text-base sm:text-lg font-black text-slate-800 flex items-center gap-2">
+                      <Gamepad2 className="w-5 h-5 text-indigo-600" />
+                      الألعاب والتحديات التفاعلية المثبتة (3 ألعاب)
+                    </h3>
+                    <p className="text-xs text-slate-500 font-bold mt-0.5">
+                      الألعاب مثبتة بصفحة المعلم والطالب. اضغط "تغيير الأسئلة" لتعديل أو استيراد أسئلة اللعبة وتفعيلها فوراً للطلاب!
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      if (reviewChallenges.length > 0) {
+                        setSelectedChallengeId(reviewChallenges[0].id);
+                        setActiveSubTab("leaderboard");
+                      } else {
+                        triggerToast("يرجى تفعيل لعبة وتحديد أسئلتها أولاً لفتح المتصدرين", "info");
+                      }
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-black transition flex items-center gap-2 cursor-pointer shadow-xs self-start sm:self-auto shrink-0"
+                  >
+                    <Trophy className="w-4 h-4 text-yellow-400" />
+                    <span>شاشة النتائج والمتصدرين</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {FIXED_GAMES.map((fg) => {
                 const challenge = reviewChallenges.find(c => c.id === fg.id) || reviewChallenges.find(c => c.gameType === fg.gameType);
                 const isActivated = challenge && challenge.status === "active" && (challenge.questions?.length || 0) > 0;
@@ -1775,30 +1850,6 @@ export default function ReviewsAdminTab({
                             </div>
                           </div>
                         </div>
-                      ) : fg.gameType === "maze_chase" ? (
-                        <div className="w-full h-full bg-gradient-to-br from-purple-950 via-slate-900 to-indigo-950 border-b-2 border-indigo-500/50 flex flex-col justify-between p-3.5 relative">
-                          <div className="absolute inset-0 bg-[radial-gradient(#818cf8_1px,transparent_1px)] [background-size:16px_16px] opacity-20 pointer-events-none" />
-                          <div className="relative z-10 flex justify-between items-center">
-                            <span className="text-[10px] font-black text-indigo-200 bg-indigo-900/80 px-2.5 py-1 rounded-full border border-indigo-500/40 shadow-xs">
-                              🌀 MAZE CHASE
-                            </span>
-                            {isActivated ? (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-500 text-white shadow-xs animate-pulse">
-                                مفعلة 🟢
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-slate-800 text-slate-300 border border-slate-700">
-                                غير مفعلة ⏸️
-                              </span>
-                            )}
-                          </div>
-                          <div className="relative z-10 my-auto text-center space-y-1">
-                            <div className="text-3xl animate-pulse">🌀</div>
-                            <div className="text-[11px] font-black text-indigo-300 tracking-wide uppercase">
-                              مطاردة المتاهة
-                            </div>
-                          </div>
-                        </div>
                       ) : (
                         <div className="w-full h-full bg-gradient-to-br from-purple-950 via-indigo-900 to-purple-900 border-b-2 border-purple-500/50 flex flex-col justify-between p-3.5 relative">
                           <div className="relative z-10 flex justify-between items-center">
@@ -1831,7 +1882,7 @@ export default function ReviewsAdminTab({
                     {/* Full Width Game Type Bar attached to Top Banner */}
                     <div className="w-full bg-gradient-to-r from-indigo-50 via-blue-50 to-indigo-50 border-y border-indigo-200/90 py-2.5 px-4 text-center">
                       <span className="text-sm sm:text-base font-black text-indigo-900 tracking-wide">
-                        {fg.gameType === "space_invaders" ? "الفضاء 🚀" : fg.gameType === "car_racing" ? "السيارات 🏎️" : fg.gameType === "maze_chase" ? "المتاهة 🌀" : "كاهوت 🎪"}
+                        {fg.gameType === "space_invaders" ? "الفضاء 🚀" : fg.gameType === "car_racing" ? "السيارات 🏎️" : "كاهوت 🎪"}
                       </span>
                     </div>
 
@@ -1862,6 +1913,13 @@ export default function ReviewsAdminTab({
                       {/* Card Action Buttons */}
                       <div className="pt-3 border-t border-slate-100 flex flex-col gap-2">
 
+                        <button
+                          onClick={() => handleStartTeacherGameDemo(fg.gameType)}
+                          className="w-full py-2.5 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-800 text-white rounded-xl text-xs font-black transition cursor-pointer flex items-center justify-center gap-2 shadow-sm hover:scale-[1.02] active:scale-98 border border-emerald-400/30"
+                        >
+                          <Gamepad2 className="w-4 h-4 text-emerald-200 animate-pulse" />
+                          <span>معاينة وتجربة اللعبة (ديمو) 🎮</span>
+                        </button>
 
                         <button
                           onClick={() => handleEditGameQuestions(fg.gameType)}
@@ -1982,8 +2040,10 @@ export default function ReviewsAdminTab({
                 );
               })}
             </div>
-          </motion.div>
+          </>
         )}
+      </motion.div>
+    )}
 
         {(isEditModalOpen || activeSubTab === "create") && (
           <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-3 md:p-6 overflow-y-auto">
@@ -2440,8 +2500,6 @@ export default function ReviewsAdminTab({
                 ? "معركة الفضاء 🚀"
                 : activeChallenge?.gameType === "car_racing"
                 ? "سباق السيارات 🏎️"
-                : activeChallenge?.gameType === "maze_chase"
-                ? "مطاردة المتاهة 🌀"
                 : FIXED_GAMES.find(g => g.gameType === activeChallenge?.gameType)?.title || activeChallenge?.gameType || "لعبة مراجعة";
 
               return (
@@ -3513,8 +3571,6 @@ export default function ReviewsAdminTab({
                               ? "معركة الفضاء 🚀"
                               : targetChallenge?.gameType === "car_racing" || fixedGameMeta.gameType === "car_racing"
                               ? "سباق السيارات 🏎️"
-                              : targetChallenge?.gameType === "maze_chase" || fixedGameMeta.gameType === "maze_chase"
-                              ? "مطاردة المتاهة 🌀"
                               : fixedGameMeta.title
                           }
                         </span>

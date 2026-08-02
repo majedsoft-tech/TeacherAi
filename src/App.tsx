@@ -4921,73 +4921,13 @@ export default function App() {
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setStudentPortalActive(false);
-                    const url = new URL(window.location.href);
-                    url.searchParams.set("teacher", "true");
-                    window.history.pushState({}, "", url.toString());
-                    triggerToast(
-                      "تم الانتقال إلى بوابة الأستاذ الذكية بنجاح",
-                      "success",
-                    );
-                  }}
-                  className="w-full py-3.5 px-5 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white rounded-xl font-black text-sm shadow-lg shadow-indigo-200 transition-all cursor-pointer flex items-center justify-center gap-2"
-                >
-                  <Sparkles className="w-4 h-4 text-amber-300" />
-                  <span>الدخول إلى بوابة الأستاذ (رابط فرعي)</span>
-                  <ChevronLeft className="w-4 h-4 shrink-0" />
-                </button>
+                <div className="pt-2 border-t border-indigo-100/60 flex items-center justify-center gap-2 text-center text-indigo-900 font-bold text-sm bg-indigo-50/70 p-3.5 rounded-xl border border-indigo-100">
+                  <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
+                  <span>أهلاً وسهلاً بكم في منصة SmartCloud التعليمية الذكية</span>
+                </div>
               </div>
 
-              {/* Optional Collapsible / Secondary Student Code Entry */}
-              <div className="pt-2 text-center">
-                <details className="group">
-                  <summary className="text-xs font-bold text-slate-400 hover:text-indigo-600 transition-colors cursor-pointer list-none flex items-center justify-center gap-1.5 py-1">
-                    <BookOpen className="w-3.5 h-3.5" />
-                    <span>هل أنت طالب وتملك رمز اختبار؟ انقر هنا</span>
-                  </summary>
-                  <div className="mt-4 p-4 rounded-2xl bg-white border border-slate-200/80 text-right space-y-3 shadow-xs">
-                    <label className="text-slate-700 font-bold text-xs block">
-                      أدخل رمز الاختبار أو رابط الإجابة:
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="text"
-                        value={studentCustomExamCode}
-                        onChange={(e) => setStudentCustomExamCode(e.target.value)}
-                        placeholder="مثال: Ff-1738734"
-                        className="w-full bg-slate-50 border border-slate-300 rounded-xl pl-3 pr-9 py-2.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 text-right font-sans font-bold"
-                      />
-                      <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-slate-400">
-                        <Link className="w-3.5 h-3.5" />
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!studentCustomExamCode.trim()) {
-                          triggerToast("الرجاء كتابة رمز الاختبار للمتابعة", "error");
-                          return;
-                        }
-                        let parsedValue = studentCustomExamCode.trim();
-                        if (parsedValue.includes("quizId=") || parsedValue.includes("quizid=") || parsedValue.includes("quizld=") || parsedValue.includes("quizID=")) {
-                          const match = parsedValue.match(/[?&]quiz(?:I|l)d=([^&]+)/i);
-                          if (match && match[1]) {
-                            parsedValue = match[1];
-                          }
-                        }
-                        window.location.search = `?quizId=${parsedValue}`;
-                      }}
-                      className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs shadow-md shadow-emerald-100 transition-all cursor-pointer flex items-center justify-center gap-1.5"
-                    >
-                      <span>الانتقال لقاعة الاختبار</span>
-                      <ChevronLeft className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </details>
-              </div>
+
             </div>
           </motion.div>
         </div>

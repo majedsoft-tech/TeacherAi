@@ -1675,24 +1675,6 @@ export default function ReviewsAdminTab({
 
   return (
     <div className="space-y-6" dir="rtl">
-      {/* Subtabs Switch Panel */}
-      <div className="bg-slate-200/90 p-1 rounded-xl flex flex-wrap items-center gap-1.5 w-full sm:w-fit border border-slate-300/80 shadow-inner">
-        <button
-          type="button"
-          onClick={() => setActiveSubTab("list")}
-          className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3.5 py-1.5 rounded-lg text-[11px] font-black transition-all duration-200 cursor-pointer ${
-            activeSubTab === "list"
-              ? "bg-gradient-to-r from-indigo-600 via-blue-600 to-blue-700 text-white shadow-xs scale-[1.01] border border-indigo-400/30"
-              : "bg-white/80 hover:bg-white text-slate-700 hover:text-indigo-700 border border-slate-200/80 font-bold"
-          }`}
-        >
-          <div className={`p-0.5 rounded shrink-0 ${activeSubTab === "list" ? "bg-white/20 text-white" : "bg-indigo-50 text-indigo-600"}`}>
-            <Gamepad2 className="w-3.5 h-3.5" />
-          </div>
-          <span>الألعاب والتحديات المثبتة 🎮</span>
-        </button>
-      </div>
-
       {/* Main Subtab Renderer */}
       <AnimatePresence mode="wait">
         {activeSubTab === "list" && (
@@ -1755,7 +1737,7 @@ export default function ReviewsAdminTab({
             ) : (
               <>
                 {/* Fixed Games List Header */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200">
+                <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-md flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-sm transition-all">
                   <div>
                     <h3 className="text-base sm:text-lg font-black text-slate-800 flex items-center gap-2">
                       <Gamepad2 className="w-5 h-5 text-indigo-600" />

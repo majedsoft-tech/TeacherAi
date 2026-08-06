@@ -2209,7 +2209,7 @@ export default function StudentReviewsTab({
 
       {/* Sound Controller & Next Challenge Float (Visible in Idle state) */}
       {gameState === "idle" && (
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 rounded-2xl bg-white border border-slate-200 shadow-3xs">
+        <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-md flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 rounded-2xl border border-slate-200/80 shadow-sm transition-all">
           <div className="flex flex-col md:flex-row md:items-center gap-4">
             <div className="flex items-center gap-2">
               <Gamepad2 className="w-5.5 h-5.5 text-indigo-600" />

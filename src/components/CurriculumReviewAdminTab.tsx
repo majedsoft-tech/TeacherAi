@@ -572,7 +572,7 @@ export default function CurriculumReviewAdminTab({
     <div className={`space-y-6 text-right font-sans ${isFullScreenResults ? "flex-1 min-h-0 flex flex-col" : ""}`} dir="rtl">
       {/* Top Sub-Tab Navigation Bar - Nested Tabs Design */}
       {(!isFullScreenResults || showFilters) && (
-        <div className="bg-slate-100/80 p-1.5 rounded-2xl border border-slate-200/90 flex items-center gap-1.5 w-full sm:w-fit shadow-xs font-sans">
+        <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-md p-2 rounded-2xl border border-slate-200/90 flex items-center gap-1.5 w-full sm:w-fit shadow-sm font-sans transition-all">
           <button
             type="button"
             onClick={() => setActiveSubTab("settings")}

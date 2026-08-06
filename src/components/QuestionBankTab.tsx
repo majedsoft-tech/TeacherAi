@@ -1472,7 +1472,7 @@ export default function QuestionBankTab({
       )}
       
       {/* Dynamic Action Bar */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-6 rounded-3xl border border-slate-200/80 shadow-xs">
+      <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-md flex flex-col md:flex-row justify-between items-start md:items-center gap-4 p-5 md:p-6 rounded-3xl border border-slate-200/80 shadow-sm transition-all">
         <div className="flex items-center gap-3.5">
           <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
             <Database className="w-6 h-6" />

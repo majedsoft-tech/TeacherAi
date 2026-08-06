@@ -7832,7 +7832,7 @@ export default function App() {
 
 
                 {/* Title section and the Golden Action button matching screenshot exactly */}
-                <div className="flex flex-col sm:flex-row justify-between items-center gap-4 pt-4">
+                <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-md p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col sm:flex-row justify-between items-center gap-4 transition-all">
                   <div>
                     <h3 className="text-2xl font-black text-[#0f172a] tracking-tight">
                       اختباراتي
@@ -10143,6 +10143,75 @@ export default function App() {
                     transition={{ duration: 0.25 }}
                     className="space-y-6 text-right"
                   >
+                    {/* Header Section */}
+                    {activeTab === "students" && (
+                      <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-md p-6 rounded-2xl border border-slate-200/80 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-sm transition-all">
+                        <div>
+                          <h3 className="text-xl font-black text-slate-900 flex items-center gap-2">
+                            <Users className="w-5 h-5 text-indigo-600 shrink-0" />
+                            <span>إدارة الطلاب والفصول</span>
+                          </h3>
+                          <p className="text-xs text-slate-400 font-semibold mt-1">
+                            إضافة وتعديل بيانات الطلاب، تنظيم الفصول والصفوف الدراسية، وإدارة السجلات.
+                          </p>
+                        </div>
+
+                        {/* Quick summary specs */}
+                        <div className="flex gap-4">
+                          <div className="px-4 py-2 bg-indigo-50 border border-indigo-100/50 rounded-xl text-center min-w-[100px]">
+                            <span className="text-[10px] text-indigo-600 font-bold block">
+                              إجمالي الطلاب
+                            </span>
+                            <span className="text-base font-extrabold font-sans text-[#1e3a8a]">
+                              {activeClassStudents.length}
+                            </span>
+                          </div>
+                          <div className="px-4 py-2 bg-slate-50 border border-slate-200/60 rounded-xl text-center min-w-[100px]">
+                            <span className="text-[10px] text-slate-500 font-bold block font-sans">
+                              الصف النشط
+                            </span>
+                            <span className="text-xs font-black text-slate-800 truncate max-w-[120px] block">
+                              {selectedTabGrade || "الكل"}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {activeTab === "student_results" && (
+                      <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-md p-6 rounded-2xl border border-slate-200/80 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-sm transition-all">
+                        <div>
+                          <h3 className="text-xl font-black text-slate-900 flex items-center gap-2">
+                            <Award className="w-5 h-5 text-amber-500 shrink-0" />
+                            <span>نتائج اختبارات الطلاب</span>
+                          </h3>
+                          <p className="text-xs text-slate-400 font-semibold mt-1">
+                            عرض وتحليل درجات نتائج الاختبارات ونسب التحصيل العلمي وتصدير التقارير.
+                          </p>
+                        </div>
+
+                        {/* Quick summary specs */}
+                        <div className="flex gap-4">
+                          <div className="px-4 py-2 bg-indigo-50 border border-indigo-100/50 rounded-xl text-center min-w-[100px]">
+                            <span className="text-[10px] text-indigo-600 font-bold block">
+                              إجمالي الطلاب
+                            </span>
+                            <span className="text-base font-extrabold font-sans text-[#1e3a8a]">
+                              {activeClassStudents.length}
+                            </span>
+                          </div>
+                          <div className="px-4 py-2 bg-amber-50 border border-amber-100/50 rounded-xl text-center min-w-[100px]">
+                            <span className="text-[10px] text-amber-700 font-bold block font-sans">
+                              معدل التحصيل
+                            </span>
+                            <span className="text-base font-extrabold font-sans text-amber-800">
+                              {classAverage}%
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     {/* TWO-STEP SELECTION FLOW - CARD CHIPS EXACTLY LIKE THE REQUESTED IMAGE */}
                     <div className="bg-slate-50 rounded-2xl p-4 md:p-5 flex flex-col gap-4 border border-slate-200 shadow-3xs select-none font-sans w-full">
                       {/* Top Header Row with Title and Manage/Edit Button (Shown only in Students management tab) */}
@@ -11238,7 +11307,7 @@ export default function App() {
                     className="space-y-6"
                   >
                     {/* Header Section */}
-                    <div className="bg-white p-6 rounded-2xl border border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-3xs">
+                    <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-md p-6 rounded-2xl border border-slate-200/80 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-sm transition-all">
                       <div>
                         <h3 className="text-xl font-black text-slate-900 flex items-center gap-2">
                           <Settings className="w-5 h-5 text-indigo-600 shrink-0" />

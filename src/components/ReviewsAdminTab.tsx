@@ -1798,7 +1798,16 @@ export default function ReviewsAdminTab({
                     }`}
                   >
                     {/* Top Large Thumbnail Banner */}
-                    <div className="relative h-40 w-full overflow-hidden select-none">
+                    <div 
+                      onClick={() => {
+                        const targetChallenge = challenge || reviewChallenges.find(c => c.gameType === fg.gameType) || reviewChallenges.find(c => c.id === fg.id);
+                        const targetId = targetChallenge?.id || fg.id;
+                        setSelectedChallengeId(targetId);
+                        setActiveSubTab("leaderboard");
+                      }}
+                      className="relative h-40 w-full overflow-hidden select-none cursor-pointer group/banner"
+                      title="اضغط للدخول المباشر إلى صفحة المتصدرين والنتائج"
+                    >
                       {fg.gameType === "space_invaders" ? (
                         <div className="w-full h-full bg-gradient-to-br from-slate-950 via-slate-900 to-emerald-950 border-b-2 border-emerald-500/50 flex flex-col justify-between p-3.5 relative">
                           <div className="absolute inset-0 bg-[radial-gradient(#10b981_1px,transparent_1px)] [background-size:16px_16px] opacity-20 pointer-events-none" />
@@ -1914,11 +1923,16 @@ export default function ReviewsAdminTab({
                       <div className="pt-3 border-t border-slate-100 flex flex-col gap-2">
 
                         <button
-                          onClick={() => handleStartTeacherGameDemo(fg.gameType)}
+                          onClick={() => {
+                            const targetChallenge = challenge || reviewChallenges.find(c => c.gameType === fg.gameType) || reviewChallenges.find(c => c.id === fg.id);
+                            const targetId = targetChallenge?.id || fg.id;
+                            setSelectedChallengeId(targetId);
+                            setActiveSubTab("leaderboard");
+                          }}
                           className="w-full py-2.5 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-800 text-white rounded-xl text-xs font-black transition cursor-pointer flex items-center justify-center gap-2 shadow-sm hover:scale-[1.02] active:scale-98 border border-emerald-400/30"
                         >
-                          <Gamepad2 className="w-4 h-4 text-emerald-200 animate-pulse" />
-                          <span>معاينة وتجربة اللعبة (ديمو) 🎮</span>
+                          <Trophy className="w-4 h-4 text-yellow-300 animate-pulse" />
+                          <span>الدخول لصفحة المتصدرين والنتائج 🏆</span>
                         </button>
 
                         <button

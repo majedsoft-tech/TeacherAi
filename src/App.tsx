@@ -59,6 +59,7 @@ import {
   Zap,
   Key,
   UserCheck,
+  LogIn,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import * as XLSX from "xlsx";
@@ -77,6 +78,11 @@ import {
   initialQuizzes,
   initialStudents,
   initialStats,
+  initialBankQuestions,
+  initialGrades,
+  initialSemesters,
+  initialReviewChallenges,
+  initialReviewScores,
 } from "./mockData";
 import QuestionBankTab from "./components/QuestionBankTab";
 import ReviewsAdminTab from "./components/ReviewsAdminTab";
@@ -200,10 +206,10 @@ export default function App() {
 
 
   // Dynamic Grades and Semesters States
-  const [grades, setGrades] = useState<string[]>([]);
+  const [grades, setGrades] = useState<string[]>(initialGrades);
   const [semesters, setSemesters] = useState<
     Array<{ id: string; name: string; gradeName: string; number?: number; createdAt?: number }>
-  >([]);
+  >(initialSemesters);
   const [gradesLoaded, setGradesLoaded] = useState(false);
   const [semestersLoaded, setSemestersLoaded] = useState(false);
   const [showGradesSemestersModal, setShowGradesSemestersModal] =
@@ -507,7 +513,11 @@ export default function App() {
 
   useEffect(() => {
     if (!studentPortalTeacherId) {
-      setStudentPortalTeacherName("");
+      if (currentUser) {
+        setStudentPortalTeacherName(currentUser.displayName || currentUser.email?.split("@")[0] || "المعلم");
+      } else {
+        setStudentPortalTeacherName("المعلم");
+      }
       return;
     }
     
@@ -755,18 +765,18 @@ export default function App() {
   }, [studentLoginSelectId, studentSelectedGrade, studentSelectedSemester, studentSelectedId]);
 
   // Core Data States from Firestore
-  const [quizzes, setQuizzes] = useState<Quiz[]>([]);
-  const [students, setStudents] = useState<Student[]>([]);
+  const [quizzes, setQuizzes] = useState<Quiz[]>(initialQuizzes);
+  const [students, setStudents] = useState<Student[]>(initialStudents);
   const [trashStudents, setTrashStudents] = useState<Student[]>([]);
   const [showTrashModal, setShowTrashModal] = useState(false);
   const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(null);
   const [selectedDeleteStudentIds, setSelectedDeleteStudentIds] = useState<
     Record<string, boolean>
   >({});
-  const [bankQuestions, setBankQuestions] = useState<BankQuestion[]>([]);
-  const [bankQuestionsLoaded, setBankQuestionsLoaded] = useState<boolean>(false);
-  const [reviewChallenges, setReviewChallenges] = useState<ReviewChallenge[]>([]);
-  const [reviewScores, setReviewScores] = useState<ReviewScore[]>([]);
+  const [bankQuestions, setBankQuestions] = useState<BankQuestion[]>(initialBankQuestions);
+  const [bankQuestionsLoaded, setBankQuestionsLoaded] = useState<boolean>(true);
+  const [reviewChallenges, setReviewChallenges] = useState<ReviewChallenge[]>(initialReviewChallenges);
+  const [reviewScores, setReviewScores] = useState<ReviewScore[]>(initialReviewScores);
 
   // Question Bank Import States inside Quiz Builder
   const [showBankImportModal, setShowBankImportModal] = useState(false);
@@ -822,6 +832,7 @@ export default function App() {
     getRedirectResult(auth)
       .then((result) => {
         if (result?.user) {
+          setActiveTab("dashboard");
           triggerToast(
             "مرحباً بك مجدداً دكتور! تم تسجيل الدخول بنجاح.",
             "success",
@@ -840,6 +851,7 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setCurrentUser(user);
       if (user) {
+        setActiveTab("dashboard");
         localStorage.setItem("seb_student_teacher_id", user.uid);
         localStorage.removeItem("seb_student_logged_id");
         setStudentPortalTeacherId(user.uid);
@@ -876,22 +888,31 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  const isAuthInProgressRef = useRef(false);
+
   const executeSafeGoogleLogin = async (customMessage?: string) => {
+    if (isAuthInProgressRef.current) {
+      triggerToast("⚠️ جاري فتح نافذة تسجيل الدخول...", "info");
+      return;
+    }
+    isAuthInProgressRef.current = true;
     const provider = new GoogleAuthProvider();
     try {
       // Authenticate directly using the active Firebase project's Auth instance
       const result = await signInWithPopup(auth, provider);
-      
+      setActiveTab("dashboard");
       triggerToast(
         customMessage || "مرحباً بك مجدداً دكتور! تم تسجيل الدخول بنجاح.",
         "success"
       );
       return result.user;
     } catch (error: any) {
-      console.error("Login failure:", error);
       if (error.code === "auth/popup-closed-by-user") {
         triggerToast("⚠️ تم إغلاق نافذة تسجيل الدخول قبل إتمام العملية. يرجى إعادة المحاولة مع إبقاء النافذة مفتوحة.", "info");
+      } else if (error.code === "auth/cancelled-popup-request") {
+        console.warn("Cancelled duplicate popup request:", error);
       } else {
+        console.error("Login failure:", error);
         setAuthErrorDetails({
           code: error.code,
           message: error.message,
@@ -902,7 +923,8 @@ export default function App() {
           "error"
         );
       }
-      throw error;
+    } finally {
+      isAuthInProgressRef.current = false;
     }
   };
 
@@ -954,7 +976,7 @@ export default function App() {
   useEffect(() => {
     // 1. Update Title dynamically
     if (studentPortalActive) {
-      document.title = "بوابة الطالب الإلكترونية";
+      document.title = "بوابة الطالب";
     } else {
       document.title = "بوابة المعلم التعليمية";
     }
@@ -1686,11 +1708,16 @@ export default function App() {
   // Listen to Firestore real-time updates when logged in
   useEffect(() => {
     if (!currentUser) {
-      setQuizzes([]);
-      setStudents([]);
-      setBankQuestions([]);
-      setGrades([]);
-      setSemesters([]);
+      setQuizzes(initialQuizzes);
+      setStudents(initialStudents);
+      setBankQuestions(initialBankQuestions);
+      setBankQuestionsLoaded(true);
+      setGrades(initialGrades);
+      setGradesLoaded(true);
+      setSemesters(initialSemesters);
+      setSemestersLoaded(true);
+      setReviewChallenges(initialReviewChallenges);
+      setReviewScores(initialReviewScores);
       setTrashStudents([]);
       return;
     }
@@ -2275,6 +2302,8 @@ export default function App() {
     "success",
   );
 
+  const [shakeLoginCard, setShakeLoginCard] = useState(false);
+
   const triggerToast = (
     msg: string,
     type: "success" | "info" | "error" = "success",
@@ -2285,6 +2314,14 @@ export default function App() {
       setToastMessage(null);
     }, 4000);
   };
+
+  const triggerLoginShake = useCallback(() => {
+    setShakeLoginCard(true);
+    triggerToast("يرجى تسجيل الدخول بحساب جوجل أولاً للوصول إلى هذا القسم 🔒", "info");
+    setTimeout(() => {
+      setShakeLoginCard(false);
+    }, 650);
+  }, []);
 
   // Global loading overlay state
   const [globalLoading, setGlobalLoading] = useState<{
@@ -5092,29 +5129,40 @@ export default function App() {
 
       return (
         <div
-          className="min-h-screen bg-slate-50/70 py-12 px-4 md:px-6 text-slate-800 flex items-center justify-center animate-fade-in"
+          className="min-h-screen bg-slate-50/70 py-6 px-4 md:px-8 text-slate-800 flex items-center justify-center animate-fade-in"
           dir="rtl"
         >
           <motion.div
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
-            className="bg-white rounded-3xl border border-slate-200/60 shadow-xl max-w-md w-full overflow-hidden"
+            className="bg-white rounded-3xl border border-slate-200/60 shadow-2xl max-w-2xl w-full min-h-[85vh] flex flex-col justify-between overflow-hidden"
           >
-            <div className="p-8 bg-gradient-to-tr from-indigo-750 to-indigo-600 text-white text-center relative font-sans">
+            <div className="p-8 md:p-10 bg-gradient-to-tr from-indigo-750 to-indigo-600 text-white text-center relative font-sans">
               <div className="w-16 h-16 bg-white/10 backdrop-blur-md rounded-2xl flex items-center justify-center text-white mx-auto mb-4 border border-white/10">
                 <BookOpen className="w-8 h-8" />
               </div>
               <h1 className="text-2xl font-black leading-tight">
-                بوابة الطالب الإلكترونية
+                بوابة المعلم الإلكترونية
               </h1>
-              <p className="text-white/80 text-xs mt-2 leading-tight">
+              <span className="inline-block text-xl font-black text-emerald-300 tracking-wider normal-case leading-tight font-sans mt-2 px-5 py-1.5 rounded-2xl bg-emerald-950/50 border-2 border-emerald-400/60 shadow-lg shadow-emerald-950/40 backdrop-blur-md">
+                Student.AI
+              </span>
+              <div className="mt-3">
+                <div className="inline-flex items-center justify-center gap-2 bg-indigo-950/60 backdrop-blur-md px-5 py-2 rounded-2xl border-2 border-amber-400/70 shadow-xl shadow-indigo-950/50 text-sm font-bold text-amber-200">
+                  <span className="text-amber-200/90 font-bold text-xs">تحت إشراف المعلم:</span>
+                  <span className="font-black text-amber-300 text-base">
+                    {studentPortalTeacherName || (currentUser?.displayName || currentUser?.email?.split("@")[0]) || "المعلم"}
+                  </span>
+                </div>
+              </div>
+              <p className="text-white/80 text-xs mt-3 leading-tight">
                 اختر صفك الدراسي واسمك المعتمد للدخول المباشر إلى كشف اختباراتك
                 النشطة ومراجعة تقارير درجاتك الفورية.
               </p>
             </div>
 
             {/* Selection and Details */}
-            <form onSubmit={handleStudentPortalLogin} className="p-8 space-y-6">
+            <form onSubmit={handleStudentPortalLogin} className="p-8 md:p-10 space-y-6 flex-1 flex flex-col justify-between">
               <div className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1">
@@ -5362,27 +5410,7 @@ export default function App() {
                 <span>دخول البوابة</span>
               </button>
 
-              <div className="pt-4 flex flex-col items-center gap-2.5 border-t border-slate-100 mt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    localStorage.removeItem("seb_student_logged_id");
-                    localStorage.removeItem("seb_student_teacher_id");
-                    setStudentPortalActive(false);
-                    const url = new URL(window.location.href);
-                    url.searchParams.set("teacher", "true");
-                    window.history.pushState({}, "", url.toString());
-                    triggerToast(
-                      "تم الانتقال إلى بوابة المعلم بنجاح",
-                      "success",
-                    );
-                  }}
-                  className="text-xs text-slate-400 hover:text-indigo-600 font-bold transition-all cursor-pointer inline-flex items-center gap-1.5"
-                >
-                  <LayoutDashboard className="w-4 h-4 shrink-0" />
-                  <span>التبديل إلى بوابة المعلم (الإدارة)</span>
-                </button>
-              </div>
+
             </form>
           </motion.div>
         </div>
@@ -5516,10 +5544,10 @@ export default function App() {
                 </div>
                 <div>
                   <h1 className="text-sm font-extrabold text-white leading-none leading-tight">
-                    بوابة الطالب الإلكترونية
+                    بوابة المعلم الإلكترونية
                   </h1>
-                  <span className="text-[9px] text-[#818cf8] font-black mt-1 block mb-2">
-                    نظام التعلم الفوري
+                  <span className="text-base font-black text-green-300 tracking-wider block normal-case leading-tight font-sans mt-1 mb-2 drop-shadow-md">
+                    Student.AI
                   </span>
                   <motion.div
                     className="relative p-[1.5px] rounded-lg overflow-hidden bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 bg-[length:200%_auto] w-full mt-1"
@@ -5650,24 +5678,6 @@ export default function App() {
                 <XCircle className="w-4 h-4 shrink-0 text-slate-400" />
                 <span>إغلاق المتصفح</span>
               </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setStudentPortalActive(false);
-                  const url = new URL(window.location.href);
-                  url.searchParams.set("teacher", "true");
-                  window.history.pushState({}, "", url.toString());
-                  triggerToast(
-                    "تم الانتقال إلى بوابة المعلم بنجاح",
-                    "success",
-                  );
-                }}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-emerald-400 hover:bg-emerald-500/10 hover:text-emerald-300 text-[11px] font-black transition-all duration-200 transform hover:-translate-y-0.5 active:scale-95 cursor-pointer border border-emerald-800/50"
-              >
-                <LayoutDashboard className="w-4 h-4 shrink-0 text-emerald-400" />
-                <span>معاينة صفحة المعلم</span>
-              </button>
             </div>
           </aside>
           )}
@@ -5679,7 +5689,7 @@ export default function App() {
               <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between sticky top-0 z-40 shadow-xs">
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-slate-400 font-bold">
-                    بوابة الطالب &gt;
+                    بوابة المعلم الإلكترونية &gt;
                   </span>
                   <span className="text-xs text-indigo-600 font-black">
                     {studentActiveNav === "home" && "الصفحة الرئيسية والمتابعة 🏠"}
@@ -7263,198 +7273,13 @@ export default function App() {
     );
   }
 
-  if (currentUser === null) {
-    const handleGoogleLogin = async () => {
-      try {
-        await executeSafeGoogleLogin();
-      } catch (error) {
-        // Safe login handles toast notifications internally
-      }
-    };
-
-    return (
-      <div
-        className="min-h-screen bg-slate-50/70 flex flex-col items-center justify-center p-6 text-slate-800"
-        dir="rtl"
-      >
-        <motion.div
-          initial={{ opacity: 0, y: 25 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="bg-white p-8 md:p-12 rounded-3xl shadow-xl max-w-lg w-full border border-slate-105/85 text-center"
-        >
-          <div className="w-20 h-20 rounded-2xl bg-[#1e3a8a] flex items-center justify-center text-white mx-auto shadow-lg shadow-blue-105 mb-6">
-            <GraduationCap className="w-10 h-10" />
-          </div>
-
-          <h1 className="text-3xl font-extrabold text-slate-900 mb-2 leading-tight">
-            بوابة الأستاذ الذكية
-          </h1>
-          <p className="text-slate-550 text-sm mb-8 font-medium">
-            قم بتسجيل الدخول السريع لمزامنة وإدارة اختباراتك، شؤون طلابك،
-            وتحليلات العملية التعليمية بأمان عبر السحاب
-          </p>
-
-          {/* Login Action Buttons */}
-          <div className="space-y-3">
-            <button
-              id="google-login-btn"
-              type="button"
-              onClick={handleGoogleLogin}
-              className="w-full flex items-center justify-center gap-3 px-6 py-4 bg-white text-slate-700 border-2 border-slate-200 rounded-2xl font-bold shadow-sm hover:bg-slate-50 hover:border-slate-300 transition-all duration-200 active:scale-[0.98] cursor-pointer text-sm"
-            >
-              <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none">
-                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05"/>
-                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335"/>
-              </svg>
-              <span>تسجيل الدخول باستخدام حساب جوجل</span>
-            </button>
-          </div>
-
-          {authErrorDetails && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: "auto" }}
-              className="mt-6 p-5 rounded-2xl bg-rose-50 border border-rose-200 text-right text-xs text-rose-900 font-sans space-y-2.5 overflow-hidden"
-            >
-              <div className="font-bold flex items-center gap-1.5 text-rose-800 text-sm">
-                <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse"></span>
-                <span>تنبيه أمني ومطابقة النطاقات (Firebase Auth)</span>
-              </div>
-              <p className="leading-relaxed">
-                رمز الخطأ الحاصل من المتصفح:{" "}
-                <code className="bg-white/80 px-1 py-0.5 rounded font-mono text-rose-700 font-bold">
-                  {authErrorDetails.code}
-                </code>
-              </p>
-
-              {authErrorDetails.code === "auth/unauthorized-domain" ? (
-                <div className="space-y-3 mt-2 pt-2 border-t border-rose-200/50">
-                  <p className="font-bold text-rose-800 text-[13px]">
-                    ⚠️ النطاق الحالي غير معتمد في إعدادات مشروع الـ Firebase!
-                  </p>
-                  <p className="leading-relaxed text-slate-700">
-                    أنت تقوم بتشغيل التطبيق عبر النطاق:{" "}
-                    <code className="bg-white px-1.5 py-0.5 rounded font-mono font-bold text-slate-800">
-                      {authErrorDetails.domain}
-                    </code>{" "}
-                    ولكن هذا النطاق ليس مدرجاً في قائمة النطاقات المعتمدة لمثيله
-                    الخاص بمصادقة جوجل.
-                  </p>
-                  <div className="bg-white p-3 rounded-xl border border-rose-100 text-[11px] text-slate-700 space-y-1.5 shadow-xs">
-                    <p className="font-bold text-slate-800 mb-1">
-                      خطوات التفعيل والحل السريع:
-                    </p>
-                    <p>
-                      1. اذهب إلى{" "}
-                      <a
-                        href="https://console.firebase.google.com"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-600 underline font-bold"
-                      >
-                        وحدة تحكم Firebase Console
-                      </a>{" "}
-                      واختر مشروعك.
-                    </p>
-                    <p>
-                      2. في القائمة الجانبية، اذهب إلى{" "}
-                      <span className="font-bold text-black">
-                        Build &gt; Authentication
-                      </span>
-                      .
-                    </p>
-                    <p>
-                      3. اختر تبويب{" "}
-                      <span className="font-bold text-black">Settings</span> في
-                      الأعلى، ثم انقر على{" "}
-                      <span className="font-bold text-black">
-                        Authorized domains
-                      </span>{" "}
-                      (النطاقات المعتمدة).
-                    </p>
-                    <p>
-                      4. انقر فوق زر{" "}
-                      <span className="font-bold text-black">Add domain</span>{" "}
-                      وقم بنسخ ولصق النطاق التالي تماماً:
-                    </p>
-                    <div className="my-2 p-1.5 bg-slate-100 text-slate-900 rounded select-all font-mono text-center text-xs font-bold border border-slate-200">
-                      {authErrorDetails.domain}
-                    </div>
-                    <p className="text-emerald-700 font-medium">
-                      5. انقر "يحفظ" (Save)، ثم حدّث هذه الصفحة وسيعمل تسجيل
-                      الدخول بكفاءة مطلقة!
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <p className="leading-relaxed text-slate-700">
-                  التفاصيل:{" "}
-                  {authErrorDetails.message ||
-                    "حدثت مشكلة تمنع اتمام المصادقة مع سيرفرات جوجل."}
-                  <br />
-                  <span className="font-bold">نصيحة:</span> يرجى التأكد من السماح بالنوافذ المنبثقة في متصفحك لإتمام عملية تسجيل الدخول بنجاح.
-                </p>
-              )}
-
-              {/* Quick Reset Option inside the error details */}
-              {getCustomFirebaseConfig() && (
-                <div className="mt-4 pt-4 border-t border-rose-200/50 flex flex-col items-center gap-2.5">
-                  <p className="font-bold text-rose-850 text-[11.5px] text-center leading-relaxed">
-                    💡 هل ترغب في العودة السريعة لمشروع المنصة الافتراضي؟
-                  </p>
-                  <p className="text-slate-600 text-[10.5px] text-center leading-relaxed">
-                    إذا لم تكن ترغب في إعداد نطاقات معتمدة حالياً، اضغط على الزر أدناه لقطع اتصال مشروعك المخصص والعودة فوراً لقاعدة بيانات المنصة الافتراضية.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      clearCustomFirebaseConfig();
-                      triggerToast("تم قطع الاتصال والعودة لقاعدة بيانات المنصة الافتراضية بنجاح! جاري التحديث...", "success");
-                      setTimeout(() => window.location.reload(), 1200);
-                    }}
-                    className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl transition-all cursor-pointer shadow-md shadow-rose-200 active:scale-95"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" style={{ animationDuration: "3s" }} />
-                    <span>قطع الاتصال والعودة لقاعدة بيانات المنصة الافتراضية 🔌</span>
-                  </button>
-                </div>
-              )}
-            </motion.div>
-          )}
-
-          <div className="mt-8 pt-6 border-t border-slate-100 flex flex-col items-center gap-3">
-            {currentUser && currentUser.email?.trim().toLowerCase() === "majedsoft@gmail.com" && (
-              <button
-                type="button"
-                onClick={() => {
-                  setBankPortalActive(true);
-                  setStudentPortalActive(false);
-                  const url = new URL(window.location.href);
-                  url.searchParams.delete("teacher");
-                  url.searchParams.set("portal", "bank");
-                  window.history.pushState({}, "", url.toString());
-                  triggerToast(
-                    "تم الانتقال إلى بوابة بنك الأسئلة المستقلة بنجاح",
-                    "success",
-                  );
-                }}
-                className="text-xs text-emerald-600 hover:text-emerald-800 font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 hover:underline"
-              >
-                <Database className="w-4 h-4 shrink-0 text-emerald-650" />
-                <span>الذهاب إلى بوابة بنك الأسئلة المستقل 🔗</span>
-              </button>
-            )}
-
-            <div className="text-xs text-slate-400">
-              أو اتصل بمهندس الدعم التقني لمزيد من الاستعلامات
-            </div>
-          </div>
-        </motion.div>
-      </div>
-    );
-  }
+  const handleGoogleLogin = async () => {
+    try {
+      await executeSafeGoogleLogin();
+    } catch (error) {
+      // Safe login handles toast notifications internally
+    }
+  };
 
   return (
     <div
@@ -7497,7 +7322,27 @@ export default function App() {
 
       {/* Modern Right side menu for teacher (similar structure to Student portal) */}
       {!(isCurriculumAdminFullScreen && activeTab === "curriculum_review_admin") && (
-        <aside className="w-full md:w-64 bg-white border-l border-slate-200/80 text-slate-800 shrink-0 flex flex-col justify-between p-5 md:sticky md:top-0 md:h-screen relative overflow-y-auto overflow-x-hidden shadow-xs">
+        <aside
+          onClickCapture={(e) => {
+            if (currentUser) return;
+            const target = e.target as HTMLElement | null;
+            const interactiveEl = target?.closest(
+              'button, a, [role="button"], input, select, textarea, .cursor-pointer'
+            );
+            if (interactiveEl) {
+              if (
+                interactiveEl.id === "sidebar-google-login-btn" ||
+                interactiveEl.closest("#sidebar-google-login-btn")
+              ) {
+                return;
+              }
+              e.preventDefault();
+              e.stopPropagation();
+              triggerLoginShake();
+            }
+          }}
+          className="w-full md:w-64 bg-white border-l border-slate-200/80 text-slate-800 shrink-0 flex flex-col justify-between p-5 md:sticky md:top-0 md:h-screen relative overflow-y-auto overflow-x-hidden shadow-xs"
+        >
         {/* Subtle background glow */}
         <div className="absolute top-0 left-0 w-32 h-32 bg-blue-500/5 rounded-full blur-3xl pointer-events-none" />
         <div className="absolute bottom-0 right-0 w-32 h-32 bg-purple-500/5 rounded-full blur-2xl pointer-events-none" />
@@ -7516,7 +7361,7 @@ export default function App() {
               </div>
               <div>
                 <h1 className="text-sm md:text-base font-extrabold text-slate-900 leading-tight">
-                  بوابة المعلم الإلكترونية
+                  بوابة المعلم
                 </h1>
                 <span className="text-xs md:text-sm font-black text-indigo-700 tracking-wide block normal-case leading-tight font-sans mt-0.5">
                   Teacher.AI
@@ -7706,44 +7551,246 @@ export default function App() {
 
         {/* Sidebar bottom teacher profile card & logout */}
         <div className="pt-4 border-t border-slate-100 space-y-3 relative z-10 font-sans">
-          <div className="p-3 bg-slate-50 border border-slate-200/60 rounded-xl space-y-1">
-            <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center text-[10px] font-black border border-blue-105">
-                {(currentUser?.displayName || "M").charAt(0)}
+          {currentUser ? (
+            <>
+              <div className="p-3 bg-slate-50 border border-slate-200/60 rounded-xl space-y-1">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center text-[10px] font-black border border-blue-105">
+                    {(currentUser?.displayName || "M").charAt(0)}
+                  </div>
+                  <span className="text-[11px] font-black text-slate-700 truncate block flex-1">
+                    {currentUser?.displayName || "المعلمة"}
+                  </span>
+                </div>
+                <span className="text-[9px] text-slate-500 block font-bold font-sans">
+                  {currentUser?.email || ""}
+                </span>
               </div>
-              <span className="text-[11px] font-black text-slate-700 truncate block flex-1">
-                {currentUser?.displayName || "المعلمة"}
-              </span>
-            </div>
-            <span className="text-[9px] text-slate-500 block font-bold font-sans">
-              {currentUser?.email || ""}
-            </span>
-          </div>
 
-          <button
-            type="button"
-            onClick={() => {
-              triggerConfirm(
-                "تسجيل الخروج",
-                "هل أنت متأكد من رغبتك في تسجيل الخروج والعودة لصفحة الدخول؟",
-                () => {
-                  signOut(auth);
-                  triggerToast("تم تسجيل خروجك بنجاح", "info");
-                },
-              );
-            }}
-            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-rose-600 hover:bg-rose-50 hover:text-rose-700 text-[11px] font-black transition-all duration-200 transform hover:-translate-y-0.5 active:scale-95 cursor-pointer"
-          >
-            <LogOut className="w-4 h-4 shrink-0" />
-            <span>تسجيل الخروج</span>
-          </button>
+              <button
+                type="button"
+                onClick={() => {
+                  triggerConfirm(
+                    "تسجيل الخروج",
+                    "هل أنت متأكد من رغبتك في تسجيل الخروج والعودة لصفحة الدخول؟",
+                    () => {
+                      signOut(auth);
+                      triggerToast("تم تسجيل خروجك بنجاح", "info");
+                    },
+                  );
+                }}
+                className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-rose-600 hover:bg-rose-50 hover:text-rose-700 text-[11px] font-black transition-all duration-200 transform hover:-translate-y-0.5 active:scale-95 cursor-pointer"
+              >
+                <LogOut className="w-4 h-4 shrink-0" />
+                <span>تسجيل الخروج</span>
+              </button>
+            </>
+          ) : (
+            <div className="p-3.5 bg-gradient-to-br from-blue-50 to-indigo-50/80 border border-blue-200/80 rounded-2xl space-y-2.5 shadow-2xs">
+              <div className="flex items-center gap-2">
+                <div className="w-2.5 h-2.5 rounded-full bg-blue-600 animate-pulse shrink-0" />
+                <span className="text-xs font-black text-slate-800">حساب زائر (معاينة)</span>
+              </div>
+              <p className="text-[10.5px] text-slate-600 font-medium leading-relaxed">
+                سجل الدخول بحساب جوجل للوصول إلى كافة الأقسام وحفظ بياناتك.
+              </p>
+              <button
+                id="sidebar-google-login-btn"
+                type="button"
+                onClick={handleGoogleLogin}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-xs font-black shadow-xs transition-all duration-200 active:scale-95 cursor-pointer border border-blue-400/30"
+              >
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none">
+                  <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                  <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                  <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05"/>
+                  <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335"/>
+                </svg>
+                <span>تسجيل الدخول ببريد جوجل</span>
+              </button>
+            </div>
+          )}
         </div>
       </aside>
       )}
 
       {/* --- MAIN BODY WORKSPACE --- */}
       <div className="flex-1 flex flex-col min-h-screen overflow-x-hidden">
-        <main className={`flex-1 flex flex-col ${isCurriculumAdminFullScreen && activeTab === "curriculum_review_admin" ? "p-3 md:p-6 max-w-none w-full" : "p-6 md:p-10 max-w-7xl mx-auto w-full"} overflow-x-hidden`}>
+        <main className={`flex-1 flex flex-col ${isCurriculumAdminFullScreen && activeTab === "curriculum_review_admin" ? "p-3 md:p-6 max-w-none w-full" : "p-6 md:p-10 max-w-7xl mx-auto w-full"}`}>
+          {!currentUser ? (
+            <div className="flex-1 flex flex-col items-center justify-center p-4 md:p-8 min-h-[75vh]">
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{
+                  opacity: 1,
+                  y: 0,
+                  x: shakeLoginCard ? [-8, 8, -6, 6, -3, 3, -1, 0] : 0,
+                  scale: shakeLoginCard ? [1, 1.01, 0.995, 1] : 1,
+                }}
+                transition={{
+                  x: { duration: 0.4, ease: "easeInOut" },
+                  scale: { duration: 0.4, ease: "easeInOut" },
+                  opacity: { duration: 0.3 },
+                  y: { duration: 0.3 },
+                }}
+                className={`bg-white p-8 md:p-12 rounded-3xl shadow-xl max-w-lg w-full border text-center my-auto transition-colors duration-300 ${
+                  shakeLoginCard
+                    ? "border-blue-400 ring-2 ring-blue-300/60 shadow-xl bg-blue-50/20"
+                    : "border-slate-200"
+                }`}
+              >
+                <div className={`w-20 h-20 rounded-2xl flex items-center justify-center text-white mx-auto shadow-lg mb-6 transition-all duration-300 ${
+                  shakeLoginCard
+                    ? "bg-gradient-to-tr from-[#1e3a8a] to-blue-500 shadow-blue-500/40 scale-105 ring-2 ring-blue-300/50"
+                    : "bg-gradient-to-tr from-[#1e3a8a] to-blue-600 shadow-blue-500/20"
+                }`}>
+                  <GraduationCap className="w-10 h-10" />
+                </div>
+
+                <h1 className="text-3xl font-extrabold text-slate-900 mb-2 leading-tight">
+                  بوابة المعلم الذكية
+                </h1>
+                <p className="text-slate-600 text-sm mb-8 font-medium leading-relaxed">
+                  قم بتسجيل الدخول السريع باستخدام حساب جوجل للوصول إلى كافة الأقسام وإدارة اختباراتك، شؤون طلابك، وتحليلات العملية التعليمية بأمان عبر السحاب
+                </p>
+
+                {/* Login Action Buttons */}
+                <div className="space-y-3">
+                  <button
+                    id="google-login-btn"
+                    type="button"
+                    onClick={handleGoogleLogin}
+                    className={`w-full flex items-center justify-center gap-3 px-6 py-4 bg-white text-slate-800 border-2 rounded-2xl font-black shadow-sm transition-all duration-200 active:scale-[0.98] cursor-pointer text-sm ${
+                      shakeLoginCard
+                        ? "border-rose-500 bg-rose-50/90 text-rose-950 shadow-md ring-2 ring-rose-300 animate-pulse"
+                        : "border-slate-200 hover:bg-slate-50 hover:border-slate-300"
+                    }`}
+                  >
+                    <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none">
+                      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05"/>
+                      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335"/>
+                    </svg>
+                    <span>تسجيل الدخول باستخدام حساب جوجل</span>
+                  </button>
+                </div>
+
+                {authErrorDetails && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    className="mt-6 p-5 rounded-2xl bg-rose-50 border border-rose-200 text-right text-xs text-rose-900 font-sans space-y-2.5 overflow-hidden"
+                  >
+                    <div className="font-bold flex items-center gap-1.5 text-rose-800 text-sm">
+                      <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse"></span>
+                      <span>تنبيه أمني ومطابقة النطاقات (Firebase Auth)</span>
+                    </div>
+                    <p className="leading-relaxed">
+                      رمز الخطأ الحاصل من المتصفح:{" "}
+                      <code className="bg-white/80 px-1 py-0.5 rounded font-mono text-rose-700 font-bold">
+                        {authErrorDetails.code}
+                      </code>
+                    </p>
+
+                    {authErrorDetails.code === "auth/unauthorized-domain" ? (
+                      <div className="space-y-3 mt-2 pt-2 border-t border-rose-200/50">
+                        <p className="font-bold text-rose-800 text-[13px]">
+                          ⚠️ النطاق الحالي غير معتمد في إعدادات مشروع الـ Firebase!
+                        </p>
+                        <p className="leading-relaxed text-slate-700">
+                          أنت تقوم بتشغيل التطبيق عبر النطاق:{" "}
+                          <code className="bg-white px-1.5 py-0.5 rounded font-mono font-bold text-slate-800">
+                            {authErrorDetails.domain}
+                          </code>{" "}
+                          ولكن هذا النطاق ليس مدرجاً في قائمة النطاقات المعتمدة لمثيله
+                          الخاص بمصادقة جوجل.
+                        </p>
+                        <div className="bg-white p-3 rounded-xl border border-rose-100 text-[11px] text-slate-700 space-y-1.5 shadow-xs">
+                          <p className="font-bold text-slate-800 mb-1">
+                            خطوات التفعيل والحل السريع:
+                          </p>
+                          <p>
+                            1. اذهب إلى{" "}
+                            <a
+                              href="https://console.firebase.google.com"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-600 underline font-bold"
+                            >
+                              وحدة تحكم Firebase Console
+                            </a>{" "}
+                            واختر مشروعك.
+                          </p>
+                          <p>
+                            2. في القائمة الجانبية، اذهب إلى{" "}
+                            <span className="font-bold text-black">
+                              Build &gt; Authentication
+                            </span>
+                            .
+                          </p>
+                          <p>
+                            3. اختر تبويب{" "}
+                            <span className="font-bold text-black">Settings</span> في
+                            الأعلى، ثم انقر على{" "}
+                            <span className="font-bold text-black">
+                              Authorized domains
+                            </span>{" "}
+                            (النطاقات المعتمدة).
+                          </p>
+                          <p>
+                            4. انقر فوق زر{" "}
+                            <span className="font-bold text-black">Add domain</span>{" "}
+                            وقم بنسخ ولصق النطاق التالي تماماً:
+                          </p>
+                          <div className="my-2 p-1.5 bg-slate-100 text-slate-900 rounded select-all font-mono text-center text-xs font-bold border border-slate-200">
+                            {authErrorDetails.domain}
+                          </div>
+                          <p className="text-emerald-700 font-medium">
+                            5. انقر "يحفظ" (Save)، ثم حدّث هذه الصفحة وسيعمل تسجيل
+                            الدخول بكفاءة مطلقة!
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="leading-relaxed text-slate-700">
+                        التفاصيل:{" "}
+                        {authErrorDetails.message ||
+                          "حدثت مشكلة تمنع اتمام المصادقة مع سيرفرات جوجل."}
+                        <br />
+                        <span className="font-bold">نصيحة:</span> يرجى التأكد من السماح بالنوافذ المنبثقة في متصفحك لإتمام عملية تسجيل الدخول بنجاح.
+                      </p>
+                    )}
+
+                    {/* Quick Reset Option inside the error details */}
+                    {getCustomFirebaseConfig() && (
+                      <div className="mt-4 pt-4 border-t border-rose-200/50 flex flex-col items-center gap-2.5">
+                        <p className="font-bold text-rose-850 text-[11.5px] text-center leading-relaxed">
+                          💡 هل ترغب في العودة السريعة لمشروع المنصة الافتراضي؟
+                        </p>
+                        <p className="text-slate-600 text-[10.5px] text-center leading-relaxed">
+                          إذا لم تكن ترغب في إعداد نطاقات معتمدة حالياً، اضغط على الزر أدناه لقطع اتصال مشروعك المخصص والعودة فوراً لقاعدة بيانات المنصة الافتراضية.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            clearCustomFirebaseConfig();
+                            triggerToast("تم قطع الاتصال والعودة لقاعدة بيانات المنصة الافتراضية بنجاح! جاري التحديث...", "success");
+                            setTimeout(() => window.location.reload(), 1200);
+                          }}
+                          className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl transition-all cursor-pointer shadow-md shadow-rose-200 active:scale-95"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" style={{ animationDuration: "3s" }} />
+                          <span>قطع الاتصال والعودة لقاعدة بيانات المنصة الافتراضية 🔌</span>
+                        </button>
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </motion.div>
+            </div>
+          ) : (
+            <>
           {/* UPPER STATUS BAR */}
           {activeTab === "builder" ? (
             <header className="flex flex-col sm:flex-row justify-end items-center gap-4 mb-8">
@@ -10132,7 +10179,7 @@ export default function App() {
                       )}
 
                       {/* First row: Grade selection */}
-                      <div className="flex flex-wrap justify-center items-center gap-2.5 w-full">
+                      <div className="flex flex-wrap justify-start items-center gap-2.5 w-full">
                         {gradesList.length === 0 ? (
                           <div className="text-center py-4 px-2">
                             <p className="text-xs text-slate-500 font-extrabold font-sans">
@@ -10222,7 +10269,7 @@ export default function App() {
 
                       {/* Second row: Classes/Sections selection as modern squarish buttons 1, 2, 3... */}
                       {selectedTabGrade && (
-                        <div className="flex flex-wrap justify-center items-center gap-2.5 sm:gap-3 pt-2 border-t border-slate-200/50 w-full max-w-md">
+                        <div className="flex flex-wrap justify-start items-center gap-2.5 sm:gap-3 pt-2 border-t border-slate-200/50 w-full">
                           {semestersList.map((s, idx) => {
                             const isSemSelected = selectedTabSemester === s;
                             // Map semester string to clean short numeric representations like 1, 2, 3...
@@ -13791,6 +13838,8 @@ export default function App() {
               </div>
             )}
           </AnimatePresence>
+          </>
+          )}
         </main>
       </div>
 

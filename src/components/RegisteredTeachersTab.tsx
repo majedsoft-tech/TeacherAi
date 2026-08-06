@@ -107,38 +107,6 @@ export const RegisteredTeachersTab: React.FC<RegisteredTeachersTabProps> = ({
         });
       }
 
-      // If no other teachers returned yet, inject demo registered teachers for demonstration
-      if (teacherList.length <= 1) {
-        const defaultTeachers: RegisteredTeacher[] = [
-          {
-            uid: "teacher_demo_01",
-            displayName: "أ. عبد الله العتيبي",
-            email: "alotaibi@school.edu.sa",
-            status: "active",
-            isFrozen: false
-          },
-          {
-            uid: "teacher_demo_02",
-            displayName: "د. سارة الغامدي",
-            email: "sara.alghamdi@school.edu.sa",
-            status: "frozen",
-            isFrozen: true
-          },
-          {
-            uid: "teacher_demo_03",
-            displayName: "أ. محمد بن أحمد الشهري",
-            email: "m.alshehri@school.edu.sa",
-            status: "active",
-            isFrozen: false
-          }
-        ];
-        defaultTeachers.forEach((dt) => {
-          if (!teacherList.some((t) => t.email === dt.email || t.uid === dt.uid)) {
-            teacherList.push(dt);
-          }
-        });
-      }
-
       setTeachers(teacherList);
 
       // 2. Fetch all quizzes to compute statistics per teacher

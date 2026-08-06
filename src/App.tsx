@@ -5142,7 +5142,7 @@ export default function App() {
                 <BookOpen className="w-8 h-8" />
               </div>
               <h1 className="text-2xl font-black leading-tight">
-                بوابة المعلم الإلكترونية
+                بوابة الطالب الإلكترونية
               </h1>
               <span className="inline-block text-xl font-black text-emerald-300 tracking-wider normal-case leading-tight font-sans mt-2 px-5 py-1.5 rounded-2xl bg-emerald-950/50 border-2 border-emerald-400/60 shadow-lg shadow-emerald-950/40 backdrop-blur-md">
                 Student.AI
@@ -5544,7 +5544,7 @@ export default function App() {
                 </div>
                 <div>
                   <h1 className="text-sm font-extrabold text-white leading-none leading-tight">
-                    بوابة المعلم الإلكترونية
+                    بوابة الطالب الإلكترونية
                   </h1>
                   <span className="text-base font-black text-green-300 tracking-wider block normal-case leading-tight font-sans mt-1 mb-2 drop-shadow-md">
                     Student.AI
@@ -5689,7 +5689,7 @@ export default function App() {
               <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between sticky top-0 z-40 shadow-xs">
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-slate-400 font-bold">
-                    بوابة المعلم الإلكترونية &gt;
+                    بوابة الطالب الإلكترونية &gt;
                   </span>
                   <span className="text-xs text-indigo-600 font-black">
                     {studentActiveNav === "home" && "الصفحة الرئيسية والمتابعة 🏠"}

@@ -3132,6 +3132,7 @@ export default function App() {
     }
 
     try {
+      let firstAddedGrade: string | null = null;
       await runWithProgress(
         async () => {
           const addedNames: string[] = [];
@@ -3148,7 +3149,8 @@ export default function App() {
           setGrades((prev) => [...prev, ...addedNames]);
           setNewGradeInput("");
           if (addedNames.length > 0) {
-            setSelectedManageGrade(addedNames[addedNames.length - 1]);
+            firstAddedGrade = addedNames[0];
+            setSelectedManageGrade(firstAddedGrade);
             setSelectedSemesterNumbers([]);
           }
         },
@@ -3159,6 +3161,15 @@ export default function App() {
           ? `تمت إضافة الصف الدراسي "${newGradesToAdd[0]}" بنجاح ✨`
           : `تمت إضافة ${newGradesToAdd.length} صفوف دراسية بنجاح ✨`
       );
+
+      if (firstAddedGrade) {
+        setTimeout(() => {
+          const el = document.getElementById(`grade-card-${firstAddedGrade}`);
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "center" });
+          }
+        }, 300);
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, "grades");
     }
@@ -4895,7 +4906,7 @@ export default function App() {
                 <GraduationCap className="w-9 h-9 text-amber-300" />
               </div>
               <span className="inline-block px-3.5 py-1 rounded-full bg-white/15 text-amber-300 text-xs font-black tracking-wide mb-2.5 backdrop-blur-xs border border-white/10">
-                منصة SmartCloud التعليمية
+                منصة Teacher.AI التعليمية
               </span>
               <h1 className="text-2xl md:text-3xl font-black leading-tight text-white">
                 منصة الاختبارات والتقييم الذكي
@@ -4924,7 +4935,7 @@ export default function App() {
 
                 <div className="pt-2 border-t border-indigo-100/60 flex items-center justify-center gap-2 text-center text-indigo-900 font-bold text-sm bg-indigo-50/70 p-3.5 rounded-xl border border-indigo-100">
                   <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
-                  <span>أهلاً وسهلاً بكم في منصة SmartCloud التعليمية الذكية</span>
+                  <span>أهلاً وسهلاً بكم في منصة Teacher.AI التعليمية الذكية</span>
                 </div>
               </div>
 
@@ -7508,7 +7519,7 @@ export default function App() {
                   بوابة المعلم الإلكترونية
                 </h1>
                 <span className="text-xs md:text-sm font-black text-indigo-700 tracking-wide block normal-case leading-tight font-sans mt-0.5">
-                  SmartCloud
+                  Teacher.AI
                 </span>
               </div>
             </div>
@@ -7592,14 +7603,22 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveTab("students")}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-black transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer ${
+              className={`w-full flex items-center justify-between gap-2 px-4 py-3 rounded-xl text-xs font-black transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer ${
                 activeTab === "students"
                   ? "bg-gradient-to-r from-blue-600 to-[#1e3a8a] text-white shadow-lg"
                   : "text-slate-650 hover:bg-slate-105 hover:text-[#1e3a8a] font-bold"
               }`}
             >
-              <Users className="w-4 h-4 shrink-0" />
-              <span>إضافة الطلاب/الفصول</span>
+              <div className="flex items-center gap-3">
+                <Users className="w-4 h-4 shrink-0" />
+                <span>إضافة الطلاب/الفصول</span>
+              </div>
+              {gradesList.length === 0 && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-black text-white bg-gradient-to-r from-amber-500 to-rose-500 rounded-lg shadow-sm animate-pulse shrink-0 border border-white/40">
+                  <span>ابدأ هنا</span>
+                  <span className="text-xs">👈</span>
+                </span>
+              )}
             </button>
 
 
@@ -10095,12 +10114,19 @@ export default function App() {
                               setNewGradeInput("");
                               setShowGradesSemestersModal(true);
                             }}
-                            className="px-3.5 py-2 flex items-center gap-2 rounded-xl text-white bg-amber-500 hover:bg-amber-600 border border-amber-400 hover:border-amber-500 active:scale-95 transition-all duration-200 cursor-pointer shadow-sm shadow-amber-200 shrink-0 text-xs font-black"
+                            className={`px-3.5 py-2 flex items-center gap-2 rounded-xl text-white bg-amber-500 hover:bg-amber-600 border border-amber-400 hover:border-amber-500 active:scale-95 transition-all duration-200 cursor-pointer shadow-sm shadow-amber-200 shrink-0 text-xs font-black ${
+                              gradesList.length === 0 ? "ring-4 ring-amber-300 animate-bounce" : ""
+                            }`}
                             title="إضافة / تعديل الصفوف والفصول"
                             id="manage-semesters-top-btn"
                           >
                             <Settings className="w-3.5 h-3.5 md:w-4 md:h-4 text-white animate-spin-hover" />
                             <span>إضافة / تعديل الصفوف والفصول</span>
+                            {gradesList.length === 0 && (
+                              <span className="px-2 py-0.5 text-[10px] font-black text-amber-950 bg-amber-200 rounded-lg shadow-2xs animate-pulse mr-1 border border-amber-300">
+                                أكمل هنا 👈
+                              </span>
+                            )}
                           </button>
                         </div>
                       )}
@@ -10362,7 +10388,7 @@ export default function App() {
                                     showAddStudentModal
                                       ? "bg-slate-800 hover:bg-slate-900 text-white shadow-slate-200"
                                       : "bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-150"
-                                  }`}
+                                  } ${students.length === 0 && gradesList.length > 0 ? "ring-4 ring-indigo-300 animate-pulse" : ""}`}
                                 >
                                   {showAddStudentModal ? (
                                     <X className="w-4 h-4" />
@@ -10374,6 +10400,11 @@ export default function App() {
                                       ? "إغلاق نموذج الإضافة"
                                       : "إضافة طالب / طلاب للفصل"}
                                   </span>
+                                  {students.length === 0 && gradesList.length > 0 && !showAddStudentModal && (
+                                    <span className="px-2 py-0.5 text-[10px] font-black text-amber-950 bg-amber-300 rounded-lg shadow-2xs animate-pulse mr-1 border border-amber-400">
+                                      أكمل هنا 👈
+                                    </span>
+                                  )}
                                 </button>
                               </>
                             )}
@@ -10596,9 +10627,14 @@ export default function App() {
                                     setNewStudentSemester(selectedTabSemester);
                                     setShowAddStudentModal(true);
                                   }}
-                                  className="mt-4 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs px-4 py-2 rounded-xl transition-all cursor-pointer"
+                                  className="mt-4 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs px-5 py-2.5 rounded-xl transition-all cursor-pointer shadow-md inline-flex items-center gap-2"
                                 >
-                                  تسجيل أول طالب الآن
+                                  <span>تسجيل أول طالب الآن</span>
+                                  {students.length === 0 && gradesList.length > 0 && (
+                                    <span className="px-2 py-0.5 text-[10px] font-black text-amber-950 bg-amber-300 rounded-lg shadow-2xs animate-pulse border border-amber-400">
+                                      أكمل هنا 👈
+                                    </span>
+                                  )}
                                 </button>
                               )}
                           </div>
@@ -13507,6 +13543,7 @@ export default function App() {
                               return (
                                 <div
                                   key={g}
+                                  id={`grade-card-${g}`}
                                   onClick={() => {
                                     if (!isEditing) {
                                       setSelectedManageGrade(g);

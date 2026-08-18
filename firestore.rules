@@ -1,0 +1,81 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Teachers profile & settings
+    match /teachers/{teacherId} {
+      allow read, write: if true;
+    }
+
+    match /curriculum_settings/{teacherId} {
+      allow read: if true;
+      allow write: if isSignedIn() && request.auth.uid == teacherId;
+    }
+
+    // Question Bank (Protected - Only authenticated teachers can read or write directly)
+    match /question_bank/{questionId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // Quizzes (Readable for quiz links and server endpoints, write restricted to authenticated teachers)
+    match /quizzes/{quizId} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    // Students (created/updated by teachers & by students when taking quizzes)
+    match /students/{studentId} {
+      allow read, write: if true;
+    }
+
+    // Trash students
+    match /trash_students/{studentId} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    // Grades & Semesters
+    match /grades/{gradeId} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    match /semesters/{semesterId} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    // Review Challenges (Games)
+    match /reviewChallenges/{challengeId} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    match /reviewScores/{scoreId} {
+      allow read, write: if true;
+    }
+
+    // Curriculum Scores & Live Playroom
+    match /student_curriculum_scores/{studentId} {
+      allow read, write: if true;
+    }
+
+    match /livePlayroomPresence/{presenceId} {
+      allow read, write: if true;
+    }
+
+    // Standalone Quiz Results
+    match /standalone_results/{submissionId} {
+      allow read, write: if true;
+    }
+  }
+}

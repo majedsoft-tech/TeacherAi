@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "teacherdashboard",
+  "compatibility_date": "2026-06-21",
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "directory": "dist",
+    "not_found_handling": "single-page-application"
+  },
+  "build": {
+    "command": "npm run build"
+  },
+  "compatibility_flags": [
+    "nodejs_compat"
+  ]
+}

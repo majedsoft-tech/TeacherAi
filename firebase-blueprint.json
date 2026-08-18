@@ -1,0 +1,384 @@
+{
+  "entities": {
+    "Question": {
+      "title": "Question",
+      "description": "A quiz question and its answers",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the question"
+        },
+        "text": {
+          "type": "string",
+          "description": "The question text"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["multiple_choice", "true_false"],
+          "description": "The question type"
+        },
+        "options": {
+          "type": "array",
+          "description": "The answer choices"
+        },
+        "correctAnswer": {
+          "type": "string",
+          "description": "Index or truth value of the correct answer"
+        },
+        "points": {
+          "type": "integer",
+          "description": "Point value of the question"
+        }
+      },
+      "required": ["id", "text", "type", "options", "correctAnswer", "points"]
+    },
+    "Quiz": {
+      "title": "Quiz",
+      "description": "A quiz created by a teacher",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the quiz"
+        },
+        "teacherId": {
+          "type": "string",
+          "description": "The UID of the teacher who owns this quiz"
+        },
+        "title": {
+          "type": "string",
+          "description": "The quiz title"
+        },
+        "subject": {
+          "type": "string",
+          "description": "The quiz subject"
+        },
+        "durationMinutes": {
+          "type": "integer",
+          "description": "The timer duration in minutes"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "closed"],
+          "description": "Active or closed status"
+        },
+        "dateCreated": {
+          "type": "string",
+          "description": "ISO date string of creation"
+        },
+        "questions": {
+          "type": "array",
+          "description": "List of questions in the quiz",
+          "items": {
+            "$ref": "Question"
+          }
+        }
+      },
+      "required": ["id", "teacherId", "title", "subject", "durationMinutes", "status", "dateCreated", "questions"]
+    },
+    "StudentGrade": {
+      "title": "StudentGrade",
+      "description": "A record of a student's grade for a specific quiz",
+      "type": "object",
+      "properties": {
+        "quizTitle": {
+          "type": "string",
+          "description": "The title of the taken quiz"
+        },
+        "score": {
+          "type": "number",
+          "description": "Score achieved by student"
+        },
+        "maxScore": {
+          "type": "number",
+          "description": "Maximum obtainable scoreboard value"
+        },
+        "date": {
+          "type": "string",
+          "description": "ISO string date when the quiz was taken"
+        },
+        "passed": {
+          "type": "boolean",
+          "description": "Whether the student passed the quiz"
+        }
+      },
+      "required": ["quizTitle", "score", "maxScore", "date", "passed"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "A student in the teacher's class roster",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique ID of the student document"
+        },
+        "teacherId": {
+          "type": "string",
+          "description": "Teacher UID owning this student profile"
+        },
+        "name": {
+          "type": "string",
+          "description": "Student's full name"
+        },
+        "gradeClass": {
+          "type": "string",
+          "description": "The academic class section"
+        },
+        "email": {
+          "type": "string",
+          "description": "Student email address"
+        },
+        "averageScore": {
+          "type": "number",
+          "description": "Weighted class average score percentage"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["excellent", "good", "average", "needs_improvement"],
+          "description": "Performance classification"
+        },
+        "detailedGrades": {
+          "type": "array",
+          "description": "Grades for each attempt",
+          "items": {
+            "$ref": "StudentGrade"
+          }
+        }
+      },
+      "required": ["id", "teacherId", "name", "gradeClass", "email", "averageScore", "status", "detailedGrades"]
+    },
+    "BankQuestion": {
+      "title": "BankQuestion",
+      "description": "A template/reusable question inside a teacher's Question Bank",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "teacherId": { "type": "string" },
+        "text": { "type": "string" },
+        "type": { "type": "string", "enum": ["multiple_choice", "true_false"] },
+        "options": { "type": "array" },
+        "correctAnswer": { "type": "string" },
+        "points": { "type": "integer" },
+        "stage": { "type": "string" },
+        "grade": { "type": "string" },
+        "semester": { "type": "string" },
+        "subject": { "type": "string" },
+        "unit": { "type": "string" },
+        "lesson": { "type": "string" }
+      },
+      "required": ["id", "teacherId", "text", "type", "options", "correctAnswer", "points", "stage", "grade", "semester", "subject", "unit", "lesson"]
+    },
+    "Grade": {
+      "title": "Grade",
+      "description": "A customized school grade/level option",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "teacherId": { "type": "string" },
+        "name": { "type": "string" }
+      },
+      "required": ["id", "teacherId", "name"]
+    },
+    "Semester": {
+      "title": "Semester",
+      "description": "A customized academic term/semester option",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "teacherId": { "type": "string" },
+        "name": { "type": "string" }
+      },
+      "required": ["id", "teacherId", "name"]
+    },
+    "TrashStudent": {
+      "title": "TrashStudent",
+      "description": "A backed up student record in the trash bin pending restoration or hard delete",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "teacherId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "gradeClass": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "averageScore": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string"
+        },
+        "detailedGrades": {
+          "type": "array"
+        },
+        "deletedAt": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "teacherId", "name", "gradeClass", "email", "deletedAt"]
+    },
+    "Teacher": {
+      "title": "Teacher",
+      "description": "A teacher's profile and settings",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "The UID of the teacher matching their Firebase Auth UID"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "The display name of the teacher"
+        },
+        "email": {
+          "type": "string",
+          "description": "The email of the teacher"
+        }
+      },
+      "required": ["uid", "displayName", "email"]
+    },
+    "ReviewChallenge": {
+      "title": "ReviewChallenge",
+      "description": "A review challenge designed for students",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "subject": { "type": "string" },
+        "grade": { "type": "string" },
+        "semester": { "type": "string" },
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "Question"
+          }
+        },
+        "status": { "type": "string", "enum": ["active", "completed"] },
+        "teacherId": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "gameType": { "type": "string", "enum": ["time_attack", "space_invaders", "quiz_game", "car_racing"] }
+      },
+      "required": ["title", "subject", "grade", "semester", "questions", "status", "teacherId", "createdAt", "gameType"]
+    },
+    "ReviewScore": {
+      "title": "ReviewScore",
+      "description": "A student's score in a review challenge",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "challengeId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "gradeClass": { "type": "string" },
+        "score": { "type": "number" },
+        "correctCount": { "type": "integer" },
+        "totalCount": { "type": "integer" },
+        "timeSpentSeconds": { "type": "integer" },
+        "completedAt": { "type": "string" }
+      },
+      "required": ["id", "challengeId", "studentId", "studentName", "gradeClass", "score", "correctCount", "totalCount", "timeSpentSeconds", "completedAt"]
+    },
+    "CurriculumSettings": {
+      "title": "CurriculumSettings",
+      "description": "Settings for showing/hiding curriculum subjects",
+      "type": "object",
+      "properties": {
+        "teacherId": { "type": "string" },
+        "visibleSubjects": { 
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "lastUpdated": { "type": "string" }
+      },
+      "required": ["teacherId", "visibleSubjects"]
+    },
+    "StudentCurriculumScore": {
+      "title": "StudentCurriculumScore",
+      "description": "Comprehensive review lesson scores for a student",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "stats": { "type": "object" },
+        "lastUpdated": { "type": "string" }
+      },
+      "required": ["studentId", "studentName", "stats"]
+    },
+    "LivePlayroomPresence": {
+      "title": "LivePlayroomPresence",
+      "description": "Real-time presence tracking for students in the review playroom",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "gradeClass": { "type": "string" },
+        "challengeId": { "type": "string" },
+        "challengeTitle": { "type": "string" },
+        "score": { "type": "number" },
+        "updatedAt": { "type": "string" },
+        "active": { "type": "boolean" }
+      },
+      "required": ["id", "studentId", "studentName", "gradeClass", "challengeId", "challengeTitle", "score", "updatedAt", "active"]
+    }
+  },
+  "firestore": {
+    "teachers/{teacherId}": {
+      "schema": "Teacher",
+      "description": "Registered teacher profiles and names"
+    },
+    "curriculum_settings/{teacherId}": {
+      "schema": "CurriculumSettings",
+      "description": "Teacher settings for displaying/hiding subjects"
+    },
+    "question_bank/{questionId}": {
+      "schema": "BankQuestion",
+      "description": "Reusable questions stored in the teacher's Question Bank"
+    },
+    "quizzes/{quizId}": {
+      "schema": "Quiz",
+      "description": "Quizzes built and managed by teachers"
+    },
+    "students/{studentId}": {
+      "schema": "Student",
+      "description": "Students roster managed by teachers"
+    },
+    "grades/{gradeId}": {
+      "schema": "Grade",
+      "description": "School grades configured by teacher"
+    },
+    "semesters/{semesterId}": {
+      "schema": "Semester",
+      "description": "Semesters configured by teacher"
+    },
+    "trash_students/{studentId}": {
+      "schema": "TrashStudent",
+      "description": "Students deleted to the trash bin"
+    },
+    "reviewChallenges/{challengeId}": {
+      "schema": "ReviewChallenge",
+      "description": "Active and completed review challenges"
+    },
+    "reviewScores/{scoreId}": {
+      "schema": "ReviewScore",
+      "description": "Scores recorded by students taking a review challenge"
+    },
+    "student_curriculum_scores/{studentId}": {
+      "schema": "StudentCurriculumScore",
+      "description": "Lesson-by-lesson scores of students in the comprehensive review"
+    },
+    "livePlayroomPresence/{presenceId}": {
+      "schema": "LivePlayroomPresence",
+      "description": "Real-time presence and scoring of active players"
+    }
+  }
+}

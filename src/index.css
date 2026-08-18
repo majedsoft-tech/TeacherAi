@@ -34,3 +34,42 @@
   );
   animation: laneScroll 0.25s linear infinite;
 }
+
+@keyframes digitalPulse {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.85;
+  }
+  50% {
+    transform: scale(1.35);
+    opacity: 0.35;
+  }
+  100% {
+    transform: scale(1.85);
+    opacity: 0;
+  }
+}
+
+@keyframes digitalPulseDelay {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.65;
+  }
+  50% {
+    transform: scale(1.5);
+    opacity: 0.25;
+  }
+  100% {
+    transform: scale(2.1);
+    opacity: 0;
+  }
+}
+
+.animate-digital-pulse {
+  animation: digitalPulse 2.2s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+.animate-digital-pulse-delayed {
+  animation: digitalPulseDelay 2.2s cubic-bezier(0, 0, 0.2, 1) infinite 0.8s;
+}
+

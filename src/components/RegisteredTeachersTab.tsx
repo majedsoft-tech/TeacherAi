@@ -676,7 +676,7 @@ export const RegisteredTeachersTab: React.FC<RegisteredTeachersTabProps> = ({
               )}
               {confirmModal.actionType === "reactivate" && (
                 <p>
-                  إعادة التنشيط تمنح المعلم حق الوصول مجدداً لمنصة معلم | Teacher.AI وإدارة طلابه واختباراته.
+                  إعادة التنشيط تمنح المعلم حق الوصول مجدداً لمنصة معلم.Teacher.AI وإدارة طلابه واختباراته.
                 </p>
               )}
               {confirmModal.actionType === "delete" && (

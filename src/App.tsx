@@ -1068,7 +1068,7 @@ export default function App() {
   useEffect(() => {
     // 1. Update Title dynamically
     if (studentPortalActive) {
-      document.title = "بوابة الطالب | معلم Teacher.AI";
+      document.title = "بوابة الطالب | معلم | Teacher.AI";
     } else {
       document.title = "معلم | Teacher.AI";
     }
@@ -5291,18 +5291,18 @@ export default function App() {
             className="bg-white rounded-3xl border border-slate-200/80 shadow-2xl max-w-lg w-full overflow-hidden text-center"
           >
             {/* Main Platform Header */}
-            <div className="p-8 md:p-10 bg-gradient-to-tr from-[#1e3a8a] via-indigo-700 to-blue-600 text-white relative font-sans">
+            <div className="p-8 md:p-10 bg-gradient-to-tr from-[#1e3a8a] via-indigo-700 to-blue-600 text-white relative font-sans flex flex-col items-center">
               <div className="w-16 h-16 bg-white/10 backdrop-blur-md rounded-2xl flex items-center justify-center text-white mx-auto mb-4 border border-white/20 shadow-inner">
                 <GraduationCap className="w-9 h-9 text-amber-300" />
               </div>
-              <span className="inline-block px-3.5 py-1 rounded-full bg-white/15 text-amber-300 text-xs font-black tracking-wide mb-2.5 backdrop-blur-xs border border-white/10 whitespace-nowrap">
+              <span className="inline-block px-4 py-1.5 rounded-full bg-white/15 text-amber-300 text-sm font-black tracking-wide mb-2.5 backdrop-blur-xs border border-white/10 select-none whitespace-nowrap">
                 معلم | Teacher.AI
               </span>
               <h1 className="text-2xl md:text-3xl font-black leading-tight text-white">
-                منصة الاختبارات والتقييم الذكي
+                بوابتك الذكية
               </h1>
-              <p className="text-amber-200 text-xs md:text-sm mt-3 max-w-md mx-auto font-bold leading-relaxed whitespace-nowrap">
-                معلم: بوابتك الذكية لعالم Teacher.AI
+              <p className="text-amber-200 text-xs md:text-sm mt-2 max-w-md mx-auto font-bold leading-relaxed whitespace-nowrap">
+                لعالم Teacher.AI
               </p>
             </div>
 
@@ -8143,7 +8143,7 @@ export default function App() {
         <div className="absolute bottom-0 right-0 w-32 h-32 bg-purple-500/5 rounded-full blur-2xl pointer-events-none" />
 
         <div className="space-y-6 relative z-10">
-          {/* Logo / Brand header matching student portal */}
+          {/* Platform Title header with side emblem */}
           <div className="flex flex-col gap-3 pb-4 border-b border-slate-100">
             <div className="flex items-center gap-3">
               <div className="relative w-11 h-11 rounded-2xl bg-gradient-to-tr from-[#1e3a8a] via-indigo-700 to-blue-600 p-0.5 shadow-lg shadow-indigo-600/20 shrink-0 transform hover:scale-105 transition-all duration-200 group cursor-pointer">
@@ -8161,13 +8161,11 @@ export default function App() {
                   معلم | Teacher.AI
                 </h1>
                 <p className="text-[9px] sm:text-[9.5px] text-indigo-600 font-bold leading-tight mt-0.5 text-center">
-                  <span className="block whitespace-nowrap">معلم: بوابتك الذكية</span>
+                  <span className="block whitespace-nowrap">بوابتك الذكية</span>
                   <span className="block whitespace-nowrap text-[8.5px] sm:text-[9px] text-indigo-500 font-semibold">لعالم Teacher.AI</span>
                 </p>
               </div>
             </div>
-
-
           </div>
 
           {/* Navigation Tabs */}
@@ -8442,20 +8440,26 @@ export default function App() {
                     : "border-slate-200"
                 }`}
               >
-                <div className={`w-20 h-20 rounded-2xl flex items-center justify-center text-white mx-auto shadow-lg mb-6 transition-all duration-300 ${
-                  shakeLoginCard
-                    ? "bg-gradient-to-tr from-[#1e3a8a] to-blue-500 shadow-blue-500/40 scale-105 ring-2 ring-blue-300/50"
-                    : "bg-gradient-to-tr from-[#1e3a8a] to-blue-600 shadow-blue-500/20"
-                }`}>
-                  <GraduationCap className="w-10 h-10" />
+                <div className="mb-6 flex flex-col items-center">
+                  <div className={`w-20 h-20 rounded-2xl flex items-center justify-center text-white mx-auto shadow-lg mb-4 transition-all duration-300 ${
+                    shakeLoginCard
+                      ? "bg-gradient-to-tr from-[#1e3a8a] to-blue-500 shadow-blue-500/40 scale-105 ring-2 ring-blue-300/50"
+                      : "bg-gradient-to-tr from-[#1e3a8a] to-blue-600 shadow-blue-500/20"
+                  }`}>
+                    <GraduationCap className="w-10 h-10 text-amber-300" />
+                  </div>
+
+                  <h1 className="text-2xl sm:text-3xl font-black text-slate-900 mb-1 leading-tight select-none whitespace-nowrap">
+                    معلم | Teacher.AI
+                  </h1>
+                  <p className="text-indigo-600 font-black text-xs md:text-sm mt-1 whitespace-nowrap">
+                    بوابتك الذكية
+                  </p>
+                  <p className="text-indigo-500 font-bold text-xs mt-0.5 whitespace-nowrap">
+                    لعالم Teacher.AI
+                  </p>
                 </div>
 
-                <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 mb-1 leading-tight whitespace-nowrap">
-                  معلم | Teacher.AI
-                </h1>
-                <p className="text-indigo-600 font-black text-xs md:text-sm mb-3 whitespace-nowrap">
-                  معلم: بوابتك الذكية لعالم Teacher.AI
-                </p>
                 <p className="text-slate-600 text-sm mb-8 font-medium leading-relaxed">
                   قم بتسجيل الدخول السريع باستخدام حساب جوجل للوصول إلى كافة الأقسام وإدارة اختباراتك، شؤون طلابك، وتحليلات العملية التعليمية بأمان عبر السحاب
                 </p>
@@ -15102,7 +15106,7 @@ export default function App() {
               <span>معلم | Teacher.AI</span>
             </div>
             <p className="text-slate-400 text-[11px] font-semibold whitespace-nowrap">
-              جميع الحقوق محفوظة © {new Date().getFullYear()} معلم | Teacher.AI — معلم: بوابتك الذكية لعالم Teacher.AI
+              جميع الحقوق محفوظة © {new Date().getFullYear()} معلم | Teacher.AI — بوابتك الذكية لعالم Teacher.AI
             </p>
           </footer>
         </main>

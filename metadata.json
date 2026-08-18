@@ -1,6 +1,6 @@
 {
   "name": "معلم | Teacher.AI",
-  "description": "معلم: بوابتك الذكية لعالم Teacher.AI - منصة متكاملة لإدارة العملية التعليمية وبناء الاختبارات الذكية ورصد الدرجات.",
+  "description": "معلم | Teacher.AI - بوابتك الذكية لعالم Teacher.AI",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

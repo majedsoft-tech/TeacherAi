@@ -12133,16 +12133,16 @@ export default function App() {
                                             <div className="relative w-full">
                                               <input
                                                 type="text"
+                                                inputMode="numeric"
                                                 pattern="[0-9]*"
                                                 maxLength={10}
-                                                placeholder="أرقام فقط"
+                                                placeholder="أرقام فقط (10 كحد أقصى)"
                                                 value={student.password || ""}
                                                 onChange={async (e) => {
                                                   const val =
-                                                    e.target.value.replace(
-                                                      /[^0-9]/g,
-                                                      "",
-                                                    );
+                                                    e.target.value
+                                                      .replace(/[^0-9]/g, "")
+                                                      .slice(0, 10);
                                                   setStudents((prev) =>
                                                     prev.map((s) =>
                                                       s.id === student.id

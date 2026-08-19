@@ -919,6 +919,180 @@ export default function App() {
   // Derived Statistics
   const [stats, setStats] = useState<TeacherStats>(initialStats);
 
+  const isReconcilingRef = useRef(false);
+
+  const reconcileUserData = useCallback(async (targetUser: User | null, showFeedback = false) => {
+    if (!targetUser || isReconcilingRef.current) return;
+    isReconcilingRef.current = true;
+    if (showFeedback) {
+      triggerToast("جاري فحص ومزامنة واسترجاع بيانات الحساب...", "info");
+    }
+
+    try {
+      const userEmail = targetUser.email?.toLowerCase().trim() || "";
+      const currentUid = targetUser.uid;
+      const cachedPlatformUid = localStorage.getItem("platform_teacher_uid");
+      const cachedStudentTuid = localStorage.getItem("seb_student_teacher_id");
+
+      const candidateIds = new Set<string>();
+      candidateIds.add(currentUid);
+      if (userEmail) candidateIds.add(userEmail);
+      if (cachedPlatformUid) candidateIds.add(cachedPlatformUid);
+      if (cachedStudentTuid) candidateIds.add(cachedStudentTuid);
+
+      // Query teachers by email to discover previous UIDs
+      if (userEmail) {
+        try {
+          const teachersSnap = await getDocs(
+            query(collection(db, "teachers"), where("email", "==", userEmail))
+          );
+          teachersSnap.forEach((d) => {
+            if (d.id) candidateIds.add(d.id);
+            const data = d.data();
+            if (data.uid) candidateIds.add(data.uid);
+          });
+        } catch (err) {
+          console.warn("Could not query teachers by email:", err);
+        }
+      }
+
+      // Save/update current teacher profile in Firestore
+      await setDoc(
+        doc(db, "teachers", currentUid),
+        {
+          uid: currentUid,
+          displayName: targetUser.displayName || targetUser.email?.split("@")[0] || "المعلم",
+          email: userEmail,
+          lastActive: new Date().toISOString(),
+        },
+        { merge: true }
+      ).catch(() => {});
+
+      let reconciledDocsCount = 0;
+      const collectionsToReconcile = [
+        "quizzes",
+        "students",
+        "grades",
+        "semesters",
+        "trash_students",
+        "reviewChallenges",
+        "reviewScores",
+      ];
+
+      for (const colName of collectionsToReconcile) {
+        try {
+          if (userEmail) {
+            const emailSnap = await getDocs(
+              query(collection(db, colName), where("teacherEmail", "==", userEmail))
+            );
+            const batch = writeBatch(db);
+            let batchCount = 0;
+            emailSnap.forEach((docSnap) => {
+              const data = docSnap.data();
+              if (data.teacherId !== currentUid) {
+                batch.update(docSnap.ref, {
+                  teacherId: currentUid,
+                  teacherEmail: userEmail,
+                });
+                batchCount++;
+                reconciledDocsCount++;
+              }
+            });
+            if (batchCount > 0) {
+              await batch.commit();
+            }
+          }
+
+          for (const candidateId of Array.from(candidateIds)) {
+            if (candidateId === currentUid) continue;
+            const candidateSnap = await getDocs(
+              query(collection(db, colName), where("teacherId", "==", candidateId))
+            );
+            if (!candidateSnap.empty) {
+              const batch = writeBatch(db);
+              let batchCount = 0;
+              candidateSnap.forEach((docSnap) => {
+                batch.update(docSnap.ref, {
+                  teacherId: currentUid,
+                  teacherEmail: userEmail,
+                });
+                batchCount++;
+                reconciledDocsCount++;
+              });
+              if (batchCount > 0) {
+                await batch.commit();
+              }
+            }
+          }
+        } catch (colErr) {
+          console.warn(`Reconciliation notice for ${colName}:`, colErr);
+        }
+      }
+
+      // Reconcile curriculum_settings
+      try {
+        const uidRef = doc(db, "curriculum_settings", currentUid);
+        if (userEmail && userEmail !== currentUid) {
+          const emailRef = doc(db, "curriculum_settings", userEmail);
+          const emailSnap = await getDoc(emailRef);
+          if (emailSnap.exists()) {
+            const data = emailSnap.data();
+            await setDoc(
+              uidRef,
+              {
+                ...data,
+                teacherId: currentUid,
+                teacherEmail: userEmail,
+              },
+              { merge: true }
+            );
+            reconciledDocsCount++;
+          }
+        }
+        if (cachedPlatformUid && cachedPlatformUid !== currentUid) {
+          const platformRef = doc(db, "curriculum_settings", cachedPlatformUid);
+          const platformSnap = await getDoc(platformRef);
+          if (platformSnap.exists()) {
+            const data = platformSnap.data();
+            await setDoc(
+              uidRef,
+              {
+                ...data,
+                teacherId: currentUid,
+                teacherEmail: userEmail,
+              },
+              { merge: true }
+            );
+            reconciledDocsCount++;
+          }
+        }
+      } catch (settErr) {
+        console.warn("Curriculum settings reconciliation:", settErr);
+      }
+
+      if (showFeedback) {
+        if (reconciledDocsCount > 0) {
+          triggerToast(
+            `تم بنجاح استرجاع ومزامنة (${reconciledDocsCount}) سجلاً واختباراً مع بريدك الإلكتروني!`,
+            "success"
+          );
+        } else {
+          triggerToast(
+            "كافة بيانات واختبارات حسابك متصلة ومحدثة بنجاح مع السحاب.",
+            "success"
+          );
+        }
+      }
+    } catch (err: any) {
+      console.error("Error reconciling user data:", err);
+      if (showFeedback) {
+        triggerToast(`حدث خطأ أثناء المزامنة: ${err.message || err}`, "error");
+      }
+    } finally {
+      isReconcilingRef.current = false;
+    }
+  }, []);
+
   useEffect(() => {
     // Check for redirect login result on mount
     getRedirectResult(auth)
@@ -962,6 +1136,9 @@ export default function App() {
         }, { merge: true }).catch(err => {
           console.error("Error saving teacher profile:", err);
         });
+
+        // Automatically trigger data reconciliation in background
+        reconcileUserData(user, false);
       } else {
         // Reset all teacher state and clear student teacher cache when logged out
         setQuizzes([]);
@@ -989,6 +1166,9 @@ export default function App() {
     }
     isAuthInProgressRef.current = true;
     const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({
+      prompt: "select_account",
+    });
     try {
       // Authenticate directly using the active Firebase project's Auth instance
       const result = await signInWithPopup(auth, provider);
@@ -1822,77 +2002,143 @@ export default function App() {
     }
     if (studentPortalActive || teacherPreviewActive) return;
 
-    const quizzesQuery = query(
-      collection(db, "quizzes"),
-      where("teacherId", "==", currentUser.uid),
-    );
-    const unsubscribeQuizzes = onSnapshot(
-      quizzesQuery,
-      (snapshot) => {
-        const list: Quiz[] = [];
-        snapshot.forEach((doc) => {
-          const data = doc.data() as Quiz;
-          const normalizedQs = (data.questions || []).map((q) => normalizeQuestion(q));
-          list.push({ ...data, questions: normalizedQs });
-        });
-        list.sort((a, b) => b.dateCreated.localeCompare(a.dateCreated));
-        setQuizzes(list);
-      },
-      (error) => {
-        console.warn("Error listening to quizzes:", error);
-      },
-    );
+    const unsubs: Array<() => void> = [];
+    const currentUid = currentUser.uid;
+    const userEmail = currentUser.email?.toLowerCase().trim() || "";
+    const cachedPlatformUid = localStorage.getItem("platform_teacher_uid");
 
-    const studentsQuery = query(
-      collection(db, "students"),
-      where("teacherId", "==", currentUser.uid),
-    );
-    const unsubscribeStudents = onSnapshot(
-      studentsQuery,
-      (snapshot) => {
-        const list: Student[] = [];
-        snapshot.forEach((doc) => {
-          const data = doc.data() as Student;
-          if (data.detailedGrades) {
-            const originalLength = data.detailedGrades.length;
-            data.detailedGrades = data.detailedGrades.filter(
-              (g) => g.quizTitle !== "اختبار تجريبي تمهيدي",
-            );
-            if (originalLength !== data.detailedGrades.length) {
-              let sumEarned = 0;
-              let sumMax = 0;
-              data.detailedGrades.forEach((g) => {
-                sumEarned += g.score;
-                sumMax += g.maxScore;
-              });
-              data.averageScore =
-                data.detailedGrades.length > 0
-                  ? Math.round((sumEarned / (sumMax || 1)) * 100)
-                  : 0;
-              data.status =
-                data.averageScore >= 90
-                  ? "excellent"
-                  : data.averageScore >= 75
-                    ? "good"
-                    : data.averageScore >= 60
-                      ? "average"
-                      : "needs_improvement";
-            }
+    const teacherIdentifiers = new Set<string>();
+    teacherIdentifiers.add(currentUid);
+    if (userEmail) teacherIdentifiers.add(userEmail);
+    if (cachedPlatformUid) teacherIdentifiers.add(cachedPlatformUid);
+
+    // --- QUIZZES MULTI-LISTENER ---
+    const quizzesMap = new Map<string, Map<string, Quiz>>();
+    const refreshQuizzes = () => {
+      const merged = new Map<string, Quiz>();
+      quizzesMap.forEach((subMap) => {
+        subMap.forEach((quiz, id) => merged.set(id, quiz));
+      });
+      const list = Array.from(merged.values());
+      list.sort((a, b) => (b.dateCreated || "").localeCompare(a.dateCreated || ""));
+      setQuizzes(list);
+    };
+
+    teacherIdentifiers.forEach((idKey) => {
+      const q = query(collection(db, "quizzes"), where("teacherId", "==", idKey));
+      const unsub = onSnapshot(
+        q,
+        (snapshot) => {
+          const subMap = new Map<string, Quiz>();
+          snapshot.forEach((doc) => {
+            const data = doc.data() as Quiz;
+            const normalizedQs = (data.questions || []).map((q) => normalizeQuestion(q));
+            subMap.set(doc.id, { ...data, questions: normalizedQs });
+          });
+          quizzesMap.set(`tId_${idKey}`, subMap);
+          refreshQuizzes();
+        },
+        (err) => console.warn("Quizzes listener error:", err)
+      );
+      unsubs.push(unsub);
+    });
+
+    if (userEmail) {
+      const qEmail = query(collection(db, "quizzes"), where("teacherEmail", "==", userEmail));
+      const unsub = onSnapshot(
+        qEmail,
+        (snapshot) => {
+          const subMap = new Map<string, Quiz>();
+          snapshot.forEach((doc) => {
+            const data = doc.data() as Quiz;
+            const normalizedQs = (data.questions || []).map((q) => normalizeQuestion(q));
+            subMap.set(doc.id, { ...data, questions: normalizedQs });
+          });
+          quizzesMap.set("tEmail", subMap);
+          refreshQuizzes();
+        },
+        (err) => console.warn("Quizzes email listener error:", err)
+      );
+      unsubs.push(unsub);
+    }
+
+    // --- STUDENTS MULTI-LISTENER ---
+    const studentsMap = new Map<string, Map<string, Student>>();
+    const refreshStudents = () => {
+      const merged = new Map<string, Student>();
+      studentsMap.forEach((subMap) => {
+        subMap.forEach((st, id) => merged.set(id, st));
+      });
+      const list = Array.from(merged.values());
+      list.forEach((data) => {
+        if (data.detailedGrades) {
+          const originalLength = data.detailedGrades.length;
+          data.detailedGrades = data.detailedGrades.filter(
+            (g) => g.quizTitle !== "اختبار تجريبي تمهيدي"
+          );
+          if (originalLength !== data.detailedGrades.length) {
+            let sumEarned = 0;
+            let sumMax = 0;
+            data.detailedGrades.forEach((g) => {
+              sumEarned += g.score;
+              sumMax += g.maxScore;
+            });
+            data.averageScore =
+              data.detailedGrades.length > 0
+                ? Math.round((sumEarned / (sumMax || 1)) * 100)
+                : 0;
+            data.status =
+              data.averageScore >= 90
+                ? "excellent"
+                : data.averageScore >= 75
+                  ? "good"
+                  : data.averageScore >= 60
+                    ? "average"
+                    : "needs_improvement";
           }
-          list.push(data);
-        });
-        list.sort((a, b) => a.name.localeCompare(b.name, "ar"));
-        setStudents(list);
-      },
-      (error) => {
-        console.warn("Error listening to students:", error);
-      },
-    );
+        }
+      });
+      list.sort((a, b) => (a.name || "").localeCompare(b.name || "", "ar"));
+      setStudents(list);
+    };
 
-    const questionBankQuery = query(
-      collection(db, "question_bank"),
-    );
-    const unsubscribeQuestionBank = onSnapshot(
+    teacherIdentifiers.forEach((idKey) => {
+      const q = query(collection(db, "students"), where("teacherId", "==", idKey));
+      const unsub = onSnapshot(
+        q,
+        (snapshot) => {
+          const subMap = new Map<string, Student>();
+          snapshot.forEach((doc) => {
+            subMap.set(doc.id, { id: doc.id, ...doc.data() } as Student);
+          });
+          studentsMap.set(`tId_${idKey}`, subMap);
+          refreshStudents();
+        },
+        (err) => console.warn("Students listener error:", err)
+      );
+      unsubs.push(unsub);
+    });
+
+    if (userEmail) {
+      const qEmail = query(collection(db, "students"), where("teacherEmail", "==", userEmail));
+      const unsub = onSnapshot(
+        qEmail,
+        (snapshot) => {
+          const subMap = new Map<string, Student>();
+          snapshot.forEach((doc) => {
+            subMap.set(doc.id, { id: doc.id, ...doc.data() } as Student);
+          });
+          studentsMap.set("tEmail", subMap);
+          refreshStudents();
+        },
+        (err) => console.warn("Students email listener error:", err)
+      );
+      unsubs.push(unsub);
+    }
+
+    // --- QUESTION BANK LISTENER ---
+    const questionBankQuery = query(collection(db, "question_bank"));
+    const unsubBank = onSnapshot(
       questionBankQuery,
       (snapshot) => {
         const list: BankQuestion[] = [];
@@ -1905,189 +2151,225 @@ export default function App() {
       (error) => {
         console.warn("Error listening to question bank:", error);
         setBankQuestionsLoaded(true);
-      },
+      }
     );
+    unsubs.push(unsubBank);
 
-    const gradesQuery = query(
-      collection(db, "grades"),
-      where("teacherId", "==", currentUser.uid),
-    );
-    const unsubscribeGrades = onSnapshot(
-      gradesQuery,
-      (snapshot) => {
-        const gItems = snapshot.docs.map((doc) => {
-          const data = doc.data();
-          return {
-            name: (data.name as string) || "",
-            createdAt: data.createdAt || 0,
-            id: doc.id,
-          };
-        });
-        // Deduplicate grades by normalized grade name
-        const seenGrades = new Set<string>();
-        const uniqueGItems = gItems.filter((item) => {
-          const norm = normalizeGradeName(item.name);
-          if (!norm || seenGrades.has(norm)) return false;
-          seenGrades.add(norm);
-          return true;
-        });
-        uniqueGItems.sort((a, b) => {
-          const timeA = a.createdAt || 0;
-          const timeB = b.createdAt || 0;
-          if (timeA !== timeB) {
-            return timeA - timeB; // oldest first
-          }
-          return a.id.localeCompare(b.id);
-        });
-        const list = uniqueGItems.map((item) => item.name);
-        setGrades(list);
-        setGradesLoaded(true);
-      },
-      (error) => {
-        console.warn("Error listening to grades:", error);
-      },
-    );
+    // --- GRADES MULTI-LISTENER ---
+    const gradesMap = new Map<string, Map<string, { id: string; name: string; createdAt: number }>>();
+    const refreshGrades = () => {
+      const merged = new Map<string, { id: string; name: string; createdAt: number }>();
+      gradesMap.forEach((subMap) => {
+        subMap.forEach((item, id) => merged.set(id, item));
+      });
+      const gItems = Array.from(merged.values());
+      const seenGrades = new Set<string>();
+      const uniqueGItems = gItems.filter((item) => {
+        const norm = normalizeGradeName(item.name);
+        if (!norm || seenGrades.has(norm)) return false;
+        seenGrades.add(norm);
+        return true;
+      });
+      uniqueGItems.sort((a, b) => {
+        const timeA = a.createdAt || 0;
+        const timeB = b.createdAt || 0;
+        if (timeA !== timeB) return timeA - timeB;
+        return a.id.localeCompare(b.id);
+      });
+      setGrades(uniqueGItems.map((item) => item.name));
+      setGradesLoaded(true);
+    };
 
-    const semestersQuery = query(
-      collection(db, "semesters"),
-      where("teacherId", "==", currentUser.uid),
-    );
-    const unsubscribeSemesters = onSnapshot(
-      semestersQuery,
-      (snapshot) => {
-        const rawList: Array<{
-          id: string;
-          name: string;
-          gradeName: string;
-          number?: number;
-          createdAt?: number;
-        }> = [];
-        snapshot.forEach((doc) => {
-          const d = doc.data();
-          rawList.push({
-            id: d.id || doc.id,
-            name: d.name || "",
-            gradeName: d.gradeName || "",
-            number: d.number !== undefined ? Number(d.number) : undefined,
-            createdAt: d.createdAt || 0,
+    teacherIdentifiers.forEach((idKey) => {
+      const q = query(collection(db, "grades"), where("teacherId", "==", idKey));
+      const unsub = onSnapshot(
+        q,
+        (snapshot) => {
+          const subMap = new Map<string, { id: string; name: string; createdAt: number }>();
+          snapshot.forEach((doc) => {
+            const data = doc.data();
+            subMap.set(doc.id, {
+              id: doc.id,
+              name: (data.name as string) || "",
+              createdAt: data.createdAt || 0,
+            });
           });
-        });
-        // Deduplicate semesters by (normalized gradeName, normalized semester name)
-        const seenSemKey = new Set<string>();
-        const list = rawList.filter((s) => {
-          const gNorm = normalizeGradeName(s.gradeName);
-          const sNorm = normalizeSemesterName(s.name);
-          const key = `${gNorm}___${sNorm}`;
-          if (!sNorm || seenSemKey.has(key)) return false;
-          seenSemKey.add(key);
-          return true;
-        });
-        setSemesters(list);
-        setSemestersLoaded(true);
-      },
-      (error) => {
-        console.warn("Error listening to semesters:", error);
-      },
-    );
+          gradesMap.set(`tId_${idKey}`, subMap);
+          refreshGrades();
+        },
+        (err) => console.warn("Grades listener error:", err)
+      );
+      unsubs.push(unsub);
+    });
 
-    const trashQuery = query(
-      collection(db, "trash_students"),
-      where("teacherId", "==", currentUser.uid),
-    );
-    const unsubscribeTrash = onSnapshot(
-      trashQuery,
-      (snapshot) => {
-        const list: Student[] = [];
-        snapshot.forEach((doc) => {
-          list.push(doc.data() as Student);
-        });
-        list.sort((a, b) => a.name.localeCompare(b.name, "ar"));
-        setTrashStudents(list);
-      },
-      (error) => {
-        console.warn("Error loading trash students:", error);
-      },
-    );
+    // --- SEMESTERS MULTI-LISTENER ---
+    const semestersMap = new Map<string, Map<string, { id: string; name: string; gradeName: string; number?: number; createdAt?: number }>>();
+    const refreshSemesters = () => {
+      const merged = new Map<string, { id: string; name: string; gradeName: string; number?: number; createdAt?: number }>();
+      semestersMap.forEach((subMap) => {
+        subMap.forEach((item, id) => merged.set(id, item));
+      });
+      const rawList = Array.from(merged.values());
+      const seenSemKey = new Set<string>();
+      const list = rawList.filter((s) => {
+        const gNorm = normalizeGradeName(s.gradeName);
+        const sNorm = normalizeSemesterName(s.name);
+        const key = `${gNorm}___${sNorm}`;
+        if (!sNorm || seenSemKey.has(key)) return false;
+        seenSemKey.add(key);
+        return true;
+      });
+      setSemesters(list);
+      setSemestersLoaded(true);
+    };
+
+    teacherIdentifiers.forEach((idKey) => {
+      const q = query(collection(db, "semesters"), where("teacherId", "==", idKey));
+      const unsub = onSnapshot(
+        q,
+        (snapshot) => {
+          const subMap = new Map<string, { id: string; name: string; gradeName: string; number?: number; createdAt?: number }>();
+          snapshot.forEach((doc) => {
+            const d = doc.data();
+            subMap.set(doc.id, {
+              id: d.id || doc.id,
+              name: d.name || "",
+              gradeName: d.gradeName || "",
+              number: d.number !== undefined ? Number(d.number) : undefined,
+              createdAt: d.createdAt || 0,
+            });
+          });
+          semestersMap.set(`tId_${idKey}`, subMap);
+          refreshSemesters();
+        },
+        (err) => console.warn("Semesters listener error:", err)
+      );
+      unsubs.push(unsub);
+    });
+
+    // --- TRASH STUDENTS MULTI-LISTENER ---
+    const trashMap = new Map<string, Map<string, Student>>();
+    const refreshTrash = () => {
+      const merged = new Map<string, Student>();
+      trashMap.forEach((subMap) => {
+        subMap.forEach((st, id) => merged.set(id, st));
+      });
+      const list = Array.from(merged.values());
+      list.sort((a, b) => (a.name || "").localeCompare(b.name || "", "ar"));
+      setTrashStudents(list);
+    };
+
+    teacherIdentifiers.forEach((idKey) => {
+      const q = query(collection(db, "trash_students"), where("teacherId", "==", idKey));
+      const unsub = onSnapshot(
+        q,
+        (snapshot) => {
+          const subMap = new Map<string, Student>();
+          snapshot.forEach((doc) => {
+            subMap.set(doc.id, { id: doc.id, ...doc.data() } as Student);
+          });
+          trashMap.set(`tId_${idKey}`, subMap);
+          refreshTrash();
+        },
+        (err) => console.warn("Trash listener error:", err)
+      );
+      unsubs.push(unsub);
+    });
 
     return () => {
-      unsubscribeQuizzes();
-      unsubscribeStudents();
-      unsubscribeQuestionBank();
-      unsubscribeGrades();
-      unsubscribeSemesters();
-      unsubscribeTrash();
+      unsubs.forEach((u) => u());
     };
   }, [currentUser, studentPortalActive, teacherPreviewActive]);
 
   // Proactively save/update teacher profile in Firestore so students can display their name
   useEffect(() => {
     if (currentUser) {
-      setDoc(doc(db, "teachers", currentUser.uid), {
-        uid: currentUser.uid,
-        displayName: currentUser.displayName || currentUser.email?.split("@")[0] || "المعلم",
-        email: currentUser.email || ""
-      }, { merge: true }).catch(err => {
+      setDoc(
+        doc(db, "teachers", currentUser.uid),
+        {
+          uid: currentUser.uid,
+          displayName: currentUser.displayName || currentUser.email?.split("@")[0] || "المعلم",
+          email: currentUser.email || "",
+          lastActive: new Date().toISOString(),
+        },
+        { merge: true }
+      ).catch((err) => {
         console.error("Proactive save of teacher profile error:", err);
       });
     }
   }, [currentUser]);
 
-
-
   // Synchronize Review Challenges and Scores
   useEffect(() => {
-    let unsubChallenges = () => {};
-    let unsubScores = () => {};
-
+    const unsubs: Array<() => void> = [];
     const targetTeacherId = studentPortalActive ? studentPortalTeacherId : currentUser?.uid;
+    const userEmail = currentUser?.email?.toLowerCase().trim() || "";
 
     if (targetTeacherId) {
-      // Listen to review challenges for this specific teacher
-      const challengesQuery = query(
-        collection(db, "reviewChallenges"),
-        where("teacherId", "==", targetTeacherId)
-      );
-      unsubChallenges = onSnapshot(
-        challengesQuery,
-        (snapshot) => {
-          const list: ReviewChallenge[] = [];
-          snapshot.forEach((doc) => {
-            list.push({ id: doc.id, ...doc.data() } as ReviewChallenge);
-          });
-          list.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
-          setReviewChallenges(list);
-        },
-        (error) => {
-          console.warn("Failed to listen to review challenges:", error);
-        }
-      );
+      const candidateIds = new Set<string>();
+      candidateIds.add(targetTeacherId);
+      if (userEmail) candidateIds.add(userEmail);
 
-      // Listen to review scores for this specific teacher
-      const scoresQuery = query(
-        collection(db, "reviewScores"),
-        where("teacherId", "==", targetTeacherId)
-      );
-      unsubScores = onSnapshot(
-        scoresQuery,
-        (snapshot) => {
-          const list: ReviewScore[] = [];
-          snapshot.forEach((doc) => {
-            list.push({ id: doc.id, ...doc.data() } as ReviewScore);
-          });
-          setReviewScores(list);
-        },
-        (error) => {
-          console.warn("Failed to listen to review scores:", error);
-        }
-      );
+      const challengesMap = new Map<string, Map<string, ReviewChallenge>>();
+      const refreshChallenges = () => {
+        const merged = new Map<string, ReviewChallenge>();
+        challengesMap.forEach((subMap) => {
+          subMap.forEach((ch, id) => merged.set(id, ch));
+        });
+        const list = Array.from(merged.values());
+        list.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+        setReviewChallenges(list);
+      };
+
+      candidateIds.forEach((idKey) => {
+        const q = query(collection(db, "reviewChallenges"), where("teacherId", "==", idKey));
+        const unsub = onSnapshot(
+          q,
+          (snapshot) => {
+            const subMap = new Map<string, ReviewChallenge>();
+            snapshot.forEach((doc) => {
+              subMap.set(doc.id, { id: doc.id, ...doc.data() } as ReviewChallenge);
+            });
+            challengesMap.set(idKey, subMap);
+            refreshChallenges();
+          },
+          (error) => console.warn("Failed to listen to review challenges:", error)
+        );
+        unsubs.push(unsub);
+      });
+
+      const scoresMap = new Map<string, Map<string, ReviewScore>>();
+      const refreshScores = () => {
+        const merged = new Map<string, ReviewScore>();
+        scoresMap.forEach((subMap) => {
+          subMap.forEach((sc, id) => merged.set(id, sc));
+        });
+        setReviewScores(Array.from(merged.values()));
+      };
+
+      candidateIds.forEach((idKey) => {
+        const q = query(collection(db, "reviewScores"), where("teacherId", "==", idKey));
+        const unsub = onSnapshot(
+          q,
+          (snapshot) => {
+            const subMap = new Map<string, ReviewScore>();
+            snapshot.forEach((doc) => {
+              subMap.set(doc.id, { id: doc.id, ...doc.data() } as ReviewScore);
+            });
+            scoresMap.set(idKey, subMap);
+            refreshScores();
+          },
+          (error) => console.warn("Failed to listen to review scores:", error)
+        );
+        unsubs.push(unsub);
+      });
     } else {
       setReviewChallenges([]);
       setReviewScores([]);
     }
 
     return () => {
-      unsubChallenges();
-      unsubScores();
+      unsubs.forEach((u) => u());
     };
   }, [currentUser, studentPortalTeacherId, studentPortalActive]);
 
@@ -3319,6 +3601,7 @@ export default function App() {
       await setDoc(doc(db, "quizzes", newQuizId), {
         ...newQuiz,
         teacherId: currentUser.uid,
+        teacherEmail: currentUser.email?.toLowerCase().trim() || "",
       });
 
       // Reset builder form
@@ -3417,6 +3700,7 @@ export default function App() {
             await setDoc(doc(db, "grades", id), {
               id,
               teacherId: currentUser.uid,
+              teacherEmail: currentUser.email?.toLowerCase().trim() || "",
               name,
               createdAt: Date.now(),
             });
@@ -3598,6 +3882,7 @@ export default function App() {
               const docData = {
                 id,
                 teacherId: currentUser.uid,
+                teacherEmail: currentUser.email?.toLowerCase().trim() || "",
                 name: finalSemesterName,
                 gradeName: activeGrade,
                 number: num,
@@ -3648,6 +3933,7 @@ export default function App() {
           const docData = {
             id,
             teacherId: currentUser.uid,
+            teacherEmail: currentUser.email?.toLowerCase().trim() || "",
             name: finalSemesterName,
             gradeName: targetGrade,
             number: num,
@@ -4383,6 +4669,7 @@ export default function App() {
           batch.set(doc(db, "students", nextStudentId), {
             ...newStudent,
             teacherId: currentUser.uid,
+            teacherEmail: currentUser.email?.toLowerCase().trim() || "",
           });
           successCount++;
         });
@@ -4459,6 +4746,7 @@ export default function App() {
       await setDoc(doc(db, "students", nextStudentId), {
         ...newStudent,
         teacherId: currentUser.uid,
+        teacherEmail: currentUser.email?.toLowerCase().trim() || "",
       });
 
       setShowAddStudentModal(false);
@@ -8347,7 +8635,7 @@ export default function App() {
         <div className="pt-4 border-t border-slate-100 space-y-3 relative z-10 font-sans">
           {currentUser ? (
             <>
-              <div className="p-3 bg-slate-50 border border-slate-200/60 rounded-xl space-y-1">
+              <div className="p-3 bg-slate-50 border border-slate-200/60 rounded-xl space-y-2">
                 <div className="flex items-center gap-2">
                   <div className="w-6 h-6 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center text-[10px] font-black border border-blue-105">
                     {(currentUser?.displayName || "M").charAt(0)}
@@ -8359,6 +8647,15 @@ export default function App() {
                 <span className="text-[9px] text-slate-500 block font-bold font-sans">
                   {currentUser?.email || ""}
                 </span>
+                <button
+                  type="button"
+                  onClick={() => reconcileUserData(currentUser, true)}
+                  className="w-full mt-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-[10px] font-black bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200/80 transition-all cursor-pointer shadow-3xs hover:scale-[1.02] active:scale-95"
+                  title="مزامنة واسترجاع كافة الاختبارات والصفوف المرتبطة بالبريد الإلكتروني"
+                >
+                  <RefreshCw className="w-3 h-3 shrink-0 text-blue-600 animate-spin" style={{ animationDuration: '6s' }} />
+                  <span>مزامنة واسترجاع بيانات الحساب</span>
+                </button>
               </div>
 
               <button

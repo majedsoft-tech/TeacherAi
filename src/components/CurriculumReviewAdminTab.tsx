@@ -166,30 +166,59 @@ export default function CurriculumReviewAdminTab({
   const [tableDensity, setTableDensity] = useState<"ultra-compact" | "compact" | "normal">("ultra-compact");
   const [showFilters, setShowFilters] = useState<boolean>(true);
 
-  // Load visible subjects from Firestore
+  // Load visible subjects from Firestore (supporting both UID and Email references)
   useEffect(() => {
     if (!currentUser?.uid) return;
     
     setLoading(true);
-    const ref = doc(db, "curriculum_settings", currentUser.uid);
-    const unsub = onSnapshot(ref, (snap) => {
+    const userEmail = currentUser.email?.toLowerCase().trim();
+    const uidRef = doc(db, "curriculum_settings", currentUser.uid);
+
+    let unsubEmail = () => {};
+
+    const unsubUid = onSnapshot(uidRef, (snap) => {
       if (snap.exists()) {
         const data = snap.data();
         setVisibleSubjects(data.visibleSubjects || []);
         setSubjectTargets(data.subjectTargets || {});
+        setLoading(false);
+      } else if (userEmail) {
+        // If not found under UID, check under email or by teacherEmail
+        const emailRef = doc(db, "curriculum_settings", userEmail);
+        unsubEmail = onSnapshot(emailRef, (emailSnap) => {
+          if (emailSnap.exists()) {
+            const data = emailSnap.data();
+            setVisibleSubjects(data.visibleSubjects || []);
+            setSubjectTargets(data.subjectTargets || {});
+            // Migrate to UID doc
+            setDoc(uidRef, {
+              ...data,
+              teacherId: currentUser.uid,
+              teacherEmail: userEmail,
+            }, { merge: true }).catch(() => {});
+          } else {
+            setVisibleSubjects([]);
+            setSubjectTargets({});
+          }
+          setLoading(false);
+        }, () => {
+          setLoading(false);
+        });
       } else {
-        setVisibleSubjects([]); // Default is empty array (all hidden by default)
+        setVisibleSubjects([]);
         setSubjectTargets({});
+        setLoading(false);
       }
-      setLoading(false);
     }, (error) => {
       console.error("Failed to fetch curriculum settings:", error);
-      triggerToast("خطأ أثناء جلب إعدادات المراجعة الشاملة", "error");
       setLoading(false);
     });
 
-    return unsub;
-  }, [currentUser?.uid]);
+    return () => {
+      unsubUid();
+      unsubEmail();
+    };
+  }, [currentUser?.uid, currentUser?.email]);
 
   // Load student curriculum scores in real-time
   useEffect(() => {
@@ -654,6 +683,8 @@ export default function CurriculumReviewAdminTab({
     try {
       const ref = doc(db, "curriculum_settings", currentUser.uid);
       await setDoc(ref, {
+        teacherId: currentUser.uid,
+        teacherEmail: currentUser.email?.toLowerCase().trim() || "",
         subjectTargets: newTargets
       }, { merge: true });
       triggerToast(`تم حفظ إعدادات مادة "${subjectName}" بنجاح 🎯`, "success");
@@ -1010,6 +1041,7 @@ export default function CurriculumReviewAdminTab({
       const ref = doc(db, "curriculum_settings", currentUser.uid);
       await setDoc(ref, {
         teacherId: currentUser.uid,
+        teacherEmail: currentUser.email?.toLowerCase().trim() || "",
         visibleSubjects: updatedVisible,
         lastUpdated: new Date().toISOString()
       }, { merge: true });
@@ -1346,7 +1378,7 @@ export default function CurriculumReviewAdminTab({
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {filteredSubjects.map((subject) => {
+                  {filteredSubjects.map((subject, sIdx) => {
                     const isVisible = visibleSubjects.includes(subject.name);
                     const isSaving = savingId === subject.name;
                     const targetInfo = subjectTargets[subject.name] || {};
@@ -1374,7 +1406,7 @@ export default function CurriculumReviewAdminTab({
 
                     return (
                       <div 
-                        key={subject.name}
+                        key={`admin-sub-${subject.name}-${sIdx}`}
                         className="p-5 flex flex-col gap-4 bg-white rounded-2xl border-2 border-slate-300 hover:border-indigo-500 shadow-sm transition-all"
                       >
                         {/* Top Details & Action Row */}
@@ -2160,8 +2192,8 @@ export default function CurriculumReviewAdminTab({
                           className="w-full bg-white border border-slate-200/90 hover:border-slate-300 rounded-xl pr-8 pl-3 py-1.5 font-bold text-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 cursor-pointer shadow-2xs transition-all"
                         >
                           <option value="all">جميع الصفوف ({unaddedBankSubjects.length})</option>
-                          {allAvailableGrades.map((g) => (
-                            <option key={g} value={g}>
+                          {allAvailableGrades.map((g, gIdx) => (
+                            <option key={`modal-grade-opt-${g}-${gIdx}`} value={g}>
                               {g}
                             </option>
                           ))}
@@ -2215,9 +2247,9 @@ export default function CurriculumReviewAdminTab({
                       </button>
                     </div>
                   ) : (
-                    filteredUnaddedBankSubjects.map((sub) => (
+                    filteredUnaddedBankSubjects.map((sub, subIdx) => (
                       <div
-                        key={sub.name}
+                        key={`modal-unadded-sub-${sub.name}-${subIdx}`}
                         className="p-4 rounded-2xl border border-slate-200/90 bg-slate-50/60 hover:bg-indigo-50/30 hover:border-indigo-200 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 group"
                       >
                         <div className="flex items-center gap-3">

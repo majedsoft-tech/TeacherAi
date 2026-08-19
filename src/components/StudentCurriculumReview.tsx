@@ -1207,10 +1207,14 @@ export default function StudentCurriculumReview({
           </div>
 
           {(() => {
-            const displayedSubjectKeys = Object.keys(syllabus).filter(
-              (key) =>
-                visibleSubjects.includes(key) &&
-                isSubjectTargetingStudent(key, activeStudent?.grade, activeStudent?.gradeClass)
+            const displayedSubjectKeys = Array.from(
+              new Set(
+                Object.keys(syllabus).filter(
+                  (key) =>
+                    visibleSubjects.includes(key) &&
+                    isSubjectTargetingStudent(key, activeStudent?.grade, activeStudent?.gradeClass)
+                )
+              )
             );
 
             if (displayedSubjectKeys.length === 0) {
@@ -1229,7 +1233,7 @@ export default function StudentCurriculumReview({
 
             return (
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-                {displayedSubjectKeys.map((subjectKey) => {
+                {displayedSubjectKeys.map((subjectKey, sIdx) => {
                   const sub = syllabus[subjectKey];
                   let totalLessons = 0;
                   let solvedLessons = 0;
@@ -1245,7 +1249,7 @@ export default function StudentCurriculumReview({
 
                   return (
                     <motion.div
-                      key={subjectKey}
+                      key={`student-subj-${subjectKey}-${sIdx}`}
                       whileHover={{ y: -5, scale: 1.02 }}
                       whileTap={{ scale: 0.98 }}
                       onClick={() => {

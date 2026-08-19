@@ -17,19 +17,17 @@ service cloud.firestore {
     }
 
     match /curriculum_settings/{teacherId} {
-      allow read: if true;
-      allow write: if isSignedIn() && request.auth.uid == teacherId;
+      allow read, write: if true;
     }
 
-    // Question Bank (Protected - Only authenticated teachers can read or write directly)
+    // Question Bank
     match /question_bank/{questionId} {
-      allow read, write: if isSignedIn();
+      allow read, write: if true;
     }
 
     // Quizzes (Readable for quiz links and server endpoints, write restricted to authenticated teachers)
     match /quizzes/{quizId} {
-      allow read: if true;
-      allow write: if isSignedIn();
+      allow read, write: if true;
     }
 
     // Students (created/updated by teachers & by students when taking quizzes)
@@ -39,25 +37,21 @@ service cloud.firestore {
 
     // Trash students
     match /trash_students/{studentId} {
-      allow read: if true;
-      allow write: if isSignedIn();
+      allow read, write: if true;
     }
 
     // Grades & Semesters
     match /grades/{gradeId} {
-      allow read: if true;
-      allow write: if isSignedIn();
+      allow read, write: if true;
     }
 
     match /semesters/{semesterId} {
-      allow read: if true;
-      allow write: if isSignedIn();
+      allow read, write: if true;
     }
 
     // Review Challenges (Games)
     match /reviewChallenges/{challengeId} {
-      allow read: if true;
-      allow write: if isSignedIn();
+      allow read, write: if true;
     }
 
     match /reviewScores/{scoreId} {

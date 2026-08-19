@@ -179,14 +179,16 @@ async function generateGeminiContentWithRetry(
     contents: any;
     config?: any;
   },
-  maxRetries = 3
+  maxRetries = 4
 ): Promise<any> {
-  const primaryModel = params.model || "gemini-3.7-flash";
+  const requestedModel = params.model || "gemini-flash-latest";
+  
+  // Diverse candidate models: Flash latest is fast with high quota limits, with fallback to 3.1 Flash Lite and 3.7 Flash
   const candidateModels = [
-    primaryModel,
-    primaryModel, // Retry primary model first with backoff
-    "gemini-flash-latest",
-    "gemini-3.1-flash-lite"
+    requestedModel,
+    requestedModel === "gemini-flash-latest" ? "gemini-3.1-flash-lite" : "gemini-flash-latest",
+    "gemini-3.1-flash-lite",
+    "gemini-flash-latest"
   ];
 
   let lastError: any = null;
@@ -211,24 +213,27 @@ async function generateGeminiContentWithRetry(
                                  errMsg.includes("UNAVAILABLE") || 
                                  errMsg.includes("high demand");
 
-      console.warn(`[Gemini API Attempt ${attempt + 1}/${maxRetries}] Failed with model "${currentModel}": ${errMsg.slice(0, 180)}`);
+      console.warn(`[Gemini API Attempt ${attempt + 1}/${maxRetries}] Model "${currentModel}" encounter: ${errMsg.slice(0, 180)}`);
 
       if (attempt < maxRetries - 1) {
-        let waitTimeMs = 3000 * (attempt + 1);
+        let waitTimeMs = 2500 * (attempt + 1);
 
-        // Extract retryDelay if available from Gemini error payload
+        // Extract retryDelay if provided by the Gemini API response
         const retryMatch = errMsg.match(/retry in\s+([\d\.]+)\s*s/i) || 
                            errMsg.match(/retryDelay["']?:\s*["']?(\d+)/i);
         if (retryMatch && retryMatch[1]) {
           const parsedSec = parseFloat(retryMatch[1]);
           if (!isNaN(parsedSec) && parsedSec > 0) {
-            waitTimeMs = Math.min(Math.ceil(parsedSec * 1000) + 1200, 20000);
+            waitTimeMs = Math.min(Math.ceil(parsedSec * 1000) + 1000, 15000);
           }
-        } else if (isQuotaOr429 || isUnavailableOr503) {
-          waitTimeMs = 4000 * (attempt + 1);
+        } else if (isQuotaOr429) {
+          // Switch model on next attempt with backoff
+          waitTimeMs = 3000 * (attempt + 1);
+        } else if (isUnavailableOr503) {
+          waitTimeMs = 3500 * (attempt + 1);
         }
 
-        console.log(`[Gemini Rate-Limit Backoff] Waiting ${(waitTimeMs / 1000).toFixed(1)}s before retry...`);
+        console.log(`[Gemini Backoff] Waiting ${(waitTimeMs / 1000).toFixed(1)}s before retry with model "${candidateModels[Math.min(attempt + 1, candidateModels.length - 1)]}"...`);
         await new Promise((resolve) => setTimeout(resolve, waitTimeMs));
       }
     }
@@ -237,7 +242,7 @@ async function generateGeminiContentWithRetry(
   // If last error is 429 quota, provide user-friendly Arabic explanation
   const finalErrMsg = String(lastError?.message || lastError);
   if (finalErrMsg.includes("429") || finalErrMsg.includes("quota") || finalErrMsg.includes("RESOURCE_EXHAUSTED")) {
-    throw new Error("تم بلوغ الحد الأقصى لطلبات الذكاء الاصطناعي في الدقيقة. يرجى الانتظار بضع ثوانٍ ثم المحاولة مجدداً أو اختيار عدد أقل من الدروس.");
+    throw new Error("تم بلوغ الحد الأقصى المؤقت لطلبات الذكاء الاصطناعي في الدقيقة. يرجى الانتظار بضع ثوانٍ ثم إعادة المحاولة.");
   }
   if (finalErrMsg.includes("503") || finalErrMsg.includes("UNAVAILABLE")) {
     throw new Error("خوادم الذكاء الاصطناعي تشهد ضغطاً مؤقتاً. يرجى إعادة المحاولة بعد لحظات.");
@@ -345,7 +350,7 @@ async function startServer() {
       }
 
       const response = await generateGeminiContentWithRetry(ai, {
-        model: "gemini-3.7-flash",
+        model: "gemini-flash-latest",
         contents: {
           parts: contentsParts
         },
@@ -591,7 +596,7 @@ ${subjectOverride && subjectOverride !== "auto" ? `   - حقل "subject": "${sub
         }
 
         const response = await generateGeminiContentWithRetry(ai, {
-          model: "gemini-3.7-flash",
+          model: "gemini-flash-latest",
           contents: {
             parts: targetParts
           },
@@ -612,10 +617,19 @@ ${subjectOverride && subjectOverride !== "auto" ? `   - حقل "subject": "${sub
         return safeParseQuestionsArray(questionsText);
       };
 
-      // Group targets into batches:
-      // When generating questions, group 2-3 lessons together per batch so that we generate in fewer, highly efficient calls.
+      // Group targets into smart batches:
+      // If 4 or fewer target lessons, send in 1 single call to avoid re-uploading large PDF payloads multiple times.
+      // If more than 4 targets, group into balanced 2-3 lesson batches.
       const totalPerLesson = parsedMcqCount + parsedTfCount;
-      const BATCH_SIZE = totalPerLesson > 10 ? 1 : 2;
+      let BATCH_SIZE = 3;
+      if (targets.length <= 4) {
+        BATCH_SIZE = targets.length;
+      } else if (totalPerLesson > 12) {
+        BATCH_SIZE = 2;
+      } else {
+        BATCH_SIZE = 3;
+      }
+
       const batches: GenerationTarget[][] = [];
       for (let i = 0; i < targets.length; i += BATCH_SIZE) {
         batches.push(targets.slice(i, i + BATCH_SIZE));
@@ -639,9 +653,9 @@ ${subjectOverride && subjectOverride !== "auto" ? `   - حقل "subject": "${sub
           console.error(`[Generation] Batch ${bIdx + 1} failed:`, batchErr?.message || batchErr);
         }
 
-        // Small inter-batch pause to respect RPM (requests per minute) rate limits
+        // Inter-batch pause to respect RPM rate limits
         if (bIdx < batches.length - 1) {
-          await new Promise((resolve) => setTimeout(resolve, 400));
+          await new Promise((resolve) => setTimeout(resolve, 1000));
         }
       }
 
@@ -764,7 +778,7 @@ ${optionsStr ? `- الخيارات المتاحة:\n${optionsStr}` : ""}
       let hintText = "";
       try {
         const response = await generateGeminiContentWithRetry(ai, {
-          model: "gemini-3.7-flash",
+          model: "gemini-flash-latest",
           contents: prompt,
           config: {
             systemInstruction: "أنت موجه تعليمي افتراضي ذكي يشجع الطلاب ويساعدهم بأسلوب تربوي مبسط ومحفز دون كشف الإجابة المباشرة.",

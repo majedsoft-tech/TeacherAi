@@ -61,6 +61,7 @@ import {
   Key,
   UserCheck,
   LogIn,
+  Menu,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import * as XLSX from "xlsx";
@@ -278,6 +279,7 @@ export default function App() {
     useState<boolean>(false);
   const [isCurriculumAdminFullScreen, setIsCurriculumAdminFullScreen] =
     useState<boolean>(false);
+  const [mobileMoreDrawerOpen, setMobileMoreDrawerOpen] = useState(false);
 
 
 
@@ -6544,9 +6546,9 @@ export default function App() {
           className={`min-h-screen ${isLightBg ? "bg-slate-50 text-slate-800" : "bg-slate-950 text-white"} flex flex-col md:flex-row`}
           dir="rtl"
         >
-          {/* Right Sidebar menu styled dynamically with premium dark smart look */}
+          {/* Right Sidebar menu styled dynamically with premium dark smart look - Desktop only */}
           {showStudentSidebar && (
-            <aside className="w-full md:w-64 bg-slate-900 border-l border-slate-800 text-slate-100 shrink-0 flex flex-col justify-between p-5 md:sticky md:top-0 md:h-screen relative overflow-y-auto overflow-x-hidden shadow-2xl">
+            <aside className="hidden md:flex md:w-64 bg-slate-900 border-l border-slate-800 text-slate-100 shrink-0 flex-col justify-between p-5 md:sticky md:top-0 md:h-screen relative overflow-y-auto overflow-x-hidden shadow-2xl">
             {/* Subtle background glow */}
             <div className="absolute top-0 left-0 w-32 h-32 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
             <div className="absolute bottom-0 right-0 w-32 h-32 bg-purple-500/5 rounded-full blur-2xl pointer-events-none" />
@@ -6604,13 +6606,7 @@ export default function App() {
                       <Home className="w-4 h-4 shrink-0 text-indigo-400" />
                       <span>الرئيسية 🏠</span>
                     </div>
-                    <ChevronDown className={`w-4 h-4 md:hidden transition-transform duration-200 ${studentActiveNav === "home" ? "rotate-180" : ""}`} />
                   </button>
-                  {studentActiveNav === "home" && (
-                    <div className="md:hidden mt-2 p-2.5 sm:p-4 bg-slate-900 text-white rounded-2xl border border-slate-800 shadow-xl overflow-x-auto text-right font-sans">
-                      {renderStudentTabContent("home")}
-                    </div>
-                  )}
                 </div>
 
                 <div className="w-full">
@@ -6629,13 +6625,7 @@ export default function App() {
                       <Sparkles className="w-4 h-4 shrink-0 text-[#f4be1c]" />
                       <span>المراجعة الشاملة 📖</span>
                     </div>
-                    <ChevronDown className={`w-4 h-4 md:hidden transition-transform duration-200 ${studentActiveNav === "curriculum_review" ? "rotate-180" : ""}`} />
                   </button>
-                  {studentActiveNav === "curriculum_review" && (
-                    <div className="md:hidden mt-2 p-2.5 sm:p-4 bg-slate-900 text-white rounded-2xl border border-slate-800 shadow-xl overflow-x-auto text-right font-sans">
-                      {renderStudentTabContent("curriculum_review")}
-                    </div>
-                  )}
                 </div>
 
                 <div className="w-full">
@@ -6661,13 +6651,7 @@ export default function App() {
                         </span>
                       )}
                     </div>
-                    <ChevronDown className={`w-4 h-4 md:hidden transition-transform duration-200 ${studentActiveNav === "reviews" ? "rotate-180" : ""}`} />
                   </button>
-                  {studentActiveNav === "reviews" && (
-                    <div className="md:hidden mt-2 p-2.5 sm:p-4 bg-slate-900 text-white rounded-2xl border border-slate-800 shadow-xl overflow-x-auto text-right font-sans">
-                      {renderStudentTabContent("reviews")}
-                    </div>
-                  )}
                 </div>
 
                 <div className="w-full">
@@ -6687,13 +6671,7 @@ export default function App() {
                       <BookOpen className="w-4 h-4 shrink-0" />
                       <span>اختباراتي المدرسية 📝</span>
                     </div>
-                    <ChevronDown className={`w-4 h-4 md:hidden transition-transform duration-200 ${studentActiveNav === "quizzes" ? "rotate-180" : ""}`} />
                   </button>
-                  {studentActiveNav === "quizzes" && (
-                    <div className="md:hidden mt-2 p-2.5 sm:p-4 bg-slate-900 text-white rounded-2xl border border-slate-800 shadow-xl overflow-x-auto text-right font-sans">
-                      {renderStudentTabContent("quizzes")}
-                    </div>
-                  )}
                 </div>
               </nav>
             </div>
@@ -6750,10 +6728,44 @@ export default function App() {
           )}
 
           {/* Main content pane */}
-          <div className={`flex-1 min-h-screen ${showStudentSidebar ? "bg-slate-50 hidden md:flex" : "bg-slate-950 flex"} flex-col`}>
-            {/* Top header navigation breadcrumb */}
+          <div className={`flex-1 min-h-screen ${showStudentSidebar ? "bg-slate-50 flex" : "bg-slate-950 flex"} flex-col pb-20 md:pb-0`}>
+            {/* Student Mobile Top Header */}
             {showStudentSidebar && (
-              <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between sticky top-0 z-40 shadow-xs">
+              <header className="bg-slate-900 text-white border-b border-slate-800 px-4 py-3 flex items-center justify-between sticky top-0 z-30 shadow-md md:hidden">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 bg-gradient-to-tr from-indigo-500 to-purple-600 rounded-lg flex items-center justify-center p-0.5 shrink-0 shadow-xs">
+                    <GraduationCap className="w-4 h-4 text-white" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-black text-white truncate">{activeStudent.name}</span>
+                      <span className="text-[9px] bg-amber-400/20 text-amber-300 px-1.5 py-0.2 rounded font-bold">{activeStudent.gradeClass}</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400 block truncate">إشراف: {studentPortalTeacherName || "المعلم"}</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    sessionStorage.removeItem("seb_student_logged_id");
+                    localStorage.removeItem("seb_student_logged_id");
+                    localStorage.removeItem("seb_student_grade");
+                    localStorage.removeItem("seb_student_semester");
+                    setStudentSelectedId("");
+                    setStudentLoggedInId(null);
+                    triggerToast("تم تسجيل الخروج بنجاح", "info");
+                  }}
+                  className="p-2 text-rose-400 hover:bg-slate-800 rounded-lg text-xs flex items-center gap-1 cursor-pointer font-bold"
+                  title="تسجيل الخروج"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              </header>
+            )}
+
+            {/* Desktop top header navigation breadcrumb */}
+            {showStudentSidebar && (
+              <header className="bg-white border-b border-slate-200 px-6 py-4 hidden md:flex items-center justify-between sticky top-0 z-40 shadow-xs">
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-slate-400 font-bold">
                     بوابة الطالب الإلكترونية &gt;
@@ -7583,6 +7595,81 @@ export default function App() {
             )}
           </AnimatePresence>
 
+          {/* Student Mobile Bottom Navigation Bar */}
+          {showStudentSidebar && (
+            <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 py-1.5 px-3 flex items-center justify-around shadow-2xl">
+              <button
+                type="button"
+                onClick={() => {
+                  setStudentActiveNav("home");
+                  setSelectedCurriculumSubject(null);
+                }}
+                className={`flex flex-col items-center gap-0.5 py-1 px-2.5 rounded-xl transition-all cursor-pointer ${
+                  studentActiveNav === "home"
+                    ? "text-indigo-400 font-black scale-105"
+                    : "text-slate-400 font-bold hover:text-slate-200"
+                }`}
+              >
+                <Home className="w-5 h-5" />
+                <span className="text-[10px]">الرئيسية</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setStudentActiveNav("curriculum_review");
+                }}
+                className={`flex flex-col items-center gap-0.5 py-1 px-2.5 rounded-xl transition-all cursor-pointer ${
+                  studentActiveNav === "curriculum_review"
+                    ? "text-indigo-400 font-black scale-105"
+                    : "text-slate-400 font-bold hover:text-slate-200"
+                }`}
+              >
+                <Sparkles className="w-5 h-5 text-[#f4be1c]" />
+                <span className="text-[10px]">المراجعة</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setStudentActiveNav("reviews");
+                  setSelectedCurriculumSubject(null);
+                }}
+                className={`flex flex-col items-center gap-0.5 py-1 px-2.5 rounded-xl transition-all cursor-pointer relative ${
+                  studentActiveNav === "reviews"
+                    ? "text-indigo-400 font-black scale-105"
+                    : "text-slate-400 font-bold hover:text-slate-200"
+                }`}
+              >
+                <div className="relative">
+                  <Gamepad2 className="w-5 h-5 text-amber-400" />
+                  {hasActiveChallenge && (
+                    <span className="absolute -top-1 -right-1 flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                    </span>
+                  )}
+                </div>
+                <span className="text-[10px]">التحديات</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setStudentActiveNav("quizzes");
+                  setSelectedCurriculumSubject(null);
+                }}
+                className={`flex flex-col items-center gap-0.5 py-1 px-2.5 rounded-xl transition-all cursor-pointer ${
+                  studentActiveNav === "quizzes"
+                    ? "text-indigo-400 font-black scale-105"
+                    : "text-slate-400 font-bold hover:text-slate-200"
+                }`}
+              >
+                <BookOpen className="w-5 h-5" />
+                <span className="text-[10px]">اختباراتي</span>
+              </button>
+            </nav>
+          )}
 
         </div>
       );
@@ -8424,7 +8511,7 @@ export default function App() {
               triggerLoginShake();
             }
           }}
-          className="w-full md:w-64 bg-white border-l border-slate-200/80 text-slate-800 shrink-0 flex flex-col justify-between p-5 md:sticky md:top-0 md:h-screen relative overflow-y-auto overflow-x-hidden shadow-xs"
+          className="hidden md:flex md:w-64 bg-white border-l border-slate-200/80 text-slate-800 shrink-0 flex-col justify-between p-5 md:sticky md:top-0 md:h-screen relative overflow-y-auto overflow-x-hidden shadow-xs"
         >
         {/* Subtle background glow */}
         <div className="absolute top-0 left-0 w-32 h-32 bg-blue-500/5 rounded-full blur-3xl pointer-events-none" />
@@ -8713,7 +8800,49 @@ export default function App() {
       )}
 
       {/* --- MAIN BODY WORKSPACE --- */}
-      <div className="flex-1 flex flex-col min-h-screen overflow-x-hidden">
+      <div className="flex-1 flex flex-col min-h-screen overflow-x-hidden pb-20 md:pb-0">
+        {/* Mobile Teacher Top Header */}
+        {currentUser && (
+          <header className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between sticky top-0 z-30 shadow-2xs md:hidden">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[#1e3a8a] to-blue-600 p-0.5 flex items-center justify-center shadow-xs">
+                <GraduationCap className="w-4 h-4 text-amber-300" />
+              </div>
+              <div className="min-w-0">
+                <span className="text-xs font-black text-slate-900 block truncate">معلم | Teacher.AI</span>
+                <span className="text-[10px] text-indigo-600 font-bold block truncate">{currentUser.displayName || currentUser.email?.split("@")[0] || "المعلم"}</span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  const portalLink = `${window.location.origin}/?portal=student&teacherId=${currentUser?.uid || "demo_teacher"}`;
+                  navigator.clipboard.writeText(portalLink);
+                  triggerToast("تم نسخ رابط بوابة الطلاب بنجاح! 📋", "success");
+                }}
+                className="p-2 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-xl text-xs font-bold flex items-center gap-1 border border-emerald-200 cursor-pointer"
+                title="نسخ رابط صفحة الطلاب"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                <span className="text-[10px]">رابط الطلاب</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setTeacherPreviewActive(true);
+                  triggerToast("تم تشغيل محاكي الطالب بنجاح", "info");
+                }}
+                className="p-2 text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-xl text-xs font-bold flex items-center gap-1 border border-rose-200 cursor-pointer"
+                title="معاينة بوابة الطالب"
+              >
+                <Eye className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </header>
+        )}
         <main className={`flex-1 flex flex-col ${isCurriculumAdminFullScreen && activeTab === "curriculum_review_admin" ? "p-3 md:p-6 max-w-none w-full" : "p-6 md:p-10 max-w-7xl mx-auto w-full"}`}>
           {!currentUser ? (
             <div className="flex-1 flex flex-col items-center justify-center p-4 md:p-8 min-h-[75vh]">
@@ -12072,7 +12201,196 @@ export default function App() {
                               )}
                           </div>
                         ) : (
-                          <div className="overflow-x-auto border border-slate-200 rounded-lg shadow-2xs">
+                          <>
+                            {/* Mobile Touch-Friendly Cards View */}
+                            <div className="md:hidden space-y-3">
+                              {/* Mobile Quick Global Password Bar for Students tab */}
+                              {activeTab === "students" && (
+                                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 space-y-2.5 shadow-xs">
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                      <input
+                                        type="checkbox"
+                                        id="mobileGlobalPasswordRequired"
+                                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer w-4 h-4"
+                                        checked={isPasswordRequiredGlobal}
+                                        onChange={(e) => handleTogglePasswordRequired(e.target.checked)}
+                                      />
+                                      <label htmlFor="mobileGlobalPasswordRequired" className="text-slate-800 font-extrabold text-xs cursor-pointer">
+                                        كلمة المرور مطلوبة
+                                      </label>
+                                    </div>
+                                    <span className="text-[10px] text-slate-500 font-bold">إجمالي: {filteredStudents.length} طالب</span>
+                                  </div>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <button
+                                      type="button"
+                                      disabled={passwordGenProgress.active}
+                                      onClick={handleAutoGeneratePasswords}
+                                      className="flex items-center justify-center gap-1.5 py-2 px-2 text-[10px] font-black rounded-xl border border-blue-200 bg-blue-50 text-blue-700 active:scale-95 transition-all cursor-pointer"
+                                    >
+                                      <Sparkles className="w-3 h-3 text-blue-500" />
+                                      <span>توليد تلقائي 🔑</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={handleClearAllPasswords}
+                                      className="flex items-center justify-center gap-1.5 py-2 px-2 text-[10px] font-black rounded-xl border border-rose-200 bg-rose-50 text-rose-600 active:scale-95 transition-all cursor-pointer"
+                                    >
+                                      <Eraser className="w-3 h-3 text-rose-500" />
+                                      <span>مسح الكلمات</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Student Cards Loop for Mobile */}
+                              {filteredStudents.map((student, idx) => (
+                                <div
+                                  key={`mob-${student.id}`}
+                                  className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3 shadow-xs"
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="flex items-center gap-2.5">
+                                      <div className="w-7 h-7 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-xs font-black text-indigo-700 font-mono">
+                                        {idx + 1}
+                                      </div>
+                                      <div>
+                                        <h4
+                                          onClick={() => {
+                                            if (activeTab === "student_results") setSelectedStudent(student);
+                                          }}
+                                          className={`text-xs font-black text-slate-800 ${activeTab === "student_results" ? "cursor-pointer hover:text-indigo-600" : ""}`}
+                                        >
+                                          {student.name}
+                                        </h4>
+                                        <div className="flex items-center gap-1.5 mt-0.5">
+                                          <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded font-bold">
+                                            {student.grade || selectedTabGrade} - {student.semester || selectedTabSemester}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    {activeTab === "students" ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteStudent(student.id)}
+                                        className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer"
+                                        title="حذف الطالب"
+                                      >
+                                        <Trash2 className="w-4 h-4" />
+                                      </button>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => setSelectedStudent(student)}
+                                        className="text-[10px] bg-indigo-50 text-indigo-700 border border-indigo-100 font-bold px-2 py-1 rounded-lg flex items-center gap-1 cursor-pointer"
+                                      >
+                                        <FileText className="w-3 h-3" />
+                                        <span>الشهادة</span>
+                                      </button>
+                                    )}
+                                  </div>
+
+                                  {activeTab === "students" && (
+                                    <div className="pt-2 border-t border-slate-100 flex items-center gap-2">
+                                      <span className="text-[11px] font-bold text-slate-500 shrink-0">كلمة المرور:</span>
+                                      <div className="relative flex-1">
+                                        <input
+                                          type="text"
+                                          inputMode="numeric"
+                                          pattern="[0-9]*"
+                                          maxLength={10}
+                                          placeholder="أرقام فقط"
+                                          value={student.password || ""}
+                                          onChange={async (e) => {
+                                            const val = e.target.value.replace(/[^0-9]/g, "").slice(0, 10);
+                                            setStudents((prev) => prev.map((s) => s.id === student.id ? { ...s, password: val } : s));
+                                            try {
+                                              const studentRef = doc(db, "students", student.id);
+                                              await updateDoc(studentRef, { password: val });
+                                            } catch (err) {
+                                              console.error("Error updating student password", student.id, err);
+                                            }
+                                          }}
+                                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1 text-xs text-center font-mono focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100 font-black text-slate-800"
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={async () => {
+                                            const easyPatterns = ["1234", "1122", "2233", "3344", "4455", "5566", "7788", "8899", "1212", "4321"];
+                                            const randPattern = easyPatterns[Math.floor(Math.random() * easyPatterns.length)];
+                                            setStudents((prev) => prev.map((s) => s.id === student.id ? { ...s, password: randPattern } : s));
+                                            try {
+                                              const studentRef = doc(db, "students", student.id);
+                                              await updateDoc(studentRef, { password: randPattern });
+                                              triggerToast(`تم توليد كلمة مرور: ${randPattern} 🔑`, "success");
+                                            } catch (err) {
+                                              console.error("Error generating student password", student.id, err);
+                                            }
+                                          }}
+                                          className="absolute left-1.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-blue-600 rounded-md cursor-pointer"
+                                          title="توليد تلقائي"
+                                        >
+                                          <Key className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {activeTab === "student_results" && activeClassQuizzes.length > 0 && (
+                                    <div className="pt-2 border-t border-slate-100 space-y-1.5">
+                                      <span className="text-[10px] text-slate-400 font-bold block">نتائج الاختبارات:</span>
+                                      <div className="grid grid-cols-2 gap-1.5">
+                                        {activeClassQuizzes.map((q) => {
+                                          const gradeObj = (student.detailedGrades || []).find((g) => g.quizTitle === q.title);
+                                          return (
+                                            <div
+                                              key={q.id}
+                                              className="bg-slate-50 border border-slate-150 rounded-xl p-2 flex items-center justify-between gap-1"
+                                            >
+                                              <span className="text-[10px] font-bold text-slate-700 truncate" title={q.title}>
+                                                {q.title}
+                                              </span>
+                                              {gradeObj ? (
+                                                <div className="flex items-center gap-1 shrink-0">
+                                                  <span className="text-xs font-black text-indigo-700 font-sans">
+                                                    {gradeObj.score}
+                                                  </span>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                      triggerConfirm(
+                                                        "إعادة الاختبار للطالب",
+                                                        `هل تريد حذف نتيجة "${q.title}" للطالب "${student.name}"؟`,
+                                                        () => handleResetQuizForStudents([student.id], q.title),
+                                                        undefined,
+                                                        "نعم، حذف للإعادة",
+                                                        "إلغاء"
+                                                      );
+                                                    }}
+                                                    className="text-rose-500 hover:text-rose-700 p-0.5 cursor-pointer"
+                                                    title="إتاحة إعادة الاختبار"
+                                                  >
+                                                    <RotateCcw className="w-3 h-3" />
+                                                  </button>
+                                                </div>
+                                              ) : (
+                                                <span className="text-[9px] text-slate-400 shrink-0">لم يقدم</span>
+                                              )}
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+
+                            {/* Desktop Full Table View */}
+                            <div className="hidden md:block overflow-x-auto border border-slate-200 rounded-lg shadow-2xs">
                             <table className="w-full text-right border-collapse text-[13px]">
                               <thead>
                                 {activeTab === "students" ? (
@@ -12599,9 +12917,10 @@ export default function App() {
                               </tbody>
                             </table>
                           </div>
-                        )}
-                      </div>
-                    ) : (
+                        </>
+                      )}
+                    </div>
+                  ) : (
                       // Elegant prompt invitation to select grade and semester
                       <div className="bg-slate-50/50 rounded-3xl border border-slate-200/60 p-10 text-center space-y-3">
                         <div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center text-indigo-600 mx-auto border border-indigo-100/40 text-center">
@@ -15495,6 +15814,271 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+      {/* Teacher Mobile Bottom Navigation Bar */}
+      {currentUser && (
+        <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 py-1.5 px-2 flex items-center justify-around shadow-2xl font-sans">
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab("dashboard");
+              setMobileMoreDrawerOpen(false);
+            }}
+            className={`flex flex-col items-center gap-0.5 py-1 px-2.5 rounded-xl transition-all cursor-pointer ${
+              activeTab === "dashboard"
+                ? "text-blue-700 font-black scale-105"
+                : "text-slate-500 font-bold hover:text-slate-800"
+            }`}
+          >
+            <Layers className="w-5 h-5" />
+            <span className="text-[10px]">الاختبارات</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab("student_results");
+              setMobileMoreDrawerOpen(false);
+            }}
+            className={`flex flex-col items-center gap-0.5 py-1 px-2.5 rounded-xl transition-all cursor-pointer ${
+              activeTab === "student_results"
+                ? "text-blue-700 font-black scale-105"
+                : "text-slate-500 font-bold hover:text-slate-800"
+            }`}
+          >
+            <Award className="w-5 h-5 text-amber-500" />
+            <span className="text-[10px]">النتائج</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab("students");
+              setMobileMoreDrawerOpen(false);
+            }}
+            className={`flex flex-col items-center gap-0.5 py-1 px-2.5 rounded-xl transition-all cursor-pointer ${
+              activeTab === "students"
+                ? "text-emerald-700 font-black scale-105"
+                : "text-slate-500 font-bold hover:text-slate-800"
+            }`}
+          >
+            <Users className="w-5 h-5 text-emerald-600" />
+            <span className="text-[10px]">الطلاب</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab("curriculum_review_admin");
+              setMobileMoreDrawerOpen(false);
+            }}
+            className={`flex flex-col items-center gap-0.5 py-1 px-2.5 rounded-xl transition-all cursor-pointer ${
+              activeTab === "curriculum_review_admin"
+                ? "text-blue-700 font-black scale-105"
+                : "text-slate-500 font-bold hover:text-slate-800"
+            }`}
+          >
+            <Sparkles className="w-5 h-5 text-[#f4be1c]" />
+            <span className="text-[10px]">المراجعة</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setMobileMoreDrawerOpen((prev) => !prev)}
+            className={`flex flex-col items-center gap-0.5 py-1 px-2.5 rounded-xl transition-all cursor-pointer relative ${
+              mobileMoreDrawerOpen || activeTab === "reviews_admin" || activeTab === "registered_teachers"
+                ? "text-blue-700 font-black scale-105"
+                : "text-slate-500 font-bold hover:text-slate-800"
+            }`}
+          >
+            <div className="relative">
+              <Menu className="w-5 h-5" />
+              {hasActiveChallenge && (
+                <span className="absolute -top-1 -right-1 flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                </span>
+              )}
+            </div>
+            <span className="text-[10px]">المزيد</span>
+          </button>
+        </nav>
+      )}
+
+      {/* Teacher Mobile Slide-up Drawer for "المزيد" */}
+      <AnimatePresence>
+        {mobileMoreDrawerOpen && currentUser && (
+          <div className="md:hidden fixed inset-0 z-50 flex flex-col justify-end bg-slate-900/60 backdrop-blur-xs">
+            <div
+              className="flex-1 w-full"
+              onClick={() => setMobileMoreDrawerOpen(false)}
+            />
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              className="bg-white rounded-t-3xl shadow-2xl border-t border-slate-200 p-5 space-y-4 max-h-[80vh] overflow-y-auto"
+              dir="rtl"
+            >
+              {/* Drawer Handle */}
+              <div className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-2" />
+
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                <div className="flex items-center gap-2">
+                  <Menu className="w-4 h-4 text-blue-700" />
+                  <h3 className="font-extrabold text-sm text-slate-800">خيارات وأقسام إضافية</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMobileMoreDrawerOpen(false)}
+                  className="p-1 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab("reviews_admin");
+                    setMobileMoreDrawerOpen(false);
+                  }}
+                  className={`w-full flex items-center justify-between gap-3 p-3 rounded-2xl text-xs font-black transition-all cursor-pointer ${
+                    activeTab === "reviews_admin"
+                      ? "bg-blue-50 text-blue-800 border border-blue-200"
+                      : "bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/60"
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <Gamepad2 className="w-4 h-4 text-amber-500" />
+                    <span>ألعاب وتحديات تنافسية 🏆</span>
+                  </div>
+                  {hasActiveChallenge && (
+                    <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold">نشط الآن</span>
+                  )}
+                </button>
+
+                {currentUser && currentUser.email?.trim().toLowerCase() === "majedsoft@gmail.com" && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveTab("registered_teachers");
+                        setMobileMoreDrawerOpen(false);
+                      }}
+                      className={`w-full flex items-center justify-between gap-3 p-3 rounded-2xl text-xs font-black transition-all cursor-pointer ${
+                        activeTab === "registered_teachers"
+                          ? "bg-indigo-50 text-indigo-900 border border-indigo-200"
+                          : "bg-indigo-50/50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200/60"
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <UserCheck className="w-4 h-4 text-indigo-600" />
+                        <span>إدارة المعلمين المسجلين</span>
+                      </div>
+                      <span className="text-[9px] bg-indigo-200/60 text-indigo-900 px-1.5 py-0.5 rounded-md font-bold">المسؤول</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBankPortalActive(true);
+                        setStudentPortalActive(false);
+                        setMobileMoreDrawerOpen(false);
+                        const url = new URL(window.location.href);
+                        url.searchParams.set("portal", "bank");
+                        url.searchParams.delete("teacher");
+                        window.history.pushState({}, "", url.toString());
+                        triggerToast("تم الانتقال لبوابة بنك الأسئلة المستقلة السحابية ⚡", "success");
+                      }}
+                      className="w-full flex items-center justify-between gap-3 p-3 rounded-2xl text-xs font-black bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 cursor-pointer"
+                    >
+                      <div className="flex items-center gap-3">
+                        <Database className="w-4 h-4 text-emerald-600" />
+                        <span>بنك الأسئلة المستقل السحابي 🔗</span>
+                      </div>
+                      <span className="text-[9px] bg-emerald-200/60 text-emerald-800 px-1.5 py-0.5 rounded-md font-bold">بوابة مستقلة</span>
+                    </button>
+                  </>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTeacherPreviewActive(true);
+                    setMobileMoreDrawerOpen(false);
+                    triggerToast("تم تشغيل محاكي الطالب بنجاح", "info");
+                  }}
+                  className="w-full flex items-center gap-3 p-3 rounded-2xl text-xs font-black bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 cursor-pointer"
+                >
+                  <Eye className="w-4 h-4 text-rose-600" />
+                  <span>معاينة بوابة الطالب الإلكترونية</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const portalLink = `${window.location.origin}/?portal=student&teacherId=${currentUser?.uid || "demo_teacher"}`;
+                    navigator.clipboard.writeText(portalLink);
+                    setMobileMoreDrawerOpen(false);
+                    triggerToast("تم نسخ رابط بوابة الطلاب بنجاح! 📋", "success");
+                  }}
+                  className="w-full flex items-center gap-3 p-3 rounded-2xl text-xs font-black bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-250 cursor-pointer"
+                >
+                  <Copy className="w-4 h-4 text-emerald-600" />
+                  <span>نسخ رابط صفحة الطلاب</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    reconcileUserData(currentUser, true);
+                    setMobileMoreDrawerOpen(false);
+                  }}
+                  className="w-full flex items-center gap-3 p-3 rounded-2xl text-xs font-black bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 cursor-pointer"
+                >
+                  <RefreshCw className="w-4 h-4 text-blue-600" />
+                  <span>مزامنة واسترجاع بيانات الحساب</span>
+                </button>
+
+                {/* Profile card & logout */}
+                <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-black">
+                      {(currentUser?.displayName || "M").charAt(0)}
+                    </div>
+                    <div>
+                      <span className="text-xs font-black text-slate-800 block">{currentUser?.displayName || "المعلم"}</span>
+                      <span className="text-[10px] text-slate-400 block">{currentUser?.email || ""}</span>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileMoreDrawerOpen(false);
+                      triggerConfirm(
+                        "تسجيل الخروج",
+                        "هل أنت متأكد من رغبتك في تسجيل الخروج والعودة لصفحة الدخول؟",
+                        () => {
+                          signOut(auth);
+                          triggerToast("تم تسجيل خروجك بنجاح", "info");
+                        },
+                      );
+                    }}
+                    className="p-2 text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-xl text-xs font-black flex items-center gap-1 cursor-pointer"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>خروج</span>
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
     </div>
   );
 }

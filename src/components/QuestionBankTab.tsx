@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Plus, 
   Minus,
@@ -401,6 +401,20 @@ export default function QuestionBankTab({
   const [pdfUnitOverride, setPdfUnitOverride] = useState<string>('');
   const [pdfLessonOverride, setPdfLessonOverride] = useState<string>('');
 
+  // High-capacity generation progress and pagination states (supports 500+ questions)
+  const [generationProgress, setGenerationProgress] = useState<{
+    totalTarget: number;
+    generatedSoFar: number;
+    currentBatch: number;
+    totalBatches: number;
+    currentLessonName: string;
+    isStopping: boolean;
+  } | null>(null);
+  const abortGenerationRef = useRef<boolean>(false);
+  const [reviewSearchQuery, setReviewSearchQuery] = useState('');
+  const [reviewCurrentPage, setReviewCurrentPage] = useState(1);
+  const REVIEW_PAGE_SIZE = 40;
+
   const handleResetPdfModalStates = () => {
     setPdfStep('upload');
     setPdfFile(null);
@@ -412,6 +426,8 @@ export default function QuestionBankTab({
     setExpandedUnits({});
     setIsExtractingStructure(false);
     setIsGenerating(false);
+    setGenerationProgress(null);
+    abortGenerationRef.current = false;
     setGeneratedDrafts([]);
     setSelectedDraftIndexes({});
     setPdfError(null);
@@ -421,6 +437,8 @@ export default function QuestionBankTab({
     setPdfSubjectOverride('auto');
     setPdfUnitOverride('');
     setPdfLessonOverride('');
+    setReviewSearchQuery('');
+    setReviewCurrentPage(1);
   };
 
   // Excel Copy-Paste Import States
@@ -1183,6 +1201,13 @@ export default function QuestionBankTab({
     }));
   };
 
+  const handleStopPdfGeneration = () => {
+    abortGenerationRef.current = true;
+    if (generationProgress) {
+      setGenerationProgress(prev => prev ? { ...prev, isStopping: true } : null);
+    }
+  };
+
   const handleGenerateQuestionsFromPdf = async () => {
     if (!pdfBase64) {
       triggerToast('يرجى تحميل ملف للمتابعة', 'error');
@@ -1213,75 +1238,167 @@ export default function QuestionBankTab({
     }
     const targetUnits = Array.from(targetUnitsSet);
 
+    // Calculate total expected questions and batch chunks
+    const questionsPerLesson = mcqCount + tfCount;
+    const isSingleDoc = lessonsDetail.length === 0;
+    const totalExpected = isSingleDoc 
+      ? questionsPerLesson 
+      : lessonsDetail.length * questionsPerLesson;
+
+    // Determine optimal chunk size: 1-2 lessons per API call to guarantee ultra fast responses ~3-7s per call
+    let chunkSize = 2;
+    if (questionsPerLesson >= 15) {
+      chunkSize = 1;
+    } else if (questionsPerLesson <= 5) {
+      chunkSize = 3;
+    }
+
+    const chunks: { unitTitle: string; lessonTitle: string }[][] = [];
+    if (isSingleDoc) {
+      chunks.push([]);
+    } else {
+      for (let i = 0; i < lessonsDetail.length; i += chunkSize) {
+        chunks.push(lessonsDetail.slice(i, i + chunkSize));
+      }
+    }
+
     setIsGenerating(true);
     setPdfError(null);
     setGeneratedDrafts([]);
     setSelectedDraftIndexes({});
+    setReviewCurrentPage(1);
+    setReviewSearchQuery('');
+    abortGenerationRef.current = false;
 
-    try {
-      const res = await fetch('/api/generate-questions-from-pdf', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          pdfBase64,
-          mimeType: pdfMimeType,
-          customPrompt: pdfCustomPrompt,
-          mcqCount,
-          tfCount,
-          stageOverride: pdfStageOverride,
-          gradeOverride: pdfGradeOverride,
-          semesterOverride: pdfSemesterOverride,
-          subjectOverride: pdfSubjectOverride,
-          unitOverride: pdfUnitOverride,
-          lessonOverride: pdfLessonOverride,
-          selectedLessons: activeLessons,
-          selectedUnits: targetUnits,
-          lessonsDetail
-        }),
+    const accumulatedQuestions: any[] = [];
+    let lastEncounteredError: string | null = null;
+
+    setGenerationProgress({
+      totalTarget: totalExpected,
+      generatedSoFar: 0,
+      currentBatch: 1,
+      totalBatches: chunks.length,
+      currentLessonName: isSingleDoc ? 'كامل محتوى المستند' : (chunks[0]?.[0]?.lessonTitle || ''),
+      isStopping: false
+    });
+
+    for (let cIdx = 0; cIdx < chunks.length; cIdx++) {
+      if (abortGenerationRef.current) {
+        console.log("Generation aborted by user. Showing collected drafts so far.");
+        break;
+      }
+
+      const currentChunk = chunks[cIdx];
+      const currentChunkLessonNames = isSingleDoc 
+        ? 'كامل محتوى المستند' 
+        : currentChunk.map(c => c.lessonTitle).join('، ');
+
+      setGenerationProgress({
+        totalTarget: totalExpected,
+        generatedSoFar: accumulatedQuestions.length,
+        currentBatch: cIdx + 1,
+        totalBatches: chunks.length,
+        currentLessonName: currentChunkLessonNames,
+        isStopping: false
       });
 
-      const responseText = await res.text();
-      let data: any = null;
-      try {
-        data = JSON.parse(responseText);
-      } catch (parseErr) {
-        console.error("Non-JSON response from server:", responseText?.slice(0, 300));
-        if (res.status === 413) {
-          throw new Error("الملف المختار كبير جداً بالنسبة للشبكة السحابية (تجاوز الحد المسموح). يرجى تقليل حجم الملف أو اختيار ملف أصغر من 10 ميجابايت.");
+      // Resilient retry loop for this specific chunk (up to 3 tries)
+      let chunkSuccess = false;
+      let chunkErrorMsg = '';
+
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (abortGenerationRef.current) break;
+        try {
+          const res = await fetch('/api/generate-questions-from-pdf', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              pdfBase64,
+              mimeType: pdfMimeType,
+              customPrompt: pdfCustomPrompt,
+              mcqCount,
+              tfCount,
+              stageOverride: pdfStageOverride,
+              gradeOverride: pdfGradeOverride,
+              semesterOverride: pdfSemesterOverride,
+              subjectOverride: pdfSubjectOverride,
+              unitOverride: pdfUnitOverride,
+              lessonOverride: pdfLessonOverride,
+              selectedLessons: isSingleDoc ? [] : currentChunk.map(c => c.lessonTitle),
+              selectedUnits: targetUnits,
+              lessonsDetail: isSingleDoc ? undefined : currentChunk
+            }),
+          });
+
+          const responseText = await res.text();
+          let data: any = null;
+          try {
+            data = JSON.parse(responseText);
+          } catch (parseErr) {
+            if (res.status === 413) {
+              throw new Error("حجم الملف المرفق كبير جداً، يرجى اختيار ملف أصغر من 15 ميجابايت.");
+            }
+            throw new Error("استجابة غير مكتملة للدفعة الحالية من الخادم.");
+          }
+
+          if (!res.ok || !data?.success) {
+            throw new Error(data?.error || `فشل في توليد دفعة الأسئلة (رمز: ${res.status}).`);
+          }
+
+          if (Array.isArray(data.questions) && data.questions.length > 0) {
+            accumulatedQuestions.push(...data.questions);
+            chunkSuccess = true;
+            break;
+          } else {
+            throw new Error('لم يتم إرجاع أسئلة لهذه الدفعة.');
+          }
+        } catch (attemptErr: any) {
+          chunkErrorMsg = attemptErr.message || 'حدث خطأ في معالجة الدفعة.';
+          console.warn(`[Generation Chunk ${cIdx + 1} Attempt ${attempt + 1}] encounter:`, chunkErrorMsg);
+          if (attempt < 2 && !abortGenerationRef.current) {
+            const isQuotaOrBusy = chunkErrorMsg.includes("الحد الأقصى") || 
+                                  chunkErrorMsg.includes("429") || 
+                                  chunkErrorMsg.includes("ضغط") || 
+                                  chunkErrorMsg.includes("503");
+            const waitTime = isQuotaOrBusy ? 3500 * (attempt + 1) : 2000 * (attempt + 1);
+            await new Promise(r => setTimeout(r, waitTime));
+          }
         }
-        if (res.status === 504 || res.status === 502) {
-          throw new Error("استغرقت المعالجة وقتاً طويلاً على الخادم (مهلة الاتصال). يرجى تقليل عدد الدروس المحددة دفعة واحدة والمحاولة مجدداً.");
-        }
-        if (!res.ok) {
-          throw new Error(`خطأ من الخادم (رمز الحالة: ${res.status}). يرجى التحقق من اتصال الشبكة وإعادة المحاولة.`);
-        }
-        throw new Error("تلقى التطبيق استجابة غير مكتملة من الخادم. يرجى تجربة اختيار عدد أقل من الدروس أو إعادة المحاولة.");
       }
 
-      if (!res.ok || !data?.success) {
-        throw new Error(data?.error || `فشلت عملية استخراج الأسئلة (رمز الخطأ: ${res.status}).`);
+      if (!chunkSuccess && !abortGenerationRef.current) {
+        lastEncounteredError = chunkErrorMsg;
+        console.error(`Chunk ${cIdx + 1} failed completely after retries:`, chunkErrorMsg);
       }
 
-      if (Array.isArray(data.questions) && data.questions.length > 0) {
-        setGeneratedDrafts(data.questions);
-        const initialSelected: Record<number, boolean> = {};
-        data.questions.forEach((_: any, idx: number) => {
-          initialSelected[idx] = true;
-        });
-        setSelectedDraftIndexes(initialSelected);
-        setPdfStep('review');
-        triggerToast(`تم استخراج ${data.questions.length} أسئلة بنجاح! راجع الأسئلة لحفظها.`, 'success');
+      // Delay between chunks to respect RPM quotas
+      if (cIdx < chunks.length - 1 && !abortGenerationRef.current) {
+        await new Promise(r => setTimeout(r, 800));
+      }
+    }
+
+    setIsGenerating(false);
+    setGenerationProgress(null);
+
+    if (accumulatedQuestions.length > 0) {
+      setGeneratedDrafts(accumulatedQuestions);
+      const initialSelected: Record<number, boolean> = {};
+      accumulatedQuestions.forEach((_, idx) => {
+        initialSelected[idx] = true;
+      });
+      setSelectedDraftIndexes(initialSelected);
+      setPdfStep('review');
+      
+      if (accumulatedQuestions.length >= totalExpected * 0.85) {
+        triggerToast(`🎉 تم بنجاح توليد واستخراج ${accumulatedQuestions.length} سؤالاً بدقة عالية! راجع الأسئلة لحفظها.`, 'success');
       } else {
-        throw new Error('لم يتم العثور على أسئلة مطابقة في المستند المرفق.');
+        triggerToast(`تم استخراج ${accumulatedQuestions.length} سؤالاً بنجاح! راجع الأسئلة لحفظها ببنك الأسئلة.`, 'success');
       }
-    } catch (err: any) {
-      console.error(err);
-      setPdfError(err.message || 'حدث خطأ غير متوقع أثناء استخراج الأسئلة.');
-      triggerToast('حدث خطأ أثناء معالجة الملف', 'error');
-    } finally {
-      setIsGenerating(false);
+    } else {
+      setPdfError(lastEncounteredError || 'تعذر استخراج الأسئلة من المستند. يرجى تجربة اختيار دروس أخرى أو التحقق من جودة الملف.');
+      triggerToast('حدث خطأ أثناء معالجة المستند', 'error');
     }
   };
 
@@ -1331,7 +1448,12 @@ export default function QuestionBankTab({
 
         if (draftType === 'true_false') {
           finalDraftOpts = ['صحيح', 'خطأ'];
-          finalCorrectAnswer = 'true';
+          const rawCorrect = String(draft.correctAnswer ?? '').toLowerCase().trim();
+          if (rawCorrect === 'false' || rawCorrect === '1' || rawCorrect === 'خطأ' || rawCorrect === 'خطا') {
+            finalCorrectAnswer = 'false';
+          } else {
+            finalCorrectAnswer = 'true';
+          }
         } else {
           // Ensure correct option is strictly at index 0
           const rawCorrect = String(draft.correctAnswer ?? '0').trim();
@@ -3236,165 +3358,343 @@ export default function QuestionBankTab({
                   </div>
                 )}
 
-                {/* GENERATING QUESTIONS SPINNER */}
+                {/* GENERATING QUESTIONS PROGRESS SCREEN */}
                 {isGenerating && (
-                  <div className="flex flex-col items-center justify-center py-14 space-y-5 text-center">
+                  <div className="flex flex-col items-center justify-center py-10 space-y-6 text-center">
                     <div className="relative">
-                      <div className="w-16 h-16 rounded-full border-4 border-emerald-100 border-t-emerald-600 animate-spin"></div>
+                      <div className="w-18 h-18 rounded-full border-4 border-emerald-100 border-t-emerald-600 animate-spin"></div>
                       <div className="absolute inset-0 flex items-center justify-center text-emerald-600">
-                        <Sparkles className="w-6 h-6 animate-pulse" />
+                        <Sparkles className="w-7 h-7 animate-pulse" />
                       </div>
                     </div>
-                    <div className="space-y-2 max-w-md">
-                      <h4 className="text-base font-black text-slate-800">يقوم الذكاء الاصطناعي بصياغة الأسئلة الأكاديمية الآن</h4>
-                      <p className="text-xs text-slate-500 leading-relaxed font-sans">
-                        يتم تحليل نصوص وشروحات الدروس المحددة بدقة لإعداد أسئلة اختيار من متعدد وصواب وخطأ مطابقة لمعايير المناهج التعليمية.
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {/* 3. REVIEW GENERATED QUESTIONS */}
-                {pdfStep === 'review' && !isGenerating && generatedDrafts.length > 0 && (
-                  <div className="space-y-4">
-                    {/* Select helpers row */}
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-slate-500 pb-3 border-b border-slate-150">
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const next: Record<number, boolean> = {};
-                            generatedDrafts.forEach((_, idx) => { next[idx] = true; });
-                            setSelectedDraftIndexes(next);
-                          }}
-                          className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 font-extrabold hover:bg-emerald-100 transition cursor-pointer"
-                        >
-                          تحديد الكل ({generatedDrafts.length})
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedDraftIndexes({})}
-                          className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-650 font-extrabold hover:bg-slate-200 transition cursor-pointer"
-                        >
-                          إلغاء تحديد الكل
-                        </button>
-                      </div>
-                      <span className="font-bold text-slate-700">
-                        تم استخراج <span className="text-emerald-600 font-black font-sans">{generatedDrafts.length}</span> أسئلة منسقة. حدد الأسئلة التي تود اعتمادها وحفظها:
-                      </span>
-                    </div>
-
-                    {/* Draft question Cards */}
-                    <div className="space-y-3.5 max-h-[55vh] overflow-y-auto pr-1">
-                      {generatedDrafts.map((draft, idx) => {
-                        const isSelected = !!selectedDraftIndexes[idx];
-                        return (
-                          <div
-                            key={idx}
-                            onClick={() => {
-                              setSelectedDraftIndexes(prev => ({
-                                ...prev,
-                                [idx]: !prev[idx]
-                              }));
-                            }}
-                            className={`p-5 rounded-2xl border-2 transition-all cursor-pointer flex items-start gap-4 ${
-                              isSelected
-                                ? 'bg-emerald-50/20 border-emerald-500 shadow-xs'
-                                : 'bg-white border-slate-200 hover:border-slate-300'
-                            }`}
-                          >
-                            {/* Checkbox */}
-                            <div className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 mt-0.5 transition ${
-                              isSelected ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-slate-350 text-transparent bg-white'
-                            }`}>
-                              <Check className="w-3.5 h-3.5" />
-                            </div>
-
-                            {/* Details */}
-                            <div className="flex-1 space-y-3 w-full">
-                              {/* Metadata labels row */}
-                              <div className="flex flex-wrap gap-1.5 items-center text-right">
-                                {(pdfStageOverride !== 'auto' ? pdfStageOverride : draft.stage) && (
-                                  <span className="px-2 py-0.5 rounded-md bg-indigo-50 border border-indigo-100 text-indigo-700 text-[9px] font-bold">
-                                    {pdfStageOverride !== 'auto' ? pdfStageOverride : draft.stage}
-                                  </span>
-                                )}
-                                {(pdfGradeOverride !== 'auto' ? pdfGradeOverride : draft.grade) && (
-                                  <span className="px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-100 text-emerald-700 text-[9px] font-bold">
-                                    {pdfGradeOverride !== 'auto' ? pdfGradeOverride : draft.grade}
-                                  </span>
-                                )}
-                                {(pdfSubjectOverride !== 'auto' ? pdfSubjectOverride : draft.subject) && (
-                                  <span className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-600 text-[9px] font-bold">
-                                    {pdfSubjectOverride !== 'auto' ? pdfSubjectOverride : draft.subject}
-                                  </span>
-                                )}
-                                {(pdfSemesterOverride !== 'auto' ? pdfSemesterOverride : draft.semester) && (
-                                  <span className="px-2 py-0.5 rounded-md bg-orange-50 border border-orange-100 text-orange-700 text-[9px] font-bold">
-                                    {pdfSemesterOverride !== 'auto' ? pdfSemesterOverride : draft.semester}
-                                  </span>
-                                )}
-                                {(draft.unit || (pdfUnitOverride.trim() !== '' ? pdfUnitOverride : '')) && (
-                                  <span className="px-2 py-0.5 rounded-md bg-indigo-50/50 text-indigo-600 text-[9px] font-sans font-semibold">
-                                    {draft.unit || pdfUnitOverride}
-                                  </span>
-                                )}
-                                {(draft.lesson || (pdfLessonOverride.trim() !== '' ? pdfLessonOverride : '')) && (
-                                  <span className="px-2 py-0.5 rounded-md bg-teal-50/50 text-teal-600 text-[9px] font-sans font-semibold">
-                                    {draft.lesson || pdfLessonOverride}
-                                  </span>
-                                )}
-                                <span className="mr-auto text-[10px] font-bold text-slate-400 font-sans">{draft.points || 1} {(draft.points || 1) === 1 ? 'نقطة' : 'نقاط'}</span>
-                              </div>
-
-                              {/* Question TEXT */}
-                              <p className="text-xs font-bold text-slate-800 leading-relaxed font-sans text-right">{draft.text}</p>
-
-                              {/* Options */}
-                              {Array.isArray(draft.options) && (
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full text-right">
-                                  {draft.options
-                                    .map((optionText, oIdx) => ({ optionText, oIdx }))
-                                    .filter(item => {
-                                      if (!item.optionText) return false;
-                                      const t = item.optionText.trim();
-                                      return t !== '' && 
-                                        t !== 'الخيار الثالث' && 
-                                        t !== 'الخيار الرابع' && 
-                                        t !== 'الخيار الثالث...' && 
-                                        t !== 'الخيار الرابع...' &&
-                                        t !== 'option 3' &&
-                                        t !== 'option 4' &&
-                                        t !== 'option3' &&
-                                        t !== 'option4';
-                                    })
-                                    .map(({ optionText, oIdx }) => {
-                                      const isCorrect = draft.type === 'true_false'
-                                        ? (oIdx === 0 && draft.correctAnswer === 'true') || (oIdx === 1 && draft.correctAnswer === 'false')
-                                        : String(oIdx) === draft.correctAnswer;
-                                      return (
-                                        <div
-                                          key={oIdx}
-                                          className={`p-2.5 rounded-xl text-xs font-sans border-r-4 flex items-center justify-between ${
-                                            isCorrect
-                                              ? 'bg-emerald-50/60 border-emerald-500 text-emerald-800 font-bold'
-                                              : 'bg-slate-50 border-transparent text-slate-500'
-                                          }`}
-                                        >
-                                          <span className="truncate">{optionText}</span>
-                                          {isCorrect && <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />}
-                                        </div>
-                                      );
-                                    })}
-                                </div>
-                              )}
-                            </div>
+                    
+                    <div className="space-y-3 max-w-lg w-full px-2">
+                      <h4 className="text-base font-black text-slate-800">
+                        يقوم الذكاء الاصطناعي بتوليد وصياغة الأسئلة الأكاديمية الآن
+                      </h4>
+                      
+                      {generationProgress && (
+                        <div className="space-y-3 bg-slate-50 border border-slate-200/90 rounded-2xl p-4 text-right shadow-3xs">
+                          <div className="flex items-center justify-between text-xs font-bold">
+                            <span className="text-emerald-700 font-black font-sans">
+                              تم استخراج <span className="text-base font-black">{generationProgress.generatedSoFar}</span> من أصل <span className="font-black">{generationProgress.totalTarget}</span> سؤالاً
+                            </span>
+                            <span className="text-slate-500 font-sans bg-white px-2.5 py-1 rounded-lg border border-slate-200 text-[11px]">
+                              الدفعة {generationProgress.currentBatch} من {generationProgress.totalBatches}
+                            </span>
                           </div>
-                        );
-                      })}
+
+                          {/* Progress Bar */}
+                          <div className="w-full bg-slate-200 rounded-full h-3.5 overflow-hidden shadow-inner">
+                            <div 
+                              className="bg-gradient-to-r from-emerald-500 to-teal-500 h-full rounded-full transition-all duration-300 ease-out"
+                              style={{
+                                width: `${Math.min(100, Math.max(4, (generationProgress.generatedSoFar / Math.max(1, generationProgress.totalTarget)) * 100))}%`
+                              }}
+                            />
+                          </div>
+
+                          <div className="flex items-center gap-2 pt-0.5">
+                            <span className="text-[11px] font-bold text-slate-400 shrink-0">جاري معالجة:</span>
+                            <span className="text-xs font-extrabold text-slate-700 truncate font-sans">
+                              {generationProgress.currentLessonName}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      <p className="text-xs text-slate-500 leading-relaxed font-sans">
+                        يتم تقسيم الطلب ومعالجة الدروس على دفعات سريعة لضمان استقرار الخادم وعدم انقطاع الاتصال حتى 500 سؤال.
+                      </p>
+
+                      {/* Stop and Review early button */}
+                      {generationProgress && generationProgress.generatedSoFar > 0 && (
+                        <div className="pt-2">
+                          <button
+                            type="button"
+                            onClick={handleStopPdfGeneration}
+                            disabled={generationProgress.isStopping}
+                            className="px-5 py-2.5 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-bold transition cursor-pointer shadow-3xs flex items-center gap-2 mx-auto"
+                          >
+                            {generationProgress.isStopping ? (
+                              <span>جاري إنهاء الدفعة الحالية وعرض النتائج...</span>
+                            ) : (
+                              <>
+                                <span>إيقاف المعالجة والاحتفاظ بـ ({generationProgress.generatedSoFar}) سؤالاً مستخرجاً</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
+
+                {/* 3. REVIEW GENERATED QUESTIONS (Supports 500+ Questions) */}
+                {pdfStep === 'review' && !isGenerating && generatedDrafts.length > 0 && (() => {
+                  const filteredDrafts = generatedDrafts
+                    .map((draft, originalIndex) => ({ draft, originalIndex }))
+                    .filter(({ draft }) => {
+                      if (!reviewSearchQuery.trim()) return true;
+                      const q = reviewSearchQuery.trim().toLowerCase();
+                      const matchText = (draft.text || '').toLowerCase().includes(q);
+                      const matchLesson = (draft.lesson || '').toLowerCase().includes(q);
+                      const matchUnit = (draft.unit || '').toLowerCase().includes(q);
+                      return matchText || matchLesson || matchUnit;
+                    });
+
+                  const totalPages = Math.ceil(filteredDrafts.length / REVIEW_PAGE_SIZE) || 1;
+                  const currentPage = Math.min(reviewCurrentPage, totalPages);
+                  const startIndex = (currentPage - 1) * REVIEW_PAGE_SIZE;
+                  const visibleDrafts = filteredDrafts.slice(startIndex, startIndex + REVIEW_PAGE_SIZE);
+                  const selectedCount = Object.values(selectedDraftIndexes).filter(Boolean).length;
+
+                  return (
+                    <div className="space-y-4">
+                      {/* Search & Bulk Select Toolbar */}
+                      <div className="bg-slate-50/90 border border-slate-200/90 rounded-2xl p-3.5 space-y-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-slate-500">
+                          {/* Bulk Actions */}
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const next: Record<number, boolean> = {};
+                                generatedDrafts.forEach((_, idx) => { next[idx] = true; });
+                                setSelectedDraftIndexes(next);
+                              }}
+                              className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white font-extrabold hover:bg-emerald-700 transition cursor-pointer shadow-3xs text-xs font-sans"
+                            >
+                              تحديد الكل ({generatedDrafts.length})
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedDraftIndexes({})}
+                              className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-650 font-extrabold hover:bg-slate-100 transition cursor-pointer text-xs font-sans"
+                            >
+                              إلغاء التحديد
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const next = { ...selectedDraftIndexes };
+                                visibleDrafts.forEach(({ originalIndex }) => {
+                                  next[originalIndex] = true;
+                                });
+                                setSelectedDraftIndexes(next);
+                              }}
+                              className="px-3 py-1.5 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-700 font-extrabold hover:bg-indigo-100 transition cursor-pointer text-xs font-sans"
+                            >
+                              تحديد الصفحة الحالية ({visibleDrafts.length})
+                            </button>
+                          </div>
+
+                          {/* Stat Badge */}
+                          <div className="flex items-center gap-2">
+                            <span className="px-3 py-1 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-700 font-sans shadow-3xs">
+                              المحدد للحفظ: <span className="font-black text-emerald-600 font-sans text-sm">{selectedCount}</span> من <span className="font-black text-slate-800 font-sans">{generatedDrafts.length}</span> سؤال
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Search Input */}
+                        <div className="relative">
+                          <input
+                            type="text"
+                            placeholder="🔍 بحث سريع في نص السؤال أو اسم الدرس أو الوحدة..."
+                            value={reviewSearchQuery}
+                            onChange={(e) => {
+                              setReviewSearchQuery(e.target.value);
+                              setReviewCurrentPage(1);
+                            }}
+                            className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-xs font-sans placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition"
+                          />
+                          {reviewSearchQuery && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setReviewSearchQuery('');
+                                setReviewCurrentPage(1);
+                              }}
+                              className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 hover:text-slate-600 cursor-pointer"
+                            >
+                              مسح
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Draft Question Cards */}
+                      <div className="space-y-3.5 max-h-[52vh] overflow-y-auto pr-1">
+                        {visibleDrafts.length === 0 ? (
+                          <div className="p-8 text-center bg-slate-50 rounded-2xl text-slate-400 text-xs font-bold">
+                            لا توجد أسئلة تطابق بحثك الحسابي.
+                          </div>
+                        ) : (
+                          visibleDrafts.map(({ draft, originalIndex }) => {
+                            const isSelected = !!selectedDraftIndexes[originalIndex];
+                            return (
+                              <div
+                                key={originalIndex}
+                                onClick={() => {
+                                  setSelectedDraftIndexes(prev => ({
+                                    ...prev,
+                                    [originalIndex]: !prev[originalIndex]
+                                  }));
+                                }}
+                                className={`p-5 rounded-2xl border-2 transition-all cursor-pointer flex items-start gap-4 ${
+                                  isSelected
+                                    ? 'bg-emerald-50/20 border-emerald-500 shadow-xs'
+                                    : 'bg-white border-slate-200 hover:border-slate-300'
+                                }`}
+                              >
+                                {/* Checkbox */}
+                                <div className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 mt-0.5 transition ${
+                                  isSelected ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-slate-350 text-transparent bg-white'
+                                }`}>
+                                  <Check className="w-3.5 h-3.5" />
+                                </div>
+
+                                {/* Details */}
+                                <div className="flex-1 space-y-3 w-full">
+                                  {/* Metadata labels row */}
+                                  <div className="flex flex-wrap gap-1.5 items-center text-right">
+                                    <span className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-600 text-[10px] font-sans font-bold">
+                                      #{originalIndex + 1}
+                                    </span>
+                                    {(pdfStageOverride !== 'auto' ? pdfStageOverride : draft.stage) && (
+                                      <span className="px-2 py-0.5 rounded-md bg-indigo-50 border border-indigo-100 text-indigo-700 text-[9px] font-bold">
+                                        {pdfStageOverride !== 'auto' ? pdfStageOverride : draft.stage}
+                                      </span>
+                                    )}
+                                    {(pdfGradeOverride !== 'auto' ? pdfGradeOverride : draft.grade) && (
+                                      <span className="px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-100 text-emerald-700 text-[9px] font-bold">
+                                        {pdfGradeOverride !== 'auto' ? pdfGradeOverride : draft.grade}
+                                      </span>
+                                    )}
+                                    {(pdfSubjectOverride !== 'auto' ? pdfSubjectOverride : draft.subject) && (
+                                      <span className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-600 text-[9px] font-bold">
+                                        {pdfSubjectOverride !== 'auto' ? pdfSubjectOverride : draft.subject}
+                                      </span>
+                                    )}
+                                    {(pdfSemesterOverride !== 'auto' ? pdfSemesterOverride : draft.semester) && (
+                                      <span className="px-2 py-0.5 rounded-md bg-orange-50 border border-orange-100 text-orange-700 text-[9px] font-bold">
+                                        {pdfSemesterOverride !== 'auto' ? pdfSemesterOverride : draft.semester}
+                                      </span>
+                                    )}
+                                    {(draft.unit || (pdfUnitOverride.trim() !== '' ? pdfUnitOverride : '')) && (
+                                      <span className="px-2 py-0.5 rounded-md bg-indigo-50/50 text-indigo-600 text-[9px] font-sans font-semibold">
+                                        {draft.unit || pdfUnitOverride}
+                                      </span>
+                                    )}
+                                    {(draft.lesson || (pdfLessonOverride.trim() !== '' ? pdfLessonOverride : '')) && (
+                                      <span className="px-2 py-0.5 rounded-md bg-teal-50/50 text-teal-600 text-[9px] font-sans font-semibold">
+                                        {draft.lesson || pdfLessonOverride}
+                                      </span>
+                                    )}
+                                    <span className="mr-auto text-[10px] font-bold text-slate-400 font-sans">{draft.points || 1} {(draft.points || 1) === 1 ? 'نقطة' : 'نقاط'}</span>
+                                  </div>
+
+                                  {/* Question TEXT */}
+                                  <p className="text-xs font-bold text-slate-800 leading-relaxed font-sans text-right">{draft.text}</p>
+
+                                  {/* Options */}
+                                  {Array.isArray(draft.options) && (
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full text-right">
+                                      {draft.options
+                                        .map((optionText, oIdx) => ({ optionText, oIdx }))
+                                        .filter(item => {
+                                          if (!item.optionText) return false;
+                                          const t = item.optionText.trim();
+                                          return t !== '' && 
+                                            t !== 'الخيار الثالث' && 
+                                            t !== 'الخيار الرابع' && 
+                                            t !== 'الخيار الثالث...' && 
+                                            t !== 'الخيار الرابع...' &&
+                                            t !== 'option 3' &&
+                                            t !== 'option 4' &&
+                                            t !== 'option3' &&
+                                            t !== 'option4';
+                                        })
+                                        .map(({ optionText, oIdx }) => {
+                                          const isCorrect = draft.type === 'true_false'
+                                            ? (oIdx === 0 && (draft.correctAnswer === 'true' || draft.correctAnswer === '0')) || (oIdx === 1 && (draft.correctAnswer === 'false' || draft.correctAnswer === '1'))
+                                            : String(oIdx) === String(draft.correctAnswer);
+                                          return (
+                                            <div
+                                              key={oIdx}
+                                              className={`p-2.5 rounded-xl text-xs font-sans border-r-4 flex items-center justify-between ${
+                                                isCorrect
+                                                  ? 'bg-emerald-50/60 border-emerald-500 text-emerald-800 font-bold'
+                                                  : 'bg-slate-50 border-transparent text-slate-500'
+                                              }`}
+                                            >
+                                              <span className="truncate">{optionText}</span>
+                                              {isCorrect && <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />}
+                                            </div>
+                                          );
+                                        })}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+
+                      {/* Pagination Controls for Large Question Sets */}
+                      {totalPages > 1 && (
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-150 text-xs font-sans">
+                          <div className="text-slate-500 font-bold">
+                            عرض الصفحة <span className="font-black text-slate-800">{currentPage}</span> من <span className="font-black text-slate-800">{totalPages}</span> ({filteredDrafts.length} سؤال إجمالي)
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              disabled={currentPage <= 1}
+                              onClick={() => setReviewCurrentPage(p => Math.max(1, p - 1))}
+                              className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed font-bold text-slate-700 cursor-pointer transition"
+                            >
+                              السابق
+                            </button>
+                            
+                            {/* Page buttons */}
+                            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                              let pageNum = i + 1;
+                              if (totalPages > 5) {
+                                pageNum = Math.max(1, Math.min(totalPages - 4, currentPage - 2)) + i;
+                              }
+                              return (
+                                <button
+                                  key={pageNum}
+                                  type="button"
+                                  onClick={() => setReviewCurrentPage(pageNum)}
+                                  className={`w-8 h-8 rounded-lg font-black text-xs transition cursor-pointer ${
+                                    currentPage === pageNum
+                                      ? 'bg-emerald-600 text-white shadow-3xs'
+                                      : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                                  }`}
+                                >
+                                  {pageNum}
+                                </button>
+                              );
+                            })}
+
+                            <button
+                              type="button"
+                              disabled={currentPage >= totalPages}
+                              onClick={() => setReviewCurrentPage(p => Math.min(totalPages, p + 1))}
+                              className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed font-bold text-slate-700 cursor-pointer transition"
+                            >
+                              التالي
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Error Banner */}
                 {pdfError && (

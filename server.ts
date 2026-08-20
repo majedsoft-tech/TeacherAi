@@ -171,7 +171,7 @@ function safeParseBookStructure(rawText: string): any {
   throw new Error("فشل تحليل فهرس ووحدات الكتاب من الملف المرفق.");
 }
 
-// Robust Gemini API Caller with 429 Rate-Limit Quota Backoff & Model Fallbacks
+// Robust Gemini API Caller with 429 Rate-Limit Quota Backoff & Multi-Tier Model Fallbacks
 async function generateGeminiContentWithRetry(
   ai: GoogleGenAI,
   params: {
@@ -179,16 +179,18 @@ async function generateGeminiContentWithRetry(
     contents: any;
     config?: any;
   },
-  maxRetries = 4
+  maxRetries = 6
 ): Promise<any> {
-  const requestedModel = params.model || "gemini-flash-latest";
+  const requestedModel = params.model || "gemini-3.7-flash";
   
-  // Diverse candidate models: Flash latest is fast with high quota limits, with fallback to 3.1 Flash Lite and 3.7 Flash
+  // Multi-tier pool of high-capacity models with distinct fallback order
   const candidateModels = [
-    requestedModel,
-    requestedModel === "gemini-flash-latest" ? "gemini-3.1-flash-lite" : "gemini-flash-latest",
+    "gemini-3.7-flash",
     "gemini-3.1-flash-lite",
-    "gemini-flash-latest"
+    "gemini-3.7-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-3.7-flash",
+    "gemini-3.1-flash-lite"
   ];
 
   let lastError: any = null;
@@ -211,38 +213,41 @@ async function generateGeminiContentWithRetry(
                            errMsg.includes("rate-limits");
       const isUnavailableOr503 = errMsg.includes("503") || 
                                  errMsg.includes("UNAVAILABLE") || 
-                                 errMsg.includes("high demand");
+                                 errMsg.includes("high demand") ||
+                                 errMsg.includes("overloaded");
 
-      console.warn(`[Gemini API Attempt ${attempt + 1}/${maxRetries}] Model "${currentModel}" encounter: ${errMsg.slice(0, 180)}`);
+      console.warn(`[Gemini API Attempt ${attempt + 1}/${maxRetries}] Model "${currentModel}" encountered ${isQuotaOr429 ? '429 Quota/Rate-limit' : isUnavailableOr503 ? '503 Unavailable' : 'Error'}: ${errMsg.slice(0, 180)}`);
 
       if (attempt < maxRetries - 1) {
-        let waitTimeMs = 2500 * (attempt + 1);
+        let waitTimeMs = 4000 * (attempt + 1);
 
-        // Extract retryDelay if provided by the Gemini API response
+        // Extract explicit retryDelay if provided in the Gemini API error body
         const retryMatch = errMsg.match(/retry in\s+([\d\.]+)\s*s/i) || 
                            errMsg.match(/retryDelay["']?:\s*["']?(\d+)/i);
         if (retryMatch && retryMatch[1]) {
           const parsedSec = parseFloat(retryMatch[1]);
           if (!isNaN(parsedSec) && parsedSec > 0) {
-            waitTimeMs = Math.min(Math.ceil(parsedSec * 1000) + 1000, 15000);
+            waitTimeMs = Math.min(Math.ceil(parsedSec * 1000) + 1500, 20000);
           }
-        } else if (isQuotaOr429) {
-          // Switch model on next attempt with backoff
-          waitTimeMs = 3000 * (attempt + 1);
         } else if (isUnavailableOr503) {
-          waitTimeMs = 3500 * (attempt + 1);
+          // Fast failover for temporary model high-demand spikes
+          waitTimeMs = 2000 + (attempt * 1000);
+        } else if (isQuotaOr429) {
+          // Exponential backoff to allow RPM/TPM quota windows to refresh
+          waitTimeMs = Math.min(5000 * (attempt + 1), 22000);
         }
 
-        console.log(`[Gemini Backoff] Waiting ${(waitTimeMs / 1000).toFixed(1)}s before retry with model "${candidateModels[Math.min(attempt + 1, candidateModels.length - 1)]}"...`);
+        const nextModel = candidateModels[Math.min(attempt + 1, candidateModels.length - 1)];
+        console.log(`[Gemini Fallback] Pausing ${(waitTimeMs / 1000).toFixed(1)}s before attempt ${attempt + 2} using model "${nextModel}"...`);
         await new Promise((resolve) => setTimeout(resolve, waitTimeMs));
       }
     }
   }
 
-  // If last error is 429 quota, provide user-friendly Arabic explanation
+  // If last error is 429 quota or 503, provide user-friendly Arabic explanation
   const finalErrMsg = String(lastError?.message || lastError);
   if (finalErrMsg.includes("429") || finalErrMsg.includes("quota") || finalErrMsg.includes("RESOURCE_EXHAUSTED")) {
-    throw new Error("تم بلوغ الحد الأقصى المؤقت لطلبات الذكاء الاصطناعي في الدقيقة. يرجى الانتظار بضع ثوانٍ ثم إعادة المحاولة.");
+    throw new Error("تم بلوغ الحد الأقصى المؤقت لطلبات الذكاء الاصطناعي في الدقيقة. يرجى الانتظار بضع لحظات ثم إعادة المحاولة.");
   }
   if (finalErrMsg.includes("503") || finalErrMsg.includes("UNAVAILABLE")) {
     throw new Error("خوادم الذكاء الاصطناعي تشهد ضغطاً مؤقتاً. يرجى إعادة المحاولة بعد لحظات.");
@@ -350,7 +355,7 @@ async function startServer() {
       }
 
       const response = await generateGeminiContentWithRetry(ai, {
-        model: "gemini-flash-latest",
+        model: "gemini-3.7-flash",
         contents: {
           parts: contentsParts
         },
@@ -552,58 +557,54 @@ async function startServer() {
         }
       };
 
-      // Helper function to generate questions for a batch of target lessons in a single call (drastically saves input token quota)
+      // Helper function to generate questions for a batch of target lessons in a single call
       const generateForBatch = async (batchTargets: GenerationTarget[]): Promise<any[]> => {
         const formattedTargetsTable = batchTargets
-          .map((t, idx) => `  ${idx + 1}. [الوحدة: "${t.unit}"] -> [الدرس: "${t.lesson}"] => المطلوب بالضبط: (${parsedMcqCount}) أسئلة اختيار من متعدد و (${parsedTfCount}) أسئلة صواب وخطأ.`)
+          .map((t, idx) => `  ${idx + 1}. [الوحدة: "${t.unit}"] -> [الدرس: "${t.lesson}"] => المطلوب: (${parsedMcqCount}) أسئلة اختيار من متعدد و (${parsedTfCount}) أسئلة صواب وخطأ.`)
           .join("\n");
 
         const targetSystemInstruction = `
-أنت خبير تربوي ومصمم اختبارات ذكي للمناهج التعليمية المعتمدة.
-مهمتك: قراءة وفهم المستند المرفق بدقة، واستخراج وصياغة أسئلة امتحانية رفيعة المستوى تغطي الدروس والوحدات المحددة في الجدول أدناه بدون استثناء:
+أنت خبير تربوي ومصمم اختبارات ومناهج تعليمية معتمدة.
+مهمتك: صياغة واستخراج أسئلة تعليمية رفيعة المستوى ودقيقة علمياً من المستند المرفق وفق الدروس والوحدات المحددة في الجدول أدناه:
 
-🎯 جدول الوحدات والدروس المستهدفة المطلوب تغطيتها:
+🎯 جدول الدروس المستهدفة:
 ${formattedTargetsTable}
 
-قواعد التوليد الإلزامية الصارمة:
-1. يجب تغطية كل درس من الدروس الـ (${batchTargets.length}) المذكورة في الجدول أعلاه بالتفصيل.
-2. لكل درس في الجدول: قم بتوليد بالضبط (${parsedMcqCount}) أسئلة من نوع "multiple_choice" (بـ 4 خيارات) و (${parsedTfCount}) أسئلة من نوع "true_false" (بخيارات ["صحيح", "خطأ"]).
-3. إجمالي الأسئلة في المصفوفة يجب أن يكون بالضبط ${batchTargets.length * (parsedMcqCount + parsedTfCount)} سؤال (${batchTargets.length * parsedMcqCount} اختيار من متعدد + ${batchTargets.length * parsedTfCount} صواب وخطأ).
-4. قاعدة موضع الإجابة الصحيحة الإلزامية (هام جداً):
-   - في جميع أسئلة الاختيار من متعدد ("multiple_choice"): يجب أن تكون الإجابة الصحيحة دائماً هي الخيار الأول (index: 0 في مصفوفة options)، وتكون الخيارات الثلاثة المتبقية (1 و 2 و 3) هي الإجابات الخاطئة (المشتتات). وحقل "correctAnswer" يكون دائماً "0".
-   - في جميع أسئلة الصواب والخطأ ("true_false"): يجب أن تصاغ العبارات لتكون صحيحة دائماً وتكون الإجابة الصحيحة هي "صحيح" (الخيار الأول). ومصفوفة options تكون دائماً ["صحيح", "خطأ"]، وحقل "correctAnswer" يكون دائماً "true" (أو "0").
-5. في كل سؤال:
-   - حقل "unit": ضع اسم الوحدة المطابق بدقة كما ورد في الجدول.
-   - حقل "lesson": ضع اسم الدرس المطابق بدقة كما ورد في الجدول.
-   - حقل "type": "multiple_choice" أو "true_false".
-   - حقل "options": 4 خيارات لـ multiple_choice (الخيار الأول هو الصحيح دائماً) أو ["صحيح", "خطأ"] لـ true_false.
-   - حقل "correctAnswer": "0" للخيارات، أو "true" للصواب والخطأ.
-   - حقل "points": 1.
-${stageOverride && stageOverride !== "auto" ? `   - حقل "stage": "${stageOverride}".` : ""}
-${gradeOverride && gradeOverride !== "auto" ? `   - حقل "grade": "${gradeOverride}".` : ""}
-${semesterOverride && semesterOverride !== "auto" ? `   - حقل "semester": "${semesterOverride}".` : ""}
-${subjectOverride && subjectOverride !== "auto" ? `   - حقل "subject": "${subjectOverride}".` : ""}
+قواعد التوليد الإلزامية:
+1. لكل درس في الجدول: قم بتوليد بالضبط (${parsedMcqCount}) اختيار من متعدد (4 خيارات) و (${parsedTfCount}) صواب وخطأ (خيارات ["صحيح", "خطأ"]).
+2. قاعدة الإجابة الصحيحة:
+   - في multiple_choice: الإجابة الصحيحة تكون دائماً الخيار الأول (index 0)، والمشتتات الثلاثة (1 و 2 و 3) خاطئة، وحقل correctAnswer="0".
+   - في true_false: الخيارات دائماً ["صحيح", "خطأ"]. **مهم جداً**: نوّع ووازن بين العبارات الصحيحة والخاطئة في كل درس، فلا تجعل جميع أسئلة الصواب والخطأ صحيحة، بل وزّع بين العبارات الصحيحة علمياً (وحقل correctAnswer="true") والعبارات الخاطئة علمياً (وحقل correctAnswer="false") بشكل متنوع ومتوازن.
+3. في كل كائن سؤال:
+   - "unit": اسم الوحدة كما في الجدول.
+   - "lesson": اسم الدرس كما في الجدول.
+   - "type": "multiple_choice" أو "true_false".
+   - "points": 1.
+${stageOverride && stageOverride !== "auto" ? `   - "stage": "${stageOverride}".` : ""}
+${gradeOverride && gradeOverride !== "auto" ? `   - "grade": "${gradeOverride}".` : ""}
+${semesterOverride && semesterOverride !== "auto" ? `   - "semester": "${semesterOverride}".` : ""}
+${subjectOverride && subjectOverride !== "auto" ? `   - "subject": "${subjectOverride}".` : ""}
 `;
 
         let targetPrompt = "";
         let targetParts: any[] = [];
         if (isOfficeDoc) {
-          targetPrompt = `هنا محتوى المستند المرفق:\n\n--- بداية المحتوى ---\n${extractedText.slice(0, 80000)}\n--- نهاية المحتوى ---\n\nالرجاء صياغة الأسئلة المطلوبة في الجدول (${parsedMcqCount} اختيار من متعدد و ${parsedTfCount} صواب وخطأ لكل درس محدد) في مصفوفة JSON واحدة متكاملة. ${customPrompt || ""}`;
+          targetPrompt = `هنا محتوى المستند:\n\n--- بداية المحتوى ---\n${extractedText.slice(0, 100000)}\n--- نهاية المحتوى ---\n\nقم بصياغة الأسئلة المطلوبة في الجدول (${parsedMcqCount} اختيار من متعدد و ${parsedTfCount} صواب وخطأ لكل درس محدد) في مصفوفة JSON. ${customPrompt || ""}`;
           targetParts = [{ text: targetPrompt }];
         } else {
-          targetPrompt = `من الكتاب/الملف المرفق، قم بصياغة الأسئلة المطلوبة لكل درس ووحدة في الجدول (${parsedMcqCount} اختيار من متعدد و ${parsedTfCount} صواب وخطأ لكل درس محدد) بدقة وتفصيل في مصفوفة JSON متكاملة. ${customPrompt || ""}`;
+          targetPrompt = `من الكتاب/الملف المرفق، قم بصياغة الأسئلة المطلوبة لكل درس ووحدة في الجدول (${parsedMcqCount} اختيار من متعدد و ${parsedTfCount} صواب وخطأ لكل درس محدد) بدقة في مصفوفة JSON. ${customPrompt || ""}`;
           targetParts = [filePart, { text: targetPrompt }];
         }
 
         const response = await generateGeminiContentWithRetry(ai, {
-          model: "gemini-flash-latest",
+          model: "gemini-3.7-flash",
           contents: {
             parts: targetParts
           },
           config: {
             systemInstruction: targetSystemInstruction,
             responseMimeType: "application/json",
-            maxOutputTokens: 8192,
+            maxOutputTokens: 16384,
             temperature: 0.2,
             thinkingConfig: {
               thinkingBudget: 0
@@ -617,16 +618,14 @@ ${subjectOverride && subjectOverride !== "auto" ? `   - حقل "subject": "${sub
         return safeParseQuestionsArray(questionsText);
       };
 
-      // Group targets into smart batches:
-      // If 4 or fewer target lessons, send in 1 single call to avoid re-uploading large PDF payloads multiple times.
-      // If more than 4 targets, group into balanced 2-3 lesson batches.
+      // Smart Batch Grouping: keep batch size small (1-3 lessons) to guarantee sub-8s response times
       const totalPerLesson = parsedMcqCount + parsedTfCount;
-      let BATCH_SIZE = 3;
-      if (targets.length <= 4) {
-        BATCH_SIZE = targets.length;
+      let BATCH_SIZE = 2;
+      if (targets.length === 1) {
+        BATCH_SIZE = 1;
       } else if (totalPerLesson > 12) {
-        BATCH_SIZE = 2;
-      } else {
+        BATCH_SIZE = 1;
+      } else if (totalPerLesson <= 5) {
         BATCH_SIZE = 3;
       }
 
@@ -653,9 +652,9 @@ ${subjectOverride && subjectOverride !== "auto" ? `   - حقل "subject": "${sub
           console.error(`[Generation] Batch ${bIdx + 1} failed:`, batchErr?.message || batchErr);
         }
 
-        // Inter-batch pause to respect RPM rate limits
+        // Inter-batch pause to respect RPM quota windows
         if (bIdx < batches.length - 1) {
-          await new Promise((resolve) => setTimeout(resolve, 1000));
+          await new Promise((resolve) => setTimeout(resolve, 1200));
         }
       }
 
@@ -675,9 +674,14 @@ ${subjectOverride && subjectOverride !== "auto" ? `   - حقل "subject": "${sub
         let finalCorrectAnswer = '0';
 
         if (type === 'true_false') {
-          // True/False: Always ['صحيح', 'خطأ'] with 'true' (first option) as correct
+          // True/False: Always ['صحيح', 'خطأ'] with varied true or false correct answers
           finalOptions = ['صحيح', 'خطأ'];
-          finalCorrectAnswer = 'true';
+          const rawCorrect = String(q.correctAnswer ?? '').toLowerCase().trim();
+          if (rawCorrect === 'false' || rawCorrect === '1' || rawCorrect === 'خطأ' || rawCorrect === 'خطا') {
+            finalCorrectAnswer = 'false';
+          } else {
+            finalCorrectAnswer = 'true';
+          }
         } else {
           // Multiple Choice: Always ensure 4 options with the correct answer at index 0
           let rawOpts = Array.isArray(q.options) && q.options.length > 0 
@@ -778,7 +782,7 @@ ${optionsStr ? `- الخيارات المتاحة:\n${optionsStr}` : ""}
       let hintText = "";
       try {
         const response = await generateGeminiContentWithRetry(ai, {
-          model: "gemini-flash-latest",
+          model: "gemini-3.7-flash",
           contents: prompt,
           config: {
             systemInstruction: "أنت موجه تعليمي افتراضي ذكي يشجع الطلاب ويساعدهم بأسلوب تربوي مبسط ومحفز دون كشف الإجابة المباشرة.",

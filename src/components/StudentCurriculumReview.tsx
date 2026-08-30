@@ -1531,8 +1531,7 @@ export default function StudentCurriculumReview({
                         <Sparkles className="w-4 h-4" />
                       </div>
                       <div className="text-right">
-                        <span className="block font-black text-xs md:text-sm text-slate-900">مساعدة وإرشاد تربوي للدرس</span>
-                        <span className="block text-[11px] text-indigo-600 font-bold">مدعوم بالذكاء الاصطناعي 🤖</span>
+                        <span className="block font-black text-xs md:text-sm text-slate-900">مساعد بالذكاء الاصطناعي</span>
                       </div>
                     </div>
                     {showHelp ? <ChevronUp className="w-5 h-5 text-indigo-600" /> : <ChevronDown className="w-5 h-5 text-slate-500" />}

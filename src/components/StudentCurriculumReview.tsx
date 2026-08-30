@@ -721,16 +721,18 @@ export default function StudentCurriculumReview({
       if (data.success && data.hint) {
         setAiHints((prev) => ({ ...prev, [qKey]: data.hint }));
       } else {
+        const lessonInfo = activeLesson?.name ? ` في درس (${activeLesson.name})` : (selectedSubject ? ` في مادة (${selectedSubject})` : "");
         setAiHints((prev) => ({
           ...prev,
-          [qKey]: "💡 فكرة السؤال: تذكر المفهوم الأساسي في هذا الدرس.\n🔍 تلميح ذكي: حاول الربط بين المعطيات والخيارات المتاحة لاختيار الإجابة الصحيحة.\n🌟 تشجيع: ركز وستصل للإجابة الصحيحة بكل سهولة!",
+          [qKey]: `💡 فكرة السؤال: يدور هذا السؤال حول المفاهيم الأساسية${lessonInfo}.\n🔍 تلميح ذكي: اربط بين معطيات السؤال والخيارات المتاحة لاختيار الإجابة الصحيحة.\n🌟 تشجيع: ركز وستصل للإجابة الصحيحة بكل سهولة!`,
         }));
       }
     } catch (err) {
       console.error("Error generating AI hint:", err);
+      const lessonInfo = activeLesson?.name ? ` في درس (${activeLesson.name})` : (selectedSubject ? ` في مادة (${selectedSubject})` : "");
       setAiHints((prev) => ({
         ...prev,
-        [qKey]: "💡 فكرة السؤال: ركز على الكلمات المفتاحية في السؤال واستحضر القواعد الأساسية.\n🔍 تلميح ذكي: استبعد الخيارات غير المنطقية للوصول للحل الصحيح.\n🌟 تشجيع: ثق بقدراتك وأنت قادر على الحل الصحيح!",
+        [qKey]: `💡 فكرة السؤال: ركز على الكلمات المفتاحية${lessonInfo} واستحضر القواعد الأساسية.\n🔍 تلميح ذكي: استبعد الخيارات غير المنطقية للوصول للحل الصحيح.\n🌟 تشجيع: ثق بقدراتك وأنت قادر على الحل الصحيح!`,
       }));
     } finally {
       pendingAiHintKeysRef.current.delete(qKey);

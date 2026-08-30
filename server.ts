@@ -15,7 +15,11 @@ dotenv.config();
 let aiClient: GoogleGenAI | null = null;
 function getGeminiClient(): GoogleGenAI {
   if (!aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.GEMINI_API_KEY || 
+                   process.env.API_KEY || 
+                   process.env.GOOGLE_API_KEY || 
+                   process.env.GOOGLE_GENAI_API_KEY || 
+                   process.env.VITE_GEMINI_API_KEY;
     if (!apiKey) {
       throw new Error("GEMINI_API_KEY is not defined in environment variables. Please check Settings > Secrets.");
     }
@@ -181,16 +185,14 @@ async function generateGeminiContentWithRetry(
   },
   maxRetries = 6
 ): Promise<any> {
-  const requestedModel = params.model || "gemini-3.7-flash";
+  const requestedModel = params.model || "gemini-2.5-flash";
   
   // Multi-tier pool of high-capacity models with distinct fallback order
   const candidateModels = [
     requestedModel,
-    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash",
     "gemini-flash-latest",
-    "gemini-3.7-flash",
-    "gemini-3.1-flash-lite",
-    "gemini-flash-latest"
+    "gemini-3.7-flash"
   ];
 
   let lastError: any = null;
@@ -787,7 +789,7 @@ ${correctAnswer ? `- الإجابة الصحيحة: "${correctAnswer}"` : ""}
       let hintText = "";
       try {
         const response = await generateGeminiContentWithRetry(ai, {
-          model: "gemini-3.7-flash",
+          model: "gemini-2.5-flash",
           contents: prompt,
           config: {
             systemInstruction: "أنت موجه تعليمي خبير يقدم إرشادات وتلميحات تربوية ذكية ومحفزة لمساعدة الطلاب على الفهم والحل الذاتي.",
@@ -799,20 +801,24 @@ ${correctAnswer ? `- الإجابة الصحيحة: "${correctAnswer}"` : ""}
         if (response?.text) {
           hintText = response.text.trim();
         }
-      } catch (hErr) {
-        console.warn("Hint generation fallback to default message:", hErr);
+      } catch (hErr: any) {
+        console.warn("Hint generation error with Gemini:", hErr?.message || hErr);
       }
 
       if (!hintText) {
-        hintText = `💡 **فكرة السؤال:** ركز على الكلمات المفتاحية في السؤال واستحضر القواعد الأساسية لهذا الدرس.\n🔍 **تلميح ذكي:** استبعد الخيارات غير المنطقية وقارن بين الخيارات المتبقية للوصول للإجابة الصحيحة.\n🌟 **تشجيع:** ثق بقدراتك وأنت قادر على الحل الصحيح!`;
+        const lessonInfo = lesson ? ` في درس (${lesson})` : (subject ? ` في مادة (${subject})` : "");
+        hintText = `💡 **فكرة السؤال:** يدور هذا السؤال حول المفاهيم الأساسية${lessonInfo}. ركز على قراءة السؤال بعناية لفهم المطلوب بدقة.\n🔍 **تلميح ذكي:** حلل الكلمات المفتاحية واستبعد الخيارات غير المتوافقة مع منطق السؤال للوصول للإجابة الصحيحة.\n🌟 **تشجيع:** ثق بقدراتك وركز خطوة بخطوة وستصل للحل الصحيح!`;
       }
 
       return res.json({ success: true, hint: hintText });
     } catch (error: any) {
       console.error("Error generating question hint:", error);
+      const reqSubject = req.body?.subject || "";
+      const reqLesson = req.body?.lesson || "";
+      const contextText = reqLesson ? ` في درس (${reqLesson})` : (reqSubject ? ` في مادة (${reqSubject})` : "");
       return res.json({
         success: true,
-        hint: `💡 **فكرة السؤال:** تذكر المفهوم الأساسي في هذا الدرس.\n🔍 **تلميح ذكي:** حاول الربط بين المعطيات والخيارات المتاحة لاختيار الإجابة الصحيحة.\n🌟 **تشجيع:** ركز وستصل للإجابة الصحيحة بكل سهولة!`
+        hint: `💡 **فكرة السؤال:** تذكر القواعد والمفاهيم الأساسية${contextText}.\n🔍 **تلميح ذكي:** اربط بين معطيات السؤال والخيارات المتاحة لاختيار الإجابة الأكثر دقة.\n🌟 **تشجيع:** استعن بالله وركز وستجيب بشكل صحيح بإذن الله!`
       });
     }
   });

@@ -810,24 +810,41 @@ export default function StudentCurriculumReview({
     }
   };
 
-  // Sync from cloud once upon activeStudent changes
+  // Real-time synchronization from Firestore when activeStudent changes
   useEffect(() => {
     if (activeStudent?.id) {
+      // Re-read latest localStorage for this specific student
+      const key = `curriculum_stats_${activeStudent.id}`;
+      const saved = localStorage.getItem(key);
+      if (saved) {
+        try {
+          setLessonStats(JSON.parse(saved));
+        } catch {
+          setLessonStats({});
+        }
+      } else {
+        setLessonStats({});
+      }
+
       const ref = doc(db, "student_curriculum_scores", activeStudent.id);
-      // Setup a real-time listener so their progress syncs gracefully across tabs or devices
+      // Setup a real-time listener so changes and resets sync immediately
       const unsub = onSnapshot(ref, (snapshot) => {
         if (snapshot.exists()) {
           const cloudData = snapshot.data();
-          if (cloudData && cloudData.stats) {
-            setLessonStats((prev) => {
-              const merged = { ...prev, ...cloudData.stats };
-              localStorage.setItem(`curriculum_stats_${activeStudent.id}`, JSON.stringify(merged));
-              return merged;
-            });
-          }
+          const cloudStats = cloudData?.stats || {};
+          setLessonStats(cloudStats);
+          localStorage.setItem(`curriculum_stats_${activeStudent.id}`, JSON.stringify(cloudStats));
+        } else {
+          // Document was reset or deleted
+          setLessonStats({});
+          localStorage.removeItem(`curriculum_stats_${activeStudent.id}`);
         }
+      }, (err) => {
+        console.warn("Could not sync curriculum scores from Firestore:", err);
       });
       return unsub;
+    } else {
+      setLessonStats({});
     }
   }, [activeStudent?.id]);
 

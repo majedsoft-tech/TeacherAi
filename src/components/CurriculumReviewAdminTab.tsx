@@ -790,15 +790,36 @@ export default function CurriculumReviewAdminTab({
         });
 
         const ref = doc(db, "student_curriculum_scores", student.id);
-        await setDoc(ref, {
+        const currentStats = studentScores[student.id]?.stats || {};
+        let newStats: Record<string, any> = {};
+        
+        if (selectedSubject) {
+          // Remove only the stats for the currently selected subject
+          Object.keys(currentStats).forEach((k) => {
+            if (!k.startsWith(`${selectedSubject}_`)) {
+              newStats[k] = currentStats[k];
+            }
+          });
+        }
+
+        const updatedDoc = {
           studentId: student.id,
           studentName: student.name,
-          stats: {},
+          stats: newStats,
           lastUpdated: new Date().toISOString()
-        }, { merge: true });
+        };
+
+        // Overwrite doc cleanly in Firestore so removed keys are completely purged
+        await setDoc(ref, updatedDoc);
+
+        // Instantly update local state cache for responsive feedback
+        setStudentScores((prev) => ({
+          ...prev,
+          [student.id]: updatedDoc
+        }));
 
         // A small sleep to let the user visually perceive the progress loading screen
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 60));
         currentIdx++;
       }
 

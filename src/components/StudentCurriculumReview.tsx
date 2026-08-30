@@ -691,10 +691,13 @@ export default function StudentCurriculumReview({
   // Robust check for True/False or 2-option binary questions
   const isTrueFalseQuestion = (q: any) => isTFHelper(q);
 
-  const handleFetchAiHint = async () => {
+  const handleFetchAiHint = async (force: boolean = false) => {
     if (!currentQuestion) return;
     const qKey = currentQuestion.id || currentQuestion.text;
-    if (aiHints[qKey] || pendingAiHintKeysRef.current.has(qKey)) {
+    if (!force && aiHints[qKey]) {
+      return;
+    }
+    if (pendingAiHintKeysRef.current.has(qKey)) {
       return;
     }
 
@@ -1593,11 +1596,12 @@ export default function StudentCurriculumReview({
                                     <div className="flex items-center gap-2">
                                       <button
                                         type="button"
-                                        onClick={handleFetchAiHint}
+                                        onClick={() => handleFetchAiHint(true)}
+                                        disabled={isGeneratingAiHint}
                                         title="تحديث التلميح"
-                                        className="p-1 rounded-lg text-indigo-500 hover:text-indigo-700 hover:bg-indigo-100/60 transition-colors text-xs flex items-center gap-1 cursor-pointer"
+                                        className="p-1 rounded-lg text-indigo-500 hover:text-indigo-700 hover:bg-indigo-100/60 transition-colors text-xs flex items-center gap-1 cursor-pointer disabled:opacity-50"
                                       >
-                                        <RotateCcw className="w-3.5 h-3.5" />
+                                        <RotateCcw className={`w-3.5 h-3.5 ${isGeneratingAiHint ? "animate-spin" : ""}`} />
                                         <span className="hidden sm:inline text-[11px] font-bold">تحديث</span>
                                       </button>
                                       <span className="bg-indigo-100 text-indigo-700 text-[10px] font-black px-2 py-0.5 rounded-full border border-indigo-200">
@@ -1615,7 +1619,7 @@ export default function StudentCurriculumReview({
                             return (
                               <button
                                 type="button"
-                                onClick={handleFetchAiHint}
+                                onClick={() => handleFetchAiHint()}
                                 className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs md:text-sm rounded-xl transition-all shadow-xs flex items-center justify-center gap-2 cursor-pointer"
                               >
                                 <Sparkles className="w-4 h-4 text-yellow-300" />

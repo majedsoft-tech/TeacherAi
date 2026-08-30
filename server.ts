@@ -185,12 +185,12 @@ async function generateGeminiContentWithRetry(
   
   // Multi-tier pool of high-capacity models with distinct fallback order
   const candidateModels = [
+    requestedModel,
+    "gemini-3.1-flash-lite",
+    "gemini-flash-latest",
     "gemini-3.7-flash",
     "gemini-3.1-flash-lite",
-    "gemini-3.7-flash",
-    "gemini-3.1-flash-lite",
-    "gemini-3.7-flash",
-    "gemini-3.1-flash-lite"
+    "gemini-flash-latest"
   ];
 
   let lastError: any = null;
@@ -219,7 +219,7 @@ async function generateGeminiContentWithRetry(
       console.warn(`[Gemini API Attempt ${attempt + 1}/${maxRetries}] Model "${currentModel}" encountered ${isQuotaOr429 ? '429 Quota/Rate-limit' : isUnavailableOr503 ? '503 Unavailable' : 'Error'}: ${errMsg.slice(0, 180)}`);
 
       if (attempt < maxRetries - 1) {
-        let waitTimeMs = 4000 * (attempt + 1);
+        let waitTimeMs = 3000 * (attempt + 1);
 
         // Extract explicit retryDelay if provided in the Gemini API error body
         const retryMatch = errMsg.match(/retry in\s+([\d\.]+)\s*s/i) || 
@@ -227,18 +227,18 @@ async function generateGeminiContentWithRetry(
         if (retryMatch && retryMatch[1]) {
           const parsedSec = parseFloat(retryMatch[1]);
           if (!isNaN(parsedSec) && parsedSec > 0) {
-            waitTimeMs = Math.min(Math.ceil(parsedSec * 1000) + 1500, 20000);
+            waitTimeMs = Math.min(Math.ceil(parsedSec * 1000) + 1000, 15000);
           }
         } else if (isUnavailableOr503) {
-          // Fast failover for temporary model high-demand spikes
-          waitTimeMs = 2000 + (attempt * 1000);
+          // Instant failover to alternate model cluster for temporary model high-demand spikes
+          waitTimeMs = 250;
         } else if (isQuotaOr429) {
           // Exponential backoff to allow RPM/TPM quota windows to refresh
-          waitTimeMs = Math.min(5000 * (attempt + 1), 22000);
+          waitTimeMs = Math.min(4000 * (attempt + 1), 18000);
         }
 
         const nextModel = candidateModels[Math.min(attempt + 1, candidateModels.length - 1)];
-        console.log(`[Gemini Fallback] Pausing ${(waitTimeMs / 1000).toFixed(1)}s before attempt ${attempt + 2} using model "${nextModel}"...`);
+        console.log(`[Gemini Fallback] Switching to model "${nextModel}" (pause ${(waitTimeMs / 1000).toFixed(1)}s)...`);
         await new Promise((resolve) => setTimeout(resolve, waitTimeMs));
       }
     }

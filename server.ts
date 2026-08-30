@@ -753,10 +753,10 @@ ${subjectOverride && subjectOverride !== "auto" ? `   - "subject": "${subjectOve
     }
   });
 
-  // AI Question Hint Generator
+  // AI Question Hint & Smart Guidance Generator
   app.post("/api/generate-question-hint", async (req, res) => {
     try {
-      const { questionText, options, subject, unit, lesson } = req.body;
+      const { questionText, options, correctAnswer, subject, unit, lesson } = req.body;
 
       if (!questionText) {
         return res.status(400).json({ error: "Missing question text" });
@@ -765,19 +765,19 @@ ${subjectOverride && subjectOverride !== "auto" ? `   - "subject": "${subjectOve
       const ai = getGeminiClient();
 
       const optionsStr = Array.isArray(options) && options.length > 0
-        ? options.map((opt: string, idx: number) => `  ${idx + 1}. ${opt}`).join("\n")
+        ? options.map((opt: string, idx: number) => `(${idx + 1}) ${opt}`).join(" - ")
         : "";
 
-      const prompt = `أنت معلم خبير وموجه تربوي ذكي وداعم للطلاب.
-أمامك السؤال التالي الذي يقوم الطالب بحله الآن:
-- المادة الدراسية: ${subject || "غير محدد"}
-- الوحدة / الدرس: ${unit || ""} / ${lesson || ""}
-- نص السؤال: "${questionText}"
-${optionsStr ? `- الخيارات المتاحة:\n${optionsStr}` : ""}
+      const prompt = `أنت معلم ذكي وموجه تربوي سريع ومباشر.
+المطلوب: قدم للطالب تلميحاً توجيهياً ذكياً ومختصراً جداً (في جملة أو جملتين فقط) يوجه تفكيره نحو الإجابة الصحيحة لهذا السؤال دون كشف الحل بشكل صريح ومباشر:
+- السؤال: "${questionText}"
+${optionsStr ? `- الخيارات: ${optionsStr}` : ""}
+${correctAnswer ? `- الإجابة الصحيحة: "${correctAnswer}"` : ""}
+- المادة / الدرس: ${subject || ""} / ${lesson || ""}
 
-المطلوب:
-اكتب تلميحاً وإرشاداً تربوياً ذكياً ومبسطاً للغاية يساعد الطالب على التفكير الصحيح وفهم فكرة السؤال وتوجيهه للحل، دون إعطائه الإجابة المباشرة أو الحل الجاهز بشكل صريح.
-اجعل الأسلوب مشجعاً ومحفزاً باللغة العربية الفصحى البسيطة في 2 إلى 3 جمل قصيرة وواضحة.`;
+شروط صارمة:
+- اكتب التلميح التوجيهي الذكي مباشرة في جملة أو جملتين سريعتين وواضحتين تبدأ بأيقونة 🔍.
+- بدون مقدمات ولا نقاط إضافية ولا ختام.`;
 
       let hintText = "";
       try {
@@ -785,8 +785,9 @@ ${optionsStr ? `- الخيارات المتاحة:\n${optionsStr}` : ""}
           model: "gemini-3.7-flash",
           contents: prompt,
           config: {
-            systemInstruction: "أنت موجه تعليمي افتراضي ذكي يشجع الطلاب ويساعدهم بأسلوب تربوي مبسط ومحفز دون كشف الإجابة المباشرة.",
-            temperature: 0.7,
+            systemInstruction: "أنت موجه تعليمي يقدم تلميحات ذكية سريعة ومختصرة في جملة أو جملتين فقط لمساعدة الطالب على التفكير الصحيح.",
+            temperature: 0.3,
+            maxOutputTokens: 100,
             thinkingConfig: {
               thinkingBudget: 0
             }
@@ -801,7 +802,7 @@ ${optionsStr ? `- الخيارات المتاحة:\n${optionsStr}` : ""}
       }
 
       if (!hintText) {
-        hintText = "فكر في المفهوم الأساسي للسؤال وتذكر القواعد والتعاريف الأساسية التي درستها في هذا الدرس.";
+        hintText = `🔍 **تلميح توجيهي ذكي:** ركز على الكلمات المفتاحية في السؤال واستحضر القواعد والتعاريف الأساسية التي درستها في هذا الدرس لتصل للاختيار الصحيح.`;
       }
 
       return res.json({ success: true, hint: hintText });
@@ -809,7 +810,7 @@ ${optionsStr ? `- الخيارات المتاحة:\n${optionsStr}` : ""}
       console.error("Error generating question hint:", error);
       return res.json({
         success: true,
-        hint: "تذكر القواعد والتعاريف الأساسية في هذا الدرس وحاول تحليل المعطيات للوصول للحل الصحيح."
+        hint: `🔍 **تلميح توجيهي ذكي:** قارن بين الخيارات المطروحة واستبعد الخيارات غير المتوافقة مع معطيات السؤال.`
       });
     }
   });

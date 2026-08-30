@@ -723,14 +723,14 @@ export default function StudentCurriculumReview({
       } else {
         setAiHints((prev) => ({
           ...prev,
-          [qKey]: "🔍 تلميح ذكي: اربط بين الكلمات المفتاحية في السؤال والخيارات المتاحة لاختيار الإجابة الصحيحة.",
+          [qKey]: "💡 فكرة السؤال: تذكر المفهوم الأساسي في هذا الدرس.\n🔍 تلميح ذكي: حاول الربط بين المعطيات والخيارات المتاحة لاختيار الإجابة الصحيحة.\n🌟 تشجيع: ركز وستصل للإجابة الصحيحة بكل سهولة!",
         }));
       }
     } catch (err) {
       console.error("Error generating AI hint:", err);
       setAiHints((prev) => ({
         ...prev,
-        [qKey]: "🔍 تلميح ذكي: ركز في معطيات السؤال واستبعد الخيارات غير المنطقية للوصول للحل الصحيح.",
+        [qKey]: "💡 فكرة السؤال: ركز على الكلمات المفتاحية في السؤال واستحضر القواعد الأساسية.\n🔍 تلميح ذكي: استبعد الخيارات غير المنطقية للوصول للحل الصحيح.\n🌟 تشجيع: ثق بقدراتك وأنت قادر على الحل الصحيح!",
       }));
     } finally {
       pendingAiHintKeysRef.current.delete(qKey);
@@ -1577,38 +1577,38 @@ export default function StudentCurriculumReview({
 
                             if (isGeneratingAiHint) {
                               return (
-                                <div className="bg-indigo-50/70 border border-indigo-100 rounded-xl p-3.5 flex items-center gap-3 text-indigo-700 font-bold text-xs md:text-sm animate-pulse">
-                                  <Sparkles className="w-4 h-4 animate-spin text-indigo-600 shrink-0" />
-                                  <span>جاري توليد تلميح توجيهي ذكي وسريع... 🤖✨</span>
+                                <div className="bg-indigo-50/70 border border-indigo-100 rounded-xl p-4 flex items-center gap-3 text-indigo-700 font-bold text-xs md:text-sm animate-pulse">
+                                  <Sparkles className="w-5 h-5 animate-spin text-indigo-600 shrink-0" />
+                                  <span>جاري صياغة مساعدة وإرشاد تربوي يناسب هذا السؤال بواسطة الذكاء الاصطناعي... 🤖✨</span>
                                 </div>
                               );
                             }
 
                             if (hint) {
                               return (
-                                <div className="bg-gradient-to-br from-indigo-50/90 via-white to-amber-50/40 border border-indigo-200/90 rounded-xl p-3.5 md:p-4 shadow-xs space-y-2">
-                                  <div className="flex items-center justify-between pb-1.5 border-b border-indigo-100/70">
+                                <div className="bg-gradient-to-br from-indigo-50/90 via-white to-purple-50/70 border border-indigo-200/90 rounded-2xl p-4 md:p-5 shadow-xs space-y-3">
+                                  <div className="flex items-center justify-between pb-2 border-b border-indigo-100/70">
                                     <div className="flex items-center gap-2 text-indigo-900 font-black text-xs md:text-sm">
-                                      <Sparkles className="w-4 h-4 text-indigo-600" />
-                                      <span>تلميح توجيهي ذكي:</span>
+                                      <Sparkles className="w-4 h-4 text-indigo-600 animate-pulse" />
+                                      <span>شرح وإرشاد تربوي بالذكاء الاصطناعي:</span>
                                     </div>
                                     <div className="flex items-center gap-2">
                                       <button
                                         type="button"
                                         onClick={() => handleFetchAiHint(true)}
                                         disabled={isGeneratingAiHint}
-                                        title="تحديث التلميح"
+                                        title="تحديث الإرشاد"
                                         className="p-1 rounded-lg text-indigo-500 hover:text-indigo-700 hover:bg-indigo-100/60 transition-colors text-xs flex items-center gap-1 cursor-pointer disabled:opacity-50"
                                       >
                                         <RotateCcw className={`w-3.5 h-3.5 ${isGeneratingAiHint ? "animate-spin" : ""}`} />
                                         <span className="hidden sm:inline text-[11px] font-bold">تحديث</span>
                                       </button>
-                                      <span className="bg-indigo-100 text-indigo-700 text-[10px] font-black px-2 py-0.5 rounded-full border border-indigo-200">
-                                        تلميح ذكي 💡
+                                      <span className="bg-indigo-100 text-indigo-700 text-[10px] font-black px-2.5 py-0.5 rounded-full border border-indigo-200">
+                                        معلم ذكي ✨
                                       </span>
                                     </div>
                                   </div>
-                                  <div className="text-xs md:text-sm text-slate-800 leading-relaxed font-bold whitespace-pre-line">
+                                  <div className="text-xs md:text-sm text-slate-800 leading-relaxed font-bold whitespace-pre-line space-y-2">
                                     {hint}
                                   </div>
                                 </div>
@@ -1619,10 +1619,10 @@ export default function StudentCurriculumReview({
                               <button
                                 type="button"
                                 onClick={() => handleFetchAiHint()}
-                                className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs md:text-sm rounded-xl transition-all shadow-xs flex items-center justify-center gap-2 cursor-pointer"
+                                className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs md:text-sm rounded-xl transition-all shadow-md shadow-indigo-500/20 flex items-center justify-center gap-2 cursor-pointer"
                               >
                                 <Sparkles className="w-4 h-4 text-yellow-300" />
-                                <span>توليد تلميح ذكي للسؤال بالذكاء الاصطناعي 💡</span>
+                                <span>توليد مساعدة وإرشاد ذكي للسؤال بالذكاء الاصطناعي 🤖</span>
                               </button>
                             );
                           })()}

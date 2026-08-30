@@ -691,6 +691,39 @@ export default function StudentCurriculumReview({
   // Robust check for True/False or 2-option binary questions
   const isTrueFalseQuestion = (q: any) => isTFHelper(q);
 
+  const buildDynamicContextualHint = (q: any, subject?: string, unitName?: string, lessonName?: string): string => {
+    const text = q?.text || "";
+    const opts = Array.isArray(q?.options) ? q.options : [];
+    const lessonStr = lessonName ? ` في درس (${lessonName})` : (subject ? ` في مادة (${subject})` : "");
+    const isBinary = opts.length === 2 && (opts.includes("صح") || opts.includes("خطأ") || opts.includes("نعم") || opts.includes("لا") || opts.includes("صحيحة") || opts.includes("خاطئة"));
+    
+    let idea = `يتناول هذا السؤال مفهوماً أساسياً${lessonStr}. المطلوب هو تحليل جملة السؤال: "${text.length > 55 ? text.slice(0, 55) + '...' : text}" وتحديد الخيار المطابق لتعريف هذا المفهوم.`;
+    let hint = "";
+    
+    if (isBinary) {
+      hint = `اقرأ عبارة السؤال بدقة وانتبه للكلمات الدقيقة (مثل: دائماً، فقط، جميع، لا يمكن). إذا كان أي جزء في العبارة غير سليم علمياً فتكون العبارة خاطئة.`;
+    } else if (opts.length > 0) {
+      const hasEnglishTerms = opts.some((o: string) => o.includes("(") || /[a-zA-Z]/.test(o));
+      if (hasEnglishTerms) {
+        hint = `لاحظ دلالة المصطلحات الموجودة في الخيارات واربط الكلمات المفتاحية في السؤال بالمعنى اللغوي والتقني لكل خيار لاستبعاد الخيارات غير المناسبة.`;
+      } else {
+        hint = `قارن بين الخيارات المتاحة واستبعد الخيارات التي تؤدي وظائف أو معاني أخرى في الدرس لحصر الإجابة الصحيحة.`;
+      }
+    } else {
+      hint = `حلل معطيات السؤال واستحضر القواعد والتعريفات الأساسية في الدرس لتحديد الإجابة الصحيحة.`;
+    }
+    
+    const encouragements = [
+      "ثق بقدراتك وركز خطوة بخطوة وستصل للحل الصحيح بإذن الله! 🌟",
+      "أنت رائع وقادر على التفكير والوصول للإجابة الصحيحة بكل ثقة! 🌟",
+      "تأنَّ في القراءة وستكتشف الخيار الدقيق بكل سهولة! 🌟",
+      "كل سؤال تحله يقربك أكثر من التميز والتفوق الدراسي! 🌟"
+    ];
+    const chosenEncouragement = encouragements[Math.abs((text.length || 1) % encouragements.length)];
+
+    return `💡 **فكرة السؤال:** ${idea}\n🔍 **تلميح ذكي:** ${hint}\n🌟 **تشجيع:** ${chosenEncouragement}`;
+  };
+
   const handleFetchAiHint = async (force: boolean = false) => {
     if (!currentQuestion) return;
     const qKey = currentQuestion.id || currentQuestion.text;
@@ -717,23 +750,22 @@ export default function StudentCurriculumReview({
         }),
       });
 
-      const data = await res.json();
-      if (data.success && data.hint) {
-        setAiHints((prev) => ({ ...prev, [qKey]: data.hint }));
-      } else {
-        const lessonInfo = activeLesson?.name ? ` في درس (${activeLesson.name})` : (selectedSubject ? ` في مادة (${selectedSubject})` : "");
-        setAiHints((prev) => ({
-          ...prev,
-          [qKey]: `💡 فكرة السؤال: يدور هذا السؤال حول المفاهيم الأساسية${lessonInfo}.\n🔍 تلميح ذكي: اربط بين معطيات السؤال والخيارات المتاحة لاختيار الإجابة الصحيحة.\n🌟 تشجيع: ركز وستصل للإجابة الصحيحة بكل سهولة!`,
-        }));
+      const contentType = res.headers.get("content-type") || "";
+      if (res.ok && contentType.includes("application/json")) {
+        const data = await res.json();
+        if (data && data.success && data.hint) {
+          setAiHints((prev) => ({ ...prev, [qKey]: data.hint }));
+          return;
+        }
       }
+
+      // If backend API failed or returned non-JSON/HTML on static hosting, provide dynamic contextual guidance
+      const dynamicHint = buildDynamicContextualHint(currentQuestion, selectedSubject, activeUnit?.name, activeLesson?.name);
+      setAiHints((prev) => ({ ...prev, [qKey]: dynamicHint }));
     } catch (err) {
-      console.error("Error generating AI hint:", err);
-      const lessonInfo = activeLesson?.name ? ` في درس (${activeLesson.name})` : (selectedSubject ? ` في مادة (${selectedSubject})` : "");
-      setAiHints((prev) => ({
-        ...prev,
-        [qKey]: `💡 فكرة السؤال: ركز على الكلمات المفتاحية${lessonInfo} واستحضر القواعد الأساسية.\n🔍 تلميح ذكي: استبعد الخيارات غير المنطقية للوصول للحل الصحيح.\n🌟 تشجيع: ثق بقدراتك وأنت قادر على الحل الصحيح!`,
-      }));
+      console.warn("API hint fallback to dynamic contextual hint:", err);
+      const dynamicHint = buildDynamicContextualHint(currentQuestion, selectedSubject, activeUnit?.name, activeLesson?.name);
+      setAiHints((prev) => ({ ...prev, [qKey]: dynamicHint }));
     } finally {
       pendingAiHintKeysRef.current.delete(qKey);
       setIsGeneratingAiHint(false);

@@ -684,6 +684,12 @@ export default function StudentCurriculumReview({
   const [wrongChoices, setWrongChoices] = useState<Record<number, string[]>>({});
   const [showHelp, setShowHelp] = useState<boolean>(false);
   const [showCompletionModal, setShowCompletionModal] = useState<boolean>(false);
+  const [completionData, setCompletionData] = useState<{
+    correctCount: number;
+    totalQuestions: number;
+    unitName: string;
+    lessonName: string;
+  } | null>(null);
   const [aiHints, setAiHints] = useState<Record<string, string>>({});
   const [isGeneratingAiHint, setIsGeneratingAiHint] = useState<boolean>(false);
   const pendingAiHintKeysRef = useRef<Set<string>>(new Set());
@@ -955,12 +961,16 @@ export default function StudentCurriculumReview({
 
   // Watch for active lesson or subject target changes and trigger initialization
   useEffect(() => {
-    if (activeLesson?.questions) {
+    if (!isPlaying) {
+      if (activeLesson?.questions) {
+        initializeLesson(activeLesson.questions);
+      } else {
+        setActiveQuestions([]);
+      }
+    } else if (activeQuestions.length === 0 && activeLesson?.questions) {
       initializeLesson(activeLesson.questions);
-    } else {
-      setActiveQuestions([]);
     }
-  }, [activeLesson, selectedSubject, subjectTargets]);
+  }, [activeLesson, selectedSubject, isPlaying]);
 
   // Toggle accordions
   const toggleUnit = (idx: number) => {
@@ -972,10 +982,17 @@ export default function StudentCurriculumReview({
   const selectLesson = (unitIdx: number, lessonIdx: number) => {
     if (autoNextTimeoutRef.current) {
       clearTimeout(autoNextTimeoutRef.current);
+      autoNextTimeoutRef.current = null;
     }
     synth.playClick();
     setActiveUnitIdx(unitIdx);
     setActiveLessonIdx(lessonIdx);
+    
+    const targetUnit = activeSubjectData?.units[unitIdx];
+    const targetLesson = targetUnit?.lessons[lessonIdx];
+    if (targetLesson?.questions) {
+      initializeLesson(targetLesson.questions);
+    }
     
     // Reset play states
     setIsPlaying(true);
@@ -987,6 +1004,7 @@ export default function StudentCurriculumReview({
     setWrongChoices({});
     setShowHelp(false);
     setShowCompletionModal(false);
+    setCompletionData(null);
   };
 
   // Helper to check answer correctness robustly
@@ -1004,14 +1022,17 @@ export default function StudentCurriculumReview({
 
   const finishCurrentQuestion = (updatedAnswers: Record<number, { selected: string; isCorrect: boolean }>) => {
     // If this is the last question, show completion directly!
-    if (currentQuestionIdx === questions.length - 1) {
+    if (currentQuestionIdx >= questions.length - 1) {
       // Calculate final score
       const answersList = Object.values(updatedAnswers);
       const correctCount = answersList.filter(a => a.isCorrect).length;
       const finalScore = correctCount;
 
+      const unitName = activeUnit?.name || "الوحدة";
+      const lessonName = activeLesson?.name || "الدرس";
+
       // Save statistics - keep the highest score ever achieved!
-      const statsKey = `${selectedSubject}_${activeUnit.name}_${activeLesson.name}`;
+      const statsKey = `${selectedSubject}_${unitName}_${lessonName}`;
       const existingStat = lessonStats[statsKey];
       const bestScore = existingStat && existingStat.solved 
         ? Math.max(existingStat.score, finalScore)
@@ -1027,16 +1048,30 @@ export default function StudentCurriculumReview({
       };
       saveStats(updated);
 
+      // Store completion data for bulletproof display
+      setCompletionData({
+        correctCount,
+        totalQuestions: questions.length,
+        unitName,
+        lessonName
+      });
+
       // Play success sound
       synth.playSuccess();
       
-      // Delay for 2 seconds (as requested) so they can see the visual feedback before the modal pops up
+      // Delay for 2 seconds so they can see the visual feedback before the modal pops up automatically
+      if (autoNextTimeoutRef.current) {
+        clearTimeout(autoNextTimeoutRef.current);
+      }
       const t = setTimeout(() => {
         setShowCompletionModal(true);
       }, 2000);
       autoNextTimeoutRef.current = t;
     } else {
       // Automatically transition to the next question after 2 seconds
+      if (autoNextTimeoutRef.current) {
+        clearTimeout(autoNextTimeoutRef.current);
+      }
       const t = setTimeout(() => {
         setCurrentQuestionIdx(prev => prev + 1);
         setSelectedAnswer(null);
@@ -1117,10 +1152,32 @@ export default function StudentCurriculumReview({
 
   // Go to next question
   const nextQuestion = () => {
+    synth.playClick();
+
+    // If on the last question:
+    if (currentQuestionIdx >= questions.length - 1) {
+      if (autoNextTimeoutRef.current) {
+        clearTimeout(autoNextTimeoutRef.current);
+        autoNextTimeoutRef.current = null;
+      }
+      // If already answered, show score completion modal immediately!
+      if (isAnswered) {
+        setShowCompletionModal(true);
+        return;
+      }
+      // If selected an answer but not submitted yet, submit it
+      if (selectedAnswer !== null) {
+        handleAnswerSelect(selectedAnswer);
+        return;
+      }
+      return;
+    }
+
     if (autoNextTimeoutRef.current) {
       clearTimeout(autoNextTimeoutRef.current);
+      autoNextTimeoutRef.current = null;
     }
-    synth.playClick();
+
     if (!isAnswered) {
       if (selectedAnswer !== null) {
         handleAnswerSelect(selectedAnswer);
@@ -1140,12 +1197,15 @@ export default function StudentCurriculumReview({
         setIsAnswered(false);
       }
       setShowHelp(false);
+    } else {
+      setShowCompletionModal(true);
     }
   };
 
   const handleReset = () => {
     if (autoNextTimeoutRef.current) {
       clearTimeout(autoNextTimeoutRef.current);
+      autoNextTimeoutRef.current = null;
     }
     synth.playClick();
     if (activeLesson?.questions) {
@@ -1159,11 +1219,13 @@ export default function StudentCurriculumReview({
     setWrongChoices({});
     setShowHelp(false);
     setShowCompletionModal(false);
+    setCompletionData(null);
   };
 
   const handleExitLesson = () => {
     if (autoNextTimeoutRef.current) {
       clearTimeout(autoNextTimeoutRef.current);
+      autoNextTimeoutRef.current = null;
     }
     synth.playClick();
     setIsPlaying(false);
@@ -1174,6 +1236,8 @@ export default function StudentCurriculumReview({
     setQuestionAttempts({});
     setWrongChoices({});
     setShowHelp(false);
+    setShowCompletionModal(false);
+    setCompletionData(null);
   };
 
   // Total solved count & stats for the active subject
@@ -1204,7 +1268,7 @@ export default function StudentCurriculumReview({
     <div className="w-full min-h-screen bg-slate-50 text-slate-800 p-4 md:p-6" dir="rtl">
       {/* 1. Header Area with Student Info and active Subject Badge (Only visible when subject is selected for review) */}
       {selectedSubject && (
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 mb-6 shadow-md flex flex-col md:flex-row justify-between items-center gap-4">
+        <div className="sticky top-0 md:top-2 z-30 bg-white/95 backdrop-blur-md border border-slate-200/90 rounded-2xl p-5 mb-6 shadow-md flex flex-col md:flex-row justify-between items-center gap-4 transition-all">
           <div className="flex items-center gap-4">
             <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-600 flex items-center justify-center text-white shadow-lg shadow-indigo-500/25">
               <BookOpen className="w-7 h-7" />
@@ -1683,6 +1747,46 @@ export default function StudentCurriculumReview({
                   </AnimatePresence>
                 </div>
 
+                {/* Final Question Solved Score Banner */}
+                {isAnswered && currentQuestionIdx >= questions.length - 1 && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.96 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="mb-5 p-4 rounded-2xl bg-gradient-to-r from-amber-50 via-indigo-50 to-emerald-50 border-2 border-amber-300 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm"
+                  >
+                    <div className="flex items-center gap-3 w-full sm:w-auto">
+                      <div className="w-12 h-12 rounded-2xl bg-amber-400 text-slate-950 flex items-center justify-center font-black text-xl shadow-xs shrink-0">
+                        🏆
+                      </div>
+                      <div>
+                        <h4 className="font-black text-slate-900 text-sm md:text-base">
+                          أحسنت! أكملت حل جميع أسئلة هذا الدرس
+                        </h4>
+                        <p className="text-xs font-bold text-slate-600 mt-0.5">
+                          درجتك النهائية:{" "}
+                          <span className="text-amber-700 font-mono font-black text-sm md:text-base">
+                            {completionData?.correctCount ?? Object.values(userAnswers).filter(a => a.isCorrect).length} من {completionData?.totalQuestions || questions.length}
+                          </span>
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (autoNextTimeoutRef.current) {
+                          clearTimeout(autoNextTimeoutRef.current);
+                          autoNextTimeoutRef.current = null;
+                        }
+                        setShowCompletionModal(true);
+                      }}
+                      className="w-full sm:w-auto px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black shrink-0 shadow-md cursor-pointer transition-transform hover:scale-105 flex items-center justify-center gap-1.5"
+                    >
+                      <Trophy className="w-4 h-4 text-yellow-300" />
+                      <span>عرض بطاقة النتيجة والتقييم ⭐</span>
+                    </button>
+                  </motion.div>
+                )}
+
                 {/* Footer Buttons */}
                 <div className="flex flex-col sm:flex-row gap-4 justify-between items-center border-t border-slate-100 pt-5">
                   <div className="flex gap-2 w-full sm:w-auto">
@@ -1716,15 +1820,28 @@ export default function StudentCurriculumReview({
                         <button
                           type="button"
                           onClick={nextQuestion}
-                          className="w-full sm:w-60 px-6 py-3.5 rounded-xl text-xs md:text-sm font-black bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                          className={`w-full sm:w-64 px-6 py-3.5 rounded-xl text-xs md:text-sm font-black text-white shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                            currentQuestionIdx >= questions.length - 1
+                              ? "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 shadow-amber-500/20"
+                              : "bg-indigo-600 hover:bg-indigo-500 shadow-indigo-500/20"
+                          }`}
                         >
-                          <span>
-                            {currentQuestionIdx < questions.length - 1 ? "السؤال التالي" : "عرض النتيجة النهائية"}
-                          </span>
-                          <ChevronLeft className="w-4.5 h-4.5" />
+                          {currentQuestionIdx >= questions.length - 1 ? (
+                            <>
+                              <Trophy className="w-4.5 h-4.5 text-yellow-200" />
+                              <span>عرض النتيجة النهائية 🎯</span>
+                            </>
+                          ) : (
+                            <>
+                              <span>السؤال التالي</span>
+                              <ChevronLeft className="w-4.5 h-4.5" />
+                            </>
+                          )}
                         </button>
                         <span className="text-[10px] md:text-xs font-bold text-slate-500 animate-pulse">
-                          ⏱️ جاري الانتقال تلقائياً خلال ثانيتين...
+                          {currentQuestionIdx >= questions.length - 1
+                            ? "⏱️ جاري عرض النتيجة تلقائياً أو اضغط لعرضها فوراً"
+                            : "⏱️ جاري الانتقال تلقائياً خلال ثانيتين..."}
                         </span>
                       </div>
                     )}
@@ -1923,9 +2040,12 @@ export default function StudentCurriculumReview({
 
       {/* Completion Modal/Card */}
       <AnimatePresence>
-        {showCompletionModal && activeLesson && (() => {
-          const correctCount = Object.values(userAnswers).filter(a => a.isCorrect).length;
-          const isPerfectScore = correctCount === questions.length && questions.length > 0;
+        {showCompletionModal && (() => {
+          const correctCount = completionData?.correctCount ?? Object.values(userAnswers).filter(a => a.isCorrect).length;
+          const totalCount = completionData?.totalQuestions || questions.length || 1;
+          const lessonDisplayName = completionData?.lessonName || activeLesson?.name || "الدرس";
+          const unitDisplayName = completionData?.unitName || activeUnit?.name || "الوحدة";
+          const isPerfectScore = correctCount === totalCount && totalCount > 0;
           
           return (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm">
@@ -1967,7 +2087,7 @@ export default function StudentCurriculumReview({
                   {isPerfectScore ? "كفووو يا بطل! حصلت على الدرجة الكاملة! 🎉🏆" : "لقد أكملت مراجعة الدرس بنجاح!"}
                 </h2>
                 <p className="text-slate-500 text-xs font-semibold mt-2 leading-relaxed">
-                  مراجعة {activeLesson.name} من {activeUnit.name}
+                  مراجعة {lessonDisplayName} من {unitDisplayName}
                 </p>
 
                 {/* Score breakdown */}
@@ -1978,7 +2098,7 @@ export default function StudentCurriculumReview({
                 }`}>
                   <span className="text-xs text-slate-500 font-bold block mb-1">الدرجة المستحقة</span>
                   <span className={`text-3xl font-black font-mono ${isPerfectScore ? "text-amber-600" : "text-slate-900"}`}>
-                    {correctCount} / {questions.length}
+                    {correctCount} / {totalCount}
                   </span>
                   <span className="text-xs text-slate-500 font-extrabold block mt-2">
                     {isPerfectScore ? (
@@ -1992,7 +2112,20 @@ export default function StudentCurriculumReview({
                   </span>
                 </div>
 
-                <div className="mt-6">
+                <div className="mt-6 flex flex-col sm:flex-row gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      synth.playClick();
+                      setShowCompletionModal(false);
+                      handleReset();
+                    }}
+                    className="flex-1 font-bold text-xs md:text-sm px-4 py-3.5 rounded-2xl border border-slate-200 hover:bg-slate-100 text-slate-700 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    <span>إعادة المحاولة</span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => {
@@ -2000,7 +2133,7 @@ export default function StudentCurriculumReview({
                       setShowCompletionModal(false);
                       handleExitLesson();
                     }}
-                    className={`w-full font-extrabold text-sm px-6 py-3.5 rounded-2xl transition-all shadow-lg cursor-pointer flex items-center justify-center gap-2 ${
+                    className={`flex-1 font-extrabold text-xs md:text-sm px-6 py-3.5 rounded-2xl transition-all shadow-lg cursor-pointer flex items-center justify-center gap-2 ${
                       isPerfectScore
                         ? "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white shadow-amber-500/20 hover:-translate-y-0.5"
                         : "bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white shadow-indigo-500/20 hover:-translate-y-0.5"

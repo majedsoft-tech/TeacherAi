@@ -829,7 +829,7 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
 🌟 **تشجيع:** (عبارة تحفيزية إيجابية قصيرة)`;
 
           const geminiRes = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${viteGeminiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${viteGeminiKey}`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -855,9 +855,9 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
         }
       }
 
-      // 2. Try server API with a strict 1500ms timeout so it NEVER hangs on Cloudflare
+      // 2. Try server API with a responsive timeout
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 1500);
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
 
       const res = await fetch("/api/generate-question-hint", {
         method: "POST",

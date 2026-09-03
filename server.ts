@@ -185,18 +185,18 @@ async function generateGeminiContentWithRetry(
   },
   maxRetries = 6
 ): Promise<any> {
-  const defaultModel = "gemini-3.8-flash";
+  const defaultModel = "gemini-3.1-flash-lite";
   const rawRequested = params.model;
-  // Automatically sanitize deprecated models
-  const requestedModel = (!rawRequested || rawRequested.includes("2.5") || rawRequested.includes("1.5") || rawRequested.includes("2.0"))
+  // Automatically sanitize deprecated or unavailable models
+  const requestedModel = (!rawRequested || rawRequested.includes("2.5") || rawRequested.includes("1.5") || rawRequested.includes("2.0") || rawRequested.includes("3.6"))
     ? defaultModel
     : rawRequested;
   
-  // Multi-tier pool of high-capacity modern models with distinct fallback order
+  // Prioritize active, highly-available models with distinct quotas
   const candidateModels = Array.from(new Set([
     requestedModel,
+    "gemini-3.1-flash-lite",
     "gemini-3.8-flash",
-    "gemini-3.6-flash",
     "gemini-flash-latest"
   ])).filter(Boolean);
 
@@ -230,11 +230,17 @@ async function generateGeminiContentWithRetry(
       console.warn(`[Gemini API Attempt ${attempt + 1}/${maxRetries}] Model "${currentModel}" encountered ${isNotFoundOr404 ? '404 Deprecated/Not Found' : isQuotaOr429 ? '429 Quota/Rate-limit' : isUnavailableOr503 ? '503 Unavailable' : 'Error'}: ${errMsg.slice(0, 180)}`);
 
       if (attempt < maxRetries - 1) {
+        const nextModel = candidateModels[Math.min(attempt + 1, candidateModels.length - 1)];
+        const isDifferentModel = (nextModel !== currentModel);
+
         let waitTimeMs = 3000 * (attempt + 1);
 
         if (isNotFoundOr404) {
           // Instant switch to modern supported model without wasted delay
           waitTimeMs = 50;
+        } else if (isDifferentModel) {
+          // Instant failover to alternate model cluster with separate quota & server pool
+          waitTimeMs = 150;
         } else {
           // Extract explicit retryDelay if provided in the Gemini API error body
           const retryMatch = errMsg.match(/retry in\s+([\d\.]+)\s*s/i) || 
@@ -245,15 +251,12 @@ async function generateGeminiContentWithRetry(
               waitTimeMs = Math.min(Math.ceil(parsedSec * 1000) + 1000, 15000);
             }
           } else if (isUnavailableOr503) {
-            // Instant failover to alternate model cluster for temporary model high-demand spikes
-            waitTimeMs = 250;
+            waitTimeMs = Math.min(2000 * (attempt + 1), 6000);
           } else if (isQuotaOr429) {
-            // Exponential backoff to allow RPM/TPM quota windows to refresh
-            waitTimeMs = Math.min(4000 * (attempt + 1), 18000);
+            waitTimeMs = Math.min(3000 * (attempt + 1), 10000);
           }
         }
 
-        const nextModel = candidateModels[Math.min(attempt + 1, candidateModels.length - 1)];
         console.log(`[Gemini Fallback] Switching to model "${nextModel}" (pause ${(waitTimeMs / 1000).toFixed(1)}s)...`);
         await new Promise((resolve) => setTimeout(resolve, waitTimeMs));
       }
@@ -371,7 +374,7 @@ async function startServer() {
       }
 
       const response = await generateGeminiContentWithRetry(ai, {
-        model: "gemini-3.8-flash",
+        model: "gemini-3.1-flash-lite",
         contents: {
           parts: contentsParts
         },
@@ -613,7 +616,7 @@ ${subjectOverride && subjectOverride !== "auto" ? `   - "subject": "${subjectOve
         }
 
         const response = await generateGeminiContentWithRetry(ai, {
-          model: "gemini-3.8-flash",
+          model: "gemini-3.1-flash-lite",
           contents: {
             parts: targetParts
           },
@@ -803,7 +806,7 @@ ${correctAnswer ? `- الإجابة الصحيحة: "${correctAnswer}"` : ""}
       let hintText = "";
       try {
         const response = await generateGeminiContentWithRetry(ai, {
-          model: "gemini-3.8-flash",
+          model: "gemini-3.1-flash-lite",
           contents: prompt,
           config: {
             systemInstruction: "أنت موجه تعليمي خبير يقدم إرشادات وتلميحات تربوية ذكية ومحفزة لمساعدة الطلاب على الفهم والحل الذاتي.",

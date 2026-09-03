@@ -105,14 +105,29 @@ export default async function handler(req: any, res: any) {
       );
     }
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents,
-      config: {
-        systemInstruction: "أنت خبير تربوي متخصص في تحليل الكتب والمناهج. أخرج النتائج فقط كـ JSON صالح.",
-        responseMimeType: "application/json",
+    const candidateModels = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-flash-latest"];
+    let response: any = null;
+    let lastErr: any = null;
+
+    for (const model of candidateModels) {
+      try {
+        response = await ai.models.generateContent({
+          model,
+          contents,
+          config: {
+            systemInstruction: "أنت خبير تربوي متخصص في تحليل الكتب والمناهج. أخرج النتائج فقط كـ JSON صالح.",
+            responseMimeType: "application/json",
+          }
+        });
+        if (response?.text) break;
+      } catch (e) {
+        lastErr = e;
       }
-    });
+    }
+
+    if (!response && lastErr) {
+      throw lastErr;
+    }
 
     return res.status(200).json({
       success: true,

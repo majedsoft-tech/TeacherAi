@@ -18,7 +18,11 @@ import {
   VolumeX,
   Play,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Search,
+  Copy,
+  CheckCheck,
+  Zap
 } from "lucide-react";
 import { BankQuestion, Student } from "../types";
 import { isTrueFalseQuestion as isTFHelper, normalizeQuestion, isGradeMatching, isClassMatching } from "../utils/questionUtils";
@@ -694,45 +698,108 @@ export default function StudentCurriculumReview({
   const [isGeneratingAiHint, setIsGeneratingAiHint] = useState<boolean>(false);
   const pendingAiHintKeysRef = useRef<Set<string>>(new Set());
 
+  // Search filter states for ultra-fast instant lookups
+  const [subjectSearchQuery, setSubjectSearchQuery] = useState<string>("");
+  const [lessonSearchQuery, setLessonSearchQuery] = useState<string>("");
+  const [copiedHintKey, setCopiedHintKey] = useState<string | null>(null);
+
+  // High-performance Arabic text normalizer (strips diacritics, unifies alef, taa marbouta, etc.)
+  const normalizeArabic = (text: string): string => {
+    if (!text) return "";
+    return text
+      .toLowerCase()
+      .replace(/[\u064B-\u065F\u0670]/g, "") // remove tashkeel/diacritics
+      .replace(/[أإآء]/g, "ا")
+      .replace(/ة/g, "ه")
+      .replace(/ى/g, "ي")
+      .replace(/[\s\-_]+/g, " ")
+      .trim();
+  };
+
   // Robust check for True/False or 2-option binary questions
   const isTrueFalseQuestion = (q: any) => isTFHelper(q);
 
+  // Advanced, Instant Contextual Educational Reasoning Engine (0ms Latency, 100% Cloudflare & Offline Ready)
   const buildDynamicContextualHint = (q: any, subject?: string, unitName?: string, lessonName?: string): string => {
     const text = q?.text || "";
     const opts = Array.isArray(q?.options) ? q.options : [];
     const lessonStr = lessonName ? ` في درس (${lessonName})` : (subject ? ` في مادة (${subject})` : "");
-    const isBinary = opts.length === 2 && (opts.includes("صح") || opts.includes("خطأ") || opts.includes("نعم") || opts.includes("لا") || opts.includes("صحيحة") || opts.includes("خاطئة"));
-    
-    let idea = `يتناول هذا السؤال مفهوماً أساسياً${lessonStr}. المطلوب هو تحليل جملة السؤال: "${text.length > 55 ? text.slice(0, 55) + '...' : text}" وتحديد الخيار المطابق لتعريف هذا المفهوم.`;
-    let hint = "";
-    
-    if (isBinary) {
-      hint = `اقرأ عبارة السؤال بدقة وانتبه للكلمات الدقيقة (مثل: دائماً، فقط، جميع، لا يمكن). إذا كان أي جزء في العبارة غير سليم علمياً فتكون العبارة خاطئة.`;
-    } else if (opts.length > 0) {
-      const hasEnglishTerms = opts.some((o: string) => o.includes("(") || /[a-zA-Z]/.test(o));
-      if (hasEnglishTerms) {
-        hint = `لاحظ دلالة المصطلحات الموجودة في الخيارات واربط الكلمات المفتاحية في السؤال بالمعنى اللغوي والتقني لكل خيار لاستبعاد الخيارات غير المناسبة.`;
-      } else {
-        hint = `قارن بين الخيارات المتاحة واستبعد الخيارات التي تؤدي وظائف أو معاني أخرى في الدرس لحصر الإجابة الصحيحة.`;
-      }
+    const cleanText = text.trim();
+
+    // 1. Detect question characteristics
+    const isBinary = opts.length === 2 && (
+      opts.includes("صح") || opts.includes("خطأ") || 
+      opts.includes("نعم") || opts.includes("لا") || 
+      opts.includes("صحيحة") || opts.includes("خاطئة") ||
+      opts.includes("True") || opts.includes("False")
+    );
+    const isDefinition = /تعريف|المقصود|يُقصد|يُعرّف|هو|هي|ما هو|ما هي|مفهوم/i.test(cleanText);
+    const isFunction = /وظيفة|فائدة|دور|أهمية|يُستخدم|تُستخدم|الغرض|مهمة/i.test(cleanText);
+    const isClassification = /ينقسم|تتكون|من أنواع|من أمثلة|يصنف|تصنف|أقسام|مكونات|عناصر/i.test(cleanText);
+    const isComparison = /الفرق|يختلف|مقارنة|أوجه الشبه|عكس|تميز/i.test(cleanText);
+    const isCalculation = /\d+|\+|-|\*|\/|حساب|ناتج|مجموع|نسبة|معادلة/i.test(cleanText);
+    const hasEnglishTerms = opts.some((o: string) => o.includes("(") || /[a-zA-Z]/.test(o));
+
+    // 2. Formulate Core Concept Explanation
+    let idea = "";
+    if (isDefinition) {
+      idea = `يركز هذا السؤال على استرجاع المفهوم العلمي والمصطلح الدقيق${lessonStr}. المفتاح هنا هو تحديد الخاصية الجوهرية التي تميز هذا المصطلح عن غيره في الدرس.`;
+    } else if (isFunction) {
+      idea = `يتناول هذا السؤال معرفة الدور الوظيفي والتطبيقي${lessonStr}. حدد العنصر المستهدف في السؤال واربطه بمهمته المباشرة والغرض الأساسي من استخدامه.`;
+    } else if (isClassification) {
+      idea = `يدور السؤال حول تصنيف المكونات أو التقسيمات الأساسية${lessonStr}. استرجع الأقسام الرئيسية الواردة في الدرس لتحديد العنصر المطابق لمعطيات السؤال.`;
+    } else if (isComparison) {
+      idea = `المطلوب هو المقارنة والتمييز الدقيق بين مفهومين أو حالتين${lessonStr}. ركز على وجه الاختلاف أو الشبه الدقيق المطلوب في نص السؤال.`;
+    } else if (isCalculation) {
+      idea = `يتطلب هذا السؤال تطبيق عملية حسابية أو منطقية${lessonStr}. اتبع الخطوات الرياضية والمنطقية بتأنٍ واستحضر القانون المناسب للوصول للناتج الدقيق.`;
+    } else if (isBinary) {
+      idea = `يقيس هذا السؤال دقة استيعابك لمعلومة علمية مقررة${lessonStr}. المطلوب هو قراءة العبارة كاملة والتحقق من صحة كل جزء فيها علمياً ومنطقياً.`;
     } else {
-      hint = `حلل معطيات السؤال واستحضر القواعد والتعريفات الأساسية في الدرس لتحديد الإجابة الصحيحة.`;
+      idea = `يتناول هذا السؤال مفهوماً هاماً${lessonStr}. اقرأ جملة السؤال بتركيز وحدد الكلمات المفتاحية التي تدلك على المطلوب دون تسرع.`;
     }
-    
+
+    // 3. Strategic Elimination and Thinking Guidance
+    let hint = "";
+    if (isBinary) {
+      hint = `اقرأ عبارة السؤال كلمة بكلمة، وانتبه لأدوات الحصر والتعميم (مثل: دائماً، فقط، جميع، لا يمكن، أبداً). تذكر القاعدة الذهبية: إذا كان أي جزء في العبارة غير سليم علمياً، فالعبارة بأكملها تعتبر خاطئة.`;
+    } else if (hasEnglishTerms) {
+      hint = `لاحظ دلالة المصطلحات والرموز الإنجليزية أو العلمية في الخيارات. اربط بين الحروف الأولى أو الترجمة المباشرة للرمز وبين الوظيفة المذكورة في السؤال لاستبعاد الخيارات غير المتوافقة.`;
+    } else if (isClassification) {
+      hint = `استخدم استراتيجية الاستبعاد الذكي: ابدأ بحذف الخيارات التي تنتمي لدروس أو موضوعات أخرى، ثم وازن بين الخيارات المتبقية ذات الصلة لحصر الخيار المطابق تماماً.`;
+    } else if (opts.length > 2) {
+      hint = `حلل الخيارات: ستجد غالباً خيارين بعيدين تماماً عن موضوع السؤال احذفهما فوراً، ثم ركز في المقارنة بين الخيارين الأقرب لتختار الأدق والأنسب لمعطيات السؤال.`;
+    } else {
+      hint = `حلل معطيات السؤال واستحضر القواعد والتعريفات الأساسية في الدرس لحصر الإجابة الصحيحة وتأكيدها.`;
+    }
+
+    // 4. Motivational Encouragement
     const encouragements = [
       "ثق بقدراتك وركز خطوة بخطوة وستصل للحل الصحيح بإذن الله! 🌟",
-      "أنت رائع وقادر على التفكير والوصول للإجابة الصحيحة بكل ثقة! 🌟",
-      "تأنَّ في القراءة وستكتشف الخيار الدقيق بكل سهولة! 🌟",
-      "كل سؤال تحله يقربك أكثر من التميز والتفوق الدراسي! 🌟"
+      "أنت رائع وقادر على التفكير الذكي والوصول للإجابة الصحيحة بكل ثقة! 🌟",
+      "تأنَّ في القراءة وستكتشف الخيار الدقيق بكل سهولة وتفوق! 🌟",
+      "كل سؤال تحله بذكاء يقربك أكثر من التميز والدرجة الكاملة! 🌟",
+      "التفكير المنهجي والتركيز هما مفتاح التفوق الدراسي.. استمر! 🌟"
     ];
     const chosenEncouragement = encouragements[Math.abs((text.length || 1) % encouragements.length)];
 
-    return `💡 **فكرة السؤال:** ${idea}\n🔍 **تلميح ذكي:** ${hint}\n🌟 **تشجيع:** ${chosenEncouragement}`;
+    return `💡 **فكرة السؤال:** ${idea}\n🔍 **تلميح واستراتيجية الحل:** ${hint}\n🌟 **تشجيع:** ${chosenEncouragement}`;
   };
 
   const handleFetchAiHint = async (force: boolean = false) => {
     if (!currentQuestion) return;
     const qKey = currentQuestion.id || currentQuestion.text;
+
+    // Guarantee an instant high-intelligence educational hint is already in state (0ms latency)
+    if (!aiHints[qKey]) {
+      const instantHint = buildDynamicContextualHint(
+        currentQuestion,
+        selectedSubject,
+        activeUnit?.name,
+        activeLesson?.name
+      );
+      setAiHints((prev) => ({ ...prev, [qKey]: instantHint }));
+    }
+
     if (!force && aiHints[qKey]) {
       return;
     }
@@ -742,10 +809,60 @@ export default function StudentCurriculumReview({
 
     pendingAiHintKeysRef.current.add(qKey);
     setIsGeneratingAiHint(true);
+
     try {
+      // 1. Check if client-side Gemini key is available (useful for Cloudflare Pages static hosting)
+      const viteGeminiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
+      if (viteGeminiKey) {
+        const clientController = new AbortController();
+        const clientTimer = setTimeout(() => clientController.abort(), 2500);
+        try {
+          const promptText = `أنت معلم خبير وموجه تربوي ذكي وودود.
+المطلوب: قدم للطالب إرشاداً تربوياً وتلميحاً ذكياً لمساعدته على حل هذا السؤال بنفسه وفهم فكرته دون إعطائه الإجابة الصريحة بشكل مباشر:
+- السؤال: "${currentQuestion.text}"
+${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ? `- الخيارات: ${currentQuestion.options.join(" - ")}` : ""}
+- المادة / الدرس: ${selectedSubject || ""} / ${activeLesson?.name || ""}
+
+يرجى صياغة الإرشاد بدقة في 3 نقاط واضحة باللغة العربية:
+💡 **فكرة السؤال:** (المفهوم الأساسي بشكل مبسط)
+🔍 **تلميح واستراتيجية الحل:** (طريقة التفكير واستبعاد الخيارات)
+🌟 **تشجيع:** (عبارة تحفيزية إيجابية قصيرة)`;
+
+          const geminiRes = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${viteGeminiKey}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              signal: clientController.signal,
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: promptText }] }],
+                generationConfig: { maxOutputTokens: 600, temperature: 0.7 }
+              })
+            }
+          );
+          clearTimeout(clientTimer);
+          if (geminiRes.ok) {
+            const data = await geminiRes.json();
+            const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (text && text.trim()) {
+              setAiHints((prev) => ({ ...prev, [qKey]: text.trim() }));
+              return;
+            }
+          }
+        } catch {
+          clearTimeout(clientTimer);
+          // Fall through to server API or fallback
+        }
+      }
+
+      // 2. Try server API with a strict 1500ms timeout so it NEVER hangs on Cloudflare
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 1500);
+
       const res = await fetch("/api/generate-question-hint", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           questionText: currentQuestion.text,
           options: currentQuestion.options,
@@ -755,6 +872,7 @@ export default function StudentCurriculumReview({
           lesson: activeLesson?.name,
         }),
       });
+      clearTimeout(timeoutId);
 
       const contentType = res.headers.get("content-type") || "";
       if (res.ok && contentType.includes("application/json")) {
@@ -765,11 +883,11 @@ export default function StudentCurriculumReview({
         }
       }
 
-      // If backend API failed or returned non-JSON/HTML on static hosting, provide dynamic contextual guidance
+      // If backend API returned HTML/404 on Cloudflare static hosting, retain dynamic contextual guidance
       const dynamicHint = buildDynamicContextualHint(currentQuestion, selectedSubject, activeUnit?.name, activeLesson?.name);
       setAiHints((prev) => ({ ...prev, [qKey]: dynamicHint }));
-    } catch (err) {
-      console.warn("API hint fallback to dynamic contextual hint:", err);
+    } catch {
+      // Cloudflare / network offline / timeout: immediately ensure dynamic contextual hint is set smoothly
       const dynamicHint = buildDynamicContextualHint(currentQuestion, selectedSubject, activeUnit?.name, activeLesson?.name);
       setAiHints((prev) => ({ ...prev, [qKey]: dynamicHint }));
     } finally {
@@ -1326,7 +1444,7 @@ export default function StudentCurriculumReview({
           </div>
 
           {(() => {
-            const displayedSubjectKeys = Array.from(
+            const allDisplayedKeys = Array.from(
               new Set(
                 Object.keys(syllabus).filter(
                   (key) =>
@@ -1336,7 +1454,7 @@ export default function StudentCurriculumReview({
               )
             );
 
-            if (displayedSubjectKeys.length === 0) {
+            if (allDisplayedKeys.length === 0) {
               return (
                 <div className="bg-white border border-slate-200 rounded-3xl p-10 text-center space-y-3 shadow-xs">
                   <div className="w-16 h-16 bg-slate-50 border border-slate-150 rounded-2xl flex items-center justify-center mx-auto text-slate-400">
@@ -1350,70 +1468,131 @@ export default function StudentCurriculumReview({
               );
             }
 
+            const normalizedSubjectSearch = normalizeArabic(subjectSearchQuery);
+            const displayedSubjectKeys = allDisplayedKeys.filter((key) => {
+              if (!normalizedSubjectSearch) return true;
+              const sub = syllabus[key];
+              const normKey = normalizeArabic(key);
+              const normName = normalizeArabic(sub?.name || "");
+              const normUnits = sub?.units?.map((u) => normalizeArabic(u.name)).join(" ") || "";
+              return normKey.includes(normalizedSubjectSearch) || normName.includes(normalizedSubjectSearch) || normUnits.includes(normalizedSubjectSearch);
+            });
+
             return (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-                {displayedSubjectKeys.map((subjectKey, sIdx) => {
-                  const sub = syllabus[subjectKey];
-                  let totalLessons = 0;
-                  let solvedLessons = 0;
-                  sub.units.forEach(u => {
-                    u.lessons.forEach(l => {
-                      totalLessons++;
-                      const statsKey = `${subjectKey}_${u.name}_${l.name}`;
-                      if (lessonStats[statsKey]?.solved) solvedLessons++;
-                    });
-                  });
+              <div className="space-y-6">
+                {/* Instant Subject Search Input */}
+                <div className="max-w-md mx-auto">
+                  <div className="relative flex items-center">
+                    <input
+                      type="text"
+                      placeholder="بحث فوري وسريع عن مادة دراسية... 🔍"
+                      value={subjectSearchQuery}
+                      onChange={(e) => setSubjectSearchQuery(e.target.value)}
+                      className="w-full pr-10 pl-10 py-3 bg-white border border-slate-200 rounded-2xl text-xs md:text-sm font-bold text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition-all shadow-xs"
+                    />
+                    <span className="absolute right-3.5 text-slate-400 pointer-events-none">
+                      <Search className="w-4 h-4" />
+                    </span>
+                    {subjectSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setSubjectSearchQuery("")}
+                        className="absolute left-3 text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                        title="إلغاء البحث"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                  {subjectSearchQuery && (
+                    <div className="flex justify-between items-center mt-2 px-2 text-xs font-bold text-indigo-600">
+                      <span>نتائج البحث عن "{subjectSearchQuery}":</span>
+                      <span className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full border border-indigo-200 text-[11px]">
+                        {displayedSubjectKeys.length} مادة
+                      </span>
+                    </div>
+                  )}
+                </div>
 
-                  const isCompleted = totalLessons > 0 && solvedLessons === totalLessons;
-
-                  return (
-                    <motion.div
-                      key={`student-subj-${subjectKey}-${sIdx}`}
-                      whileHover={{ y: -5, scale: 1.02 }}
-                      whileTap={{ scale: 0.98 }}
-                      onClick={() => {
-                        synth.playClick();
-                        onSelectedSubjectChange(subjectKey);
-                      }}
-                      className={`bg-white border rounded-3xl p-6 cursor-pointer transition-all duration-200 relative overflow-hidden group shadow-md hover:shadow-lg ${
-                        isCompleted 
-                          ? "border-emerald-300 bg-emerald-50/40 shadow-emerald-500/5" 
-                          : "border-slate-200 hover:border-indigo-300"
-                      }`}
+                {displayedSubjectKeys.length === 0 ? (
+                  <div className="bg-white border border-slate-200 rounded-3xl p-8 text-center space-y-3 shadow-xs">
+                    <p className="text-slate-600 font-bold text-sm">
+                      لم يتم العثور على مواد مطابقة لعبارة البحث "{subjectSearchQuery}"
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setSubjectSearchQuery("")}
+                      className="px-4 py-2 bg-indigo-50 text-indigo-700 rounded-xl text-xs font-black hover:bg-indigo-100 transition-colors cursor-pointer"
                     >
-                      <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-50 rounded-full blur-2xl group-hover:bg-indigo-100 transition-colors" />
-                      
-                      <div className="flex justify-between items-start mb-4">
-                        <div className="p-3 rounded-xl text-indigo-600 bg-indigo-50 border border-indigo-100 group-hover:bg-indigo-600 group-hover:text-white transition-colors duration-200 shadow-xs">
-                          <BookOpen className="w-5 h-5" />
-                        </div>
-                        {isCompleted && (
-                          <span className="bg-emerald-50 text-emerald-600 border border-emerald-200 text-xs font-black px-3 py-1.5 rounded-full flex items-center gap-1 shadow-xs">
-                            <Check className="w-3 h-3" /> مكتملة
-                          </span>
-                        )}
-                      </div>
+                      إعادة عرض كافة المواد
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
+                    {displayedSubjectKeys.map((subjectKey, sIdx) => {
+                      const sub = syllabus[subjectKey];
+                      let totalLessons = 0;
+                      let solvedLessons = 0;
+                      sub.units.forEach((u) => {
+                        u.lessons.forEach((l) => {
+                          totalLessons++;
+                          const statsKey = `${subjectKey}_${u.name}_${l.name}`;
+                          if (lessonStats[statsKey]?.solved) solvedLessons++;
+                        });
+                      });
 
-                      <h3 className="font-black text-base md:text-lg text-slate-900 group-hover:text-indigo-600 transition-colors">{sub.name}</h3>
-                      <p className="text-slate-600 text-xs font-semibold mt-2.5">
-                        يحتوي على {sub.units.length} وحدات • {totalLessons} دروس تفاعلية
-                      </p>
+                      const isCompleted = totalLessons > 0 && solvedLessons === totalLessons;
 
-                      <div className="mt-5 pt-4 border-t border-slate-100">
-                        <div className="flex justify-between text-xs font-extrabold text-slate-500 mb-2">
-                          <span>التقدم المنجز</span>
-                          <span>{solvedLessons} من {totalLessons} درس</span>
-                        </div>
-                        <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                          <div 
-                            className={`h-full rounded-full transition-all duration-300 ${isCompleted ? "bg-emerald-500" : "bg-indigo-500"}`}
-                            style={{ width: `${totalLessons > 0 ? (solvedLessons / totalLessons) * 100 : 0}%` }}
-                          />
-                        </div>
-                      </div>
-                    </motion.div>
-                  );
-                })}
+                      return (
+                        <motion.div
+                          key={`student-subj-${subjectKey}-${sIdx}`}
+                          whileHover={{ y: -5, scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                          onClick={() => {
+                            synth.playClick();
+                            onSelectedSubjectChange(subjectKey);
+                          }}
+                          className={`bg-white border rounded-3xl p-6 cursor-pointer transition-all duration-200 relative overflow-hidden group shadow-md hover:shadow-lg ${
+                            isCompleted 
+                              ? "border-emerald-300 bg-emerald-50/40 shadow-emerald-500/5" 
+                              : "border-slate-200 hover:border-indigo-300"
+                          }`}
+                        >
+                          <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-50 rounded-full blur-2xl group-hover:bg-indigo-100 transition-colors" />
+                          
+                          <div className="flex justify-between items-start mb-4">
+                            <div className="p-3 rounded-xl text-indigo-600 bg-indigo-50 border border-indigo-100 group-hover:bg-indigo-600 group-hover:text-white transition-colors duration-200 shadow-xs">
+                              <BookOpen className="w-5 h-5" />
+                            </div>
+                            {isCompleted && (
+                              <span className="bg-emerald-50 text-emerald-600 border border-emerald-200 text-xs font-black px-3 py-1.5 rounded-full flex items-center gap-1 shadow-xs">
+                                <Check className="w-3 h-3" /> مكتملة
+                              </span>
+                            )}
+                          </div>
+
+                          <h3 className="font-black text-base md:text-lg text-slate-900 group-hover:text-indigo-600 transition-colors">{sub.name}</h3>
+                          <p className="text-slate-600 text-xs font-semibold mt-2.5">
+                            يحتوي على {sub.units.length} وحدات • {totalLessons} دروس تفاعلية
+                          </p>
+
+                          <div className="mt-5 pt-4 border-t border-slate-100">
+                            <div className="flex justify-between text-xs font-extrabold text-slate-500 mb-2">
+                              <span>التقدم المنجز</span>
+                              <span>{solvedLessons} من {totalLessons} درس</span>
+                            </div>
+                            <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                              <div 
+                                className={`h-full rounded-full transition-all duration-300 ${isCompleted ? "bg-emerald-500" : "bg-indigo-500"}`}
+                                style={{ width: `${totalLessons > 0 ? (solvedLessons / totalLessons) * 100 : 0}%` }}
+                              />
+                            </div>
+                          </div>
+                        </motion.div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             );
           })()}
@@ -1624,8 +1803,8 @@ export default function StudentCurriculumReview({
                   </div>
                 </div>
 
-                {/* HELP ACCORDION (مساعدة وإرشاد تربوي ذكي) */}
-                <div className="mb-6 border border-indigo-200/80 rounded-2xl overflow-hidden bg-slate-50 shadow-xs transition-all">
+                {/* HELP ACCORDION (مساعدة وإرشاد تربوي ذكي وسريع متوافق مع كافة بيئات الاستضافة) */}
+                <div className="mb-6 border border-indigo-200/90 rounded-2xl overflow-hidden bg-slate-50 shadow-xs transition-all">
                   <button
                     type="button"
                     onClick={() => {
@@ -1639,17 +1818,27 @@ export default function StudentCurriculumReview({
                         }
                       }
                     }}
-                    className="w-full px-5 py-3.5 bg-gradient-to-r from-indigo-50/90 via-slate-50 to-purple-50/80 hover:bg-indigo-100/50 text-slate-800 font-black text-xs md:text-sm flex justify-between items-center cursor-pointer transition-colors border-b border-indigo-100/60"
+                    className="w-full px-5 py-3.5 bg-gradient-to-r from-indigo-50/90 via-purple-50/40 to-slate-50 hover:from-indigo-100/70 hover:to-purple-100/50 text-slate-800 font-black text-xs md:text-sm flex justify-between items-center cursor-pointer transition-colors border-b border-indigo-100/70"
                   >
                     <div className="flex items-center gap-2.5 text-indigo-700">
-                      <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-xs">
-                        <Sparkles className="w-4 h-4" />
+                      <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-600 to-purple-600 text-white flex items-center justify-center shadow-xs shrink-0">
+                        <Sparkles className="w-4 h-4 text-yellow-300" />
                       </div>
                       <div className="text-right">
-                        <span className="block font-black text-xs md:text-sm text-slate-900">مساعد بالذكاء الاصطناعي</span>
+                        <div className="flex items-center gap-2">
+                          <span className="block font-black text-xs md:text-sm text-slate-900">مساعد بالذكاء الاصطناعي</span>
+                          <span className="bg-emerald-100 text-emerald-700 text-[10px] font-black px-2 py-0.5 rounded-md border border-emerald-200 flex items-center gap-1 shadow-2xs">
+                            <Zap className="w-2.5 h-2.5" /> فوري
+                          </span>
+                        </div>
                       </div>
                     </div>
-                    {showHelp ? <ChevronUp className="w-5 h-5 text-indigo-600" /> : <ChevronDown className="w-5 h-5 text-slate-500" />}
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-extrabold text-indigo-600 hidden sm:inline">
+                        {showHelp ? "إخفاء المساعدة" : "طلب إرشاد وتلميح ذكي"}
+                      </span>
+                      {showHelp ? <ChevronUp className="w-5 h-5 text-indigo-600" /> : <ChevronDown className="w-5 h-5 text-slate-500" />}
+                    </div>
                   </button>
                   
                   <AnimatePresence>
@@ -1658,7 +1847,7 @@ export default function StudentCurriculumReview({
                         initial={{ height: 0, opacity: 0 }}
                         animate={{ height: "auto", opacity: 1 }}
                         exit={{ height: 0, opacity: 0 }}
-                        className="bg-white p-5 space-y-4"
+                        className="bg-white p-4 md:p-5 space-y-4"
                       >
                         {/* Static Teacher Help (if custom and not generic placeholder) */}
                         {(() => {
@@ -1684,61 +1873,119 @@ export default function StudentCurriculumReview({
                           );
                         })()}
 
-                        {/* AI Generated Smart Hint */}
+                        {/* AI Generated Smart Hint with Instant Fallback */}
                         <div>
                           {(() => {
                             const qKey = currentQuestion ? (currentQuestion.id || currentQuestion.text) : "";
-                            const hint = aiHints[qKey];
-
-                            if (isGeneratingAiHint) {
-                              return (
-                                <div className="bg-indigo-50/70 border border-indigo-100 rounded-xl p-4 flex items-center gap-3 text-indigo-700 font-bold text-xs md:text-sm animate-pulse">
-                                  <Sparkles className="w-5 h-5 animate-spin text-indigo-600 shrink-0" />
-                                  <span>جاري صياغة مساعدة وإرشاد تربوي يناسب هذا السؤال بواسطة الذكاء الاصطناعي... 🤖✨</span>
-                                </div>
-                              );
-                            }
-
-                            if (hint) {
-                              return (
-                                <div className="bg-gradient-to-br from-indigo-50/90 via-white to-purple-50/70 border border-indigo-200/90 rounded-2xl p-4 md:p-5 shadow-xs space-y-3">
-                                  <div className="flex items-center justify-between pb-2 border-b border-indigo-100/70">
-                                    <div className="flex items-center gap-2 text-indigo-900 font-black text-xs md:text-sm">
-                                      <Sparkles className="w-4 h-4 text-indigo-600 animate-pulse" />
-                                      <span>شرح وإرشاد تربوي بالذكاء الاصطناعي:</span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                      <button
-                                        type="button"
-                                        onClick={() => handleFetchAiHint(true)}
-                                        disabled={isGeneratingAiHint}
-                                        title="تحديث الإرشاد"
-                                        className="p-1 rounded-lg text-indigo-500 hover:text-indigo-700 hover:bg-indigo-100/60 transition-colors text-xs flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                                      >
-                                        <RotateCcw className={`w-3.5 h-3.5 ${isGeneratingAiHint ? "animate-spin" : ""}`} />
-                                        <span className="hidden sm:inline text-[11px] font-bold">تحديث</span>
-                                      </button>
-                                      <span className="bg-indigo-100 text-indigo-700 text-[10px] font-black px-2.5 py-0.5 rounded-full border border-indigo-200">
-                                        معلم ذكي ✨
-                                      </span>
-                                    </div>
-                                  </div>
-                                  <div className="text-xs md:text-sm text-slate-800 leading-relaxed font-bold whitespace-pre-line space-y-2">
-                                    {hint}
-                                  </div>
-                                </div>
-                              );
-                            }
+                            const hint = aiHints[qKey] || (currentQuestion ? buildDynamicContextualHint(currentQuestion, selectedSubject, activeUnit?.name, activeLesson?.name) : "");
 
                             return (
-                              <button
-                                type="button"
-                                onClick={() => handleFetchAiHint()}
-                                className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs md:text-sm rounded-xl transition-all shadow-md shadow-indigo-500/20 flex items-center justify-center gap-2 cursor-pointer"
-                              >
-                                <Sparkles className="w-4 h-4 text-yellow-300" />
-                                <span>توليد مساعدة وإرشاد ذكي للسؤال بالذكاء الاصطناعي 🤖</span>
-                              </button>
+                              <div className="bg-gradient-to-br from-indigo-50/70 via-white to-purple-50/50 border border-indigo-200/90 rounded-2xl p-4 md:p-5 shadow-xs space-y-3.5">
+                                <div className="flex items-center justify-between pb-2.5 border-b border-indigo-100">
+                                  <div className="flex items-center gap-2 text-indigo-900 font-black text-xs md:text-sm">
+                                    <Sparkles className="w-4 h-4 text-indigo-600 animate-pulse" />
+                                    <span>تحليل وإرشاد السؤال بالذكاء الاصطناعي:</span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    {/* Copy Hint Button */}
+                                    {hint && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          navigator.clipboard?.writeText(hint);
+                                          setCopiedHintKey(qKey);
+                                          setTimeout(() => setCopiedHintKey(null), 2000);
+                                        }}
+                                        className="px-2 py-1 rounded-lg text-slate-600 hover:text-indigo-700 hover:bg-indigo-100/60 transition-colors text-xs flex items-center gap-1.5 cursor-pointer font-bold border border-slate-200 bg-white shadow-2xs"
+                                        title="نسخ الإرشاد"
+                                      >
+                                        {copiedHintKey === qKey ? (
+                                          <>
+                                            <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
+                                            <span className="text-[10px] text-emerald-600">تم النسخ</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Copy className="w-3.5 h-3.5" />
+                                            <span className="text-[10px] hidden sm:inline">نسخ</span>
+                                          </>
+                                        )}
+                                      </button>
+                                    )}
+
+                                    {/* Refresh / Re-analyze Button */}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleFetchAiHint(true)}
+                                      disabled={isGeneratingAiHint}
+                                      title="إعادة تدقيق الإرشاد"
+                                      className="px-2 py-1 rounded-lg text-indigo-600 hover:text-indigo-800 hover:bg-indigo-100/60 transition-colors text-xs flex items-center gap-1 cursor-pointer disabled:opacity-50 border border-indigo-200/60 bg-white shadow-2xs"
+                                    >
+                                      <RotateCcw className={`w-3.5 h-3.5 ${isGeneratingAiHint ? "animate-spin text-indigo-600" : ""}`} />
+                                      <span className="text-[10px] font-bold hidden sm:inline">تحديث</span>
+                                    </button>
+
+                                    <span className="bg-indigo-100 text-indigo-700 text-[10px] font-black px-2 py-0.5 rounded-full border border-indigo-200 shrink-0">
+                                      معلم ذكي 🤖✨
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {isGeneratingAiHint && (
+                                  <div className="bg-indigo-50/70 border border-indigo-200/60 rounded-xl px-3 py-2 flex items-center gap-2 text-indigo-700 font-bold text-xs animate-pulse">
+                                    <Sparkles className="w-3.5 h-3.5 animate-spin text-indigo-600 shrink-0" />
+                                    <span>جاري تدقيق واستكمال الإرشاد بواسطة الذكاء الاصطناعي...</span>
+                                  </div>
+                                )}
+
+                                {/* Formatted Hint Cards */}
+                                <div className="space-y-2.5">
+                                  {(() => {
+                                    const parts = hint.split(/(?=💡|🔍|🌟)/g).map((s) => s.trim()).filter(Boolean);
+                                    if (parts.length >= 2) {
+                                      return (
+                                        <div className="grid grid-cols-1 gap-2.5">
+                                          {parts.map((part, pIdx) => {
+                                            let cardStyle = "bg-indigo-50/80 border-indigo-200/80 text-indigo-950";
+                                            let icon = "💡";
+                                            if (part.startsWith("🔍")) {
+                                              cardStyle = "bg-amber-50/80 border-amber-200/80 text-amber-950";
+                                              icon = "🔍";
+                                            } else if (part.startsWith("🌟")) {
+                                              cardStyle = "bg-emerald-50/80 border-emerald-200/80 text-emerald-950";
+                                              icon = "🌟";
+                                            }
+
+                                            const cleanText = part.replace(/^(💡|🔍|🌟)\s*\**([^*:]+)\**:\s*/, "");
+                                            const matchTitle = part.match(/^(💡|🔍|🌟)\s*\**([^*:]+)\**/);
+                                            const title = matchTitle?.[2] || (
+                                              part.startsWith("💡") ? "فكرة السؤال" : part.startsWith("🔍") ? "تلميح واستراتيجية الحل" : "تشجيع"
+                                            );
+
+                                            return (
+                                              <div key={pIdx} className={`p-3 md:p-3.5 rounded-xl border ${cardStyle} shadow-2xs space-y-1`}>
+                                                <div className="flex items-center gap-2 font-black text-xs md:text-sm">
+                                                  <span>{icon}</span>
+                                                  <span>{title}</span>
+                                                </div>
+                                                <p className="text-xs md:text-sm leading-relaxed font-semibold pr-5 text-slate-800">
+                                                  {cleanText}
+                                                </p>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      );
+                                    }
+
+                                    return (
+                                      <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-xs md:text-sm text-slate-800 leading-relaxed font-bold whitespace-pre-line">
+                                        {hint}
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
+                              </div>
                             );
                           })()}
                         </div>
@@ -1888,148 +2135,225 @@ export default function StudentCurriculumReview({
                 </span>
               </div>
 
+              {/* Fast Real-Time Lesson & Unit Search Input */}
+              <div className="p-3 bg-white border-b border-slate-100">
+                <div className="relative flex items-center">
+                  <input
+                    type="text"
+                    placeholder="بحث سريع عن درس أو وحدة... 🔍"
+                    value={lessonSearchQuery}
+                    onChange={(e) => setLessonSearchQuery(e.target.value)}
+                    className="w-full pr-8 pl-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 transition-all shadow-2xs"
+                  />
+                  <span className="absolute right-2.5 text-slate-400 pointer-events-none">
+                    <Search className="w-3.5 h-3.5" />
+                  </span>
+                  {lessonSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setLessonSearchQuery("")}
+                      className="absolute left-2.5 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                      title="مسح البحث"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
               {/* Units & Lessons List container */}
               <div className="divide-y divide-slate-100 overflow-y-auto max-h-[500px]">
-                {activeSubjectData?.units.map((unit, uIdx) => {
-                  const isExpanded = !!expandedUnits[uIdx];
-                  const isCurrentlySolvingInThisUnit = isPlaying && activeUnitIdx === uIdx;
+                {(() => {
+                  const normalizedLessonSearch = normalizeArabic(lessonSearchQuery);
 
-                  const UNIT_COLOR_SCHEMES = [
-                    {
-                      collapsed: "bg-indigo-900/90 hover:bg-indigo-900 text-indigo-50 border-r-4 border-indigo-400",
-                      expanded: "bg-indigo-950 text-white border-r-4 border-indigo-300 shadow-md",
-                      accentDot: "bg-indigo-400",
-                    },
-                    {
-                      collapsed: "bg-teal-900/90 hover:bg-teal-900 text-teal-50 border-r-4 border-teal-400",
-                      expanded: "bg-teal-950 text-white border-r-4 border-teal-300 shadow-md",
-                      accentDot: "bg-teal-400",
-                    },
-                    {
-                      collapsed: "bg-amber-950/90 hover:bg-amber-950 text-amber-50 border-r-4 border-amber-400",
-                      expanded: "bg-amber-950 text-white border-r-4 border-amber-300 shadow-md",
-                      accentDot: "bg-amber-400",
-                    },
-                    {
-                      collapsed: "bg-purple-900/90 hover:bg-purple-900 text-purple-50 border-r-4 border-purple-400",
-                      expanded: "bg-purple-950 text-white border-r-4 border-purple-300 shadow-md",
-                      accentDot: "bg-purple-400",
-                    },
-                    {
-                      collapsed: "bg-rose-950/90 hover:bg-rose-950 text-rose-50 border-r-4 border-rose-400",
-                      expanded: "bg-rose-950 text-white border-r-4 border-rose-300 shadow-md",
-                      accentDot: "bg-rose-400",
-                    },
-                    {
-                      collapsed: "bg-sky-900/90 hover:bg-sky-900 text-sky-50 border-r-4 border-sky-400",
-                      expanded: "bg-sky-950 text-white border-r-4 border-sky-300 shadow-md",
-                      accentDot: "bg-sky-400",
-                    },
-                    {
-                      collapsed: "bg-emerald-900/90 hover:bg-emerald-900 text-emerald-50 border-r-4 border-emerald-400",
-                      expanded: "bg-emerald-950 text-white border-r-4 border-emerald-300 shadow-md",
-                      accentDot: "bg-emerald-400",
-                    },
-                    {
-                      collapsed: "bg-orange-950/90 hover:bg-orange-950 text-orange-50 border-r-4 border-orange-400",
-                      expanded: "bg-orange-950 text-white border-r-4 border-orange-300 shadow-md",
-                      accentDot: "bg-orange-400",
-                    },
-                  ];
+                  const filteredUnits = (activeSubjectData?.units || [])
+                    .map((unit, uIdx) => {
+                      const normUnitName = normalizeArabic(unit.name);
+                      const isUnitMatch = normalizedLessonSearch && normUnitName.includes(normalizedLessonSearch);
 
-                  const theme = UNIT_COLOR_SCHEMES[uIdx % UNIT_COLOR_SCHEMES.length];
-                  
-                  return (
-                    <div key={`unit-${uIdx}`} className="bg-white">
-                      {/* Unit Accordion Trigger */}
-                      <button
-                        type="button"
-                        onClick={() => toggleUnit(uIdx)}
-                        className={`w-full p-4 text-right font-black text-xs md:text-sm flex justify-between items-center transition-all duration-200 cursor-pointer ${
-                          isExpanded ? theme.expanded : theme.collapsed
-                        }`}
-                      >
-                        <div className="flex items-center gap-2 flex-wrap text-right">
-                          <span className={`w-2.5 h-2.5 rounded-full ${theme.accentDot} inline-block shrink-0 shadow-xs`} />
-                          <span className="leading-tight">{unit.name}</span>
-                          {!isExpanded && isCurrentlySolvingInThisUnit && (
-                            <span className="bg-amber-400 text-slate-950 px-2.5 py-1 rounded-lg text-[11px] font-black border border-amber-300 animate-pulse flex items-center gap-1.5 shadow-sm">
-                              <span>✏️</span>
-                              <span>ملاحظة: جاري الحل في هذه الوحدة</span>
-                            </span>
-                          )}
-                        </div>
-                        <ChevronDown className={`w-4 h-4 transition-transform duration-200 shrink-0 mr-2 ${isExpanded ? "rotate-180 text-white" : "text-slate-300"}`} />
-                      </button>
+                      const matchingLessons = unit.lessons
+                        .map((lesson, lIdx) => ({ lesson, lIdx }))
+                        .filter(({ lesson }) => {
+                          if (!normalizedLessonSearch) return true;
+                          if (isUnitMatch) return true;
+                          return normalizeArabic(lesson.name).includes(normalizedLessonSearch);
+                        });
 
-                      {/* Lessons Stack */}
-                      <AnimatePresence initial={false}>
-                        {isExpanded && (
-                          <motion.div
-                            initial={{ height: 0, opacity: 0 }}
-                            animate={{ height: "auto", opacity: 1 }}
-                            exit={{ height: 0, opacity: 0 }}
-                            className="overflow-hidden bg-slate-50"
-                          >
-                            <div className="p-2 space-y-1">
-                              {unit.lessons.map((lesson, lIdx) => {
-                                const isActive = isPlaying && activeUnitIdx === uIdx && activeLessonIdx === lIdx;
-                                const statsKey = `${selectedSubject}_${unit.name}_${lesson.name}`;
-                                const stat = lessonStats[statsKey];
-                                
-                                let statusText: React.ReactNode = "لم يحل";
-                                let badgeColor = "bg-rose-50 text-rose-600 border border-rose-500 font-bold shadow-xs";
-                                
-                                if (isActive) {
-                                  statusText = "جاري الحل";
-                                  badgeColor = "bg-blue-50 text-blue-600 border border-blue-500 font-black animate-pulse shadow-xs";
-                                } else if (stat?.solved) {
-                                  if (stat.score === stat.maxScore) {
-                                    statusText = (
-                                      <span className="flex items-center gap-1">
-                                        <Trophy className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                                        <span>مكتمل ({stat.score}/{stat.maxScore})</span>
-                                      </span>
-                                    );
-                                    badgeColor = "bg-emerald-50 text-emerald-700 border border-emerald-500 font-bold shadow-xs";
-                                  } else {
-                                    statusText = `مكتمل (${stat.score}/${stat.maxScore})`;
-                                    badgeColor = "bg-amber-50 text-amber-700 border border-amber-500 font-bold shadow-xs";
+                      return {
+                        unit,
+                        uIdx,
+                        isUnitMatch,
+                        matchingLessons,
+                        hasMatches: !normalizedLessonSearch || isUnitMatch || matchingLessons.length > 0,
+                      };
+                    })
+                    .filter((item) => item.hasMatches);
+
+                  if (filteredUnits.length === 0 && lessonSearchQuery) {
+                    return (
+                      <div className="p-6 text-center text-slate-500 space-y-2.5">
+                        <p className="text-xs font-bold">لا توجد دروس أو وحدات مطابقة لـ "{lessonSearchQuery}"</p>
+                        <button
+                          type="button"
+                          onClick={() => setLessonSearchQuery("")}
+                          className="px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-xl text-xs font-black hover:bg-indigo-100 transition-colors cursor-pointer"
+                        >
+                          عرض كافة الدروس والوحدات
+                        </button>
+                      </div>
+                    );
+                  }
+
+                  return filteredUnits.map(({ unit, uIdx, matchingLessons }) => {
+                    // Auto-expand units when searching and there are matching lessons
+                    const isAutoExpanded = !!normalizedLessonSearch && matchingLessons.length > 0;
+                    const isExpanded = isAutoExpanded || !!expandedUnits[uIdx];
+                    const isCurrentlySolvingInThisUnit = isPlaying && activeUnitIdx === uIdx;
+
+                    const UNIT_COLOR_SCHEMES = [
+                      {
+                        collapsed: "bg-indigo-900/90 hover:bg-indigo-900 text-indigo-50 border-r-4 border-indigo-400",
+                        expanded: "bg-indigo-950 text-white border-r-4 border-indigo-300 shadow-md",
+                        accentDot: "bg-indigo-400",
+                      },
+                      {
+                        collapsed: "bg-teal-900/90 hover:bg-teal-900 text-teal-50 border-r-4 border-teal-400",
+                        expanded: "bg-teal-950 text-white border-r-4 border-teal-300 shadow-md",
+                        accentDot: "bg-teal-400",
+                      },
+                      {
+                        collapsed: "bg-amber-950/90 hover:bg-amber-950 text-amber-50 border-r-4 border-amber-400",
+                        expanded: "bg-amber-950 text-white border-r-4 border-amber-300 shadow-md",
+                        accentDot: "bg-amber-400",
+                      },
+                      {
+                        collapsed: "bg-purple-900/90 hover:bg-purple-900 text-purple-50 border-r-4 border-purple-400",
+                        expanded: "bg-purple-950 text-white border-r-4 border-purple-300 shadow-md",
+                        accentDot: "bg-purple-400",
+                      },
+                      {
+                        collapsed: "bg-rose-950/90 hover:bg-rose-950 text-rose-50 border-r-4 border-rose-400",
+                        expanded: "bg-rose-950 text-white border-r-4 border-rose-300 shadow-md",
+                        accentDot: "bg-rose-400",
+                      },
+                      {
+                        collapsed: "bg-sky-900/90 hover:bg-sky-900 text-sky-50 border-r-4 border-sky-400",
+                        expanded: "bg-sky-950 text-white border-r-4 border-sky-300 shadow-md",
+                        accentDot: "bg-sky-400",
+                      },
+                      {
+                        collapsed: "bg-emerald-900/90 hover:bg-emerald-900 text-emerald-50 border-r-4 border-emerald-400",
+                        expanded: "bg-emerald-950 text-white border-r-4 border-emerald-300 shadow-md",
+                        accentDot: "bg-emerald-400",
+                      },
+                      {
+                        collapsed: "bg-orange-950/90 hover:bg-orange-950 text-orange-50 border-r-4 border-orange-400",
+                        expanded: "bg-orange-950 text-white border-r-4 border-orange-300 shadow-md",
+                        accentDot: "bg-orange-400",
+                      },
+                    ];
+
+                    const theme = UNIT_COLOR_SCHEMES[uIdx % UNIT_COLOR_SCHEMES.length];
+                    
+                    return (
+                      <div key={`unit-${uIdx}`} className="bg-white">
+                        {/* Unit Accordion Trigger */}
+                        <button
+                          type="button"
+                          onClick={() => toggleUnit(uIdx)}
+                          className={`w-full p-4 text-right font-black text-xs md:text-sm flex justify-between items-center transition-all duration-200 cursor-pointer ${
+                            isExpanded ? theme.expanded : theme.collapsed
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 flex-wrap text-right">
+                            <span className={`w-2.5 h-2.5 rounded-full ${theme.accentDot} inline-block shrink-0 shadow-xs`} />
+                            <span className="leading-tight">{unit.name}</span>
+                            {!isExpanded && isCurrentlySolvingInThisUnit && (
+                              <span className="bg-amber-400 text-slate-950 px-2.5 py-1 rounded-lg text-[11px] font-black border border-amber-300 animate-pulse flex items-center gap-1.5 shadow-sm">
+                                <span>✏️</span>
+                                <span>ملاحظة: جاري الحل في هذه الوحدة</span>
+                              </span>
+                            )}
+                          </div>
+                          <ChevronDown className={`w-4 h-4 transition-transform duration-200 shrink-0 mr-2 ${isExpanded ? "rotate-180 text-white" : "text-slate-300"}`} />
+                        </button>
+
+                        {/* Lessons Stack */}
+                        <AnimatePresence initial={false}>
+                          {isExpanded && (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              className="overflow-hidden bg-slate-50"
+                            >
+                              <div className="p-2 space-y-1">
+                                {matchingLessons.map(({ lesson, lIdx }) => {
+                                  const isActive = isPlaying && activeUnitIdx === uIdx && activeLessonIdx === lIdx;
+                                  const statsKey = `${selectedSubject}_${unit.name}_${lesson.name}`;
+                                  const stat = lessonStats[statsKey];
+                                  
+                                  let statusText: React.ReactNode = "لم يحل";
+                                  let badgeColor = "bg-rose-50 text-rose-600 border border-rose-500 font-bold shadow-xs";
+                                  
+                                  if (isActive) {
+                                    statusText = "جاري الحل";
+                                    badgeColor = "bg-blue-50 text-blue-600 border border-blue-500 font-black animate-pulse shadow-xs";
+                                  } else if (stat?.solved) {
+                                    if (stat.score === stat.maxScore) {
+                                      statusText = (
+                                        <span className="flex items-center gap-1">
+                                          <Trophy className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                                          <span>مكتمل ({stat.score}/{stat.maxScore})</span>
+                                        </span>
+                                      );
+                                      badgeColor = "bg-emerald-50 text-emerald-700 border border-emerald-500 font-bold shadow-xs";
+                                    } else {
+                                      statusText = `مكتمل (${stat.score}/${stat.maxScore})`;
+                                      badgeColor = "bg-amber-50 text-amber-700 border border-amber-500 font-bold shadow-xs";
+                                    }
                                   }
-                                }
 
-                                return (
-                                  <button
-                                    key={`lesson-${lIdx}`}
-                                    type="button"
-                                    onClick={() => selectLesson(uIdx, lIdx)}
-                                    className={`w-full p-3 rounded-xl text-right text-xs font-extrabold transition-all duration-200 cursor-pointer flex items-center justify-between gap-3 ${
-                                      isActive 
-                                        ? "bg-indigo-100/40 border border-indigo-200 text-indigo-800 shadow-xs font-black" 
-                                        : "hover:bg-slate-100 text-slate-700"
-                                    }`}
-                                  >
-                                    <div className="flex flex-col text-right">
-                                      <span className="font-bold text-xs md:text-sm text-slate-800">{lesson.name}</span>
-                                      <span className="text-xs text-slate-400 font-semibold mt-1">
-                                        عدد الأسئلة: {lesson.questions.length} أسئلة
+                                  return (
+                                    <button
+                                      key={`lesson-${lIdx}`}
+                                      type="button"
+                                      onClick={() => selectLesson(uIdx, lIdx)}
+                                      className={`w-full p-3 rounded-xl text-right text-xs font-extrabold transition-all duration-200 cursor-pointer flex items-center justify-between gap-3 ${
+                                        isActive 
+                                          ? "bg-indigo-100/40 border border-indigo-200 text-indigo-800 shadow-xs font-black" 
+                                          : "hover:bg-slate-100 text-slate-700"
+                                      }`}
+                                    >
+                                      <div className="flex flex-col text-right">
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="font-bold text-xs md:text-sm text-slate-800">{lesson.name}</span>
+                                          {normalizedLessonSearch && normalizeArabic(lesson.name).includes(normalizedLessonSearch) && (
+                                            <span className="bg-indigo-100 text-indigo-700 text-[10px] font-black px-1.5 py-0.2 rounded border border-indigo-200">
+                                              مطابق 🎯
+                                            </span>
+                                          )}
+                                        </div>
+                                        <span className="text-xs text-slate-400 font-semibold mt-1">
+                                          عدد الأسئلة: {lesson.questions.length} أسئلة
+                                        </span>
+                                      </div>
+
+                                      {/* Status Badge matching state layout */}
+                                      <span className={`text-[10.5px] font-bold px-2.5 py-1.5 rounded-lg border shrink-0 ${badgeColor}`}>
+                                        {statusText}
                                       </span>
-                                    </div>
-
-                                    {/* Status Badge matching state layout */}
-                                    <span className={`text-[10.5px] font-bold px-2.5 py-1.5 rounded-lg border shrink-0 ${badgeColor}`}>
-                                      {statusText}
-                                    </span>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                  );
-                })}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    );
+                  });
+                })()}
               </div>
             </div>
 

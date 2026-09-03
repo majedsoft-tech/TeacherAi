@@ -2,7 +2,7 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 import dotenv from "dotenv";
 import mammoth from "mammoth";
 import * as XLSX from "xlsx";
@@ -185,15 +185,20 @@ async function generateGeminiContentWithRetry(
   },
   maxRetries = 6
 ): Promise<any> {
-  const requestedModel = params.model || "gemini-2.5-flash";
+  const defaultModel = "gemini-3.8-flash";
+  const rawRequested = params.model;
+  // Automatically sanitize deprecated models
+  const requestedModel = (!rawRequested || rawRequested.includes("2.5") || rawRequested.includes("1.5") || rawRequested.includes("2.0"))
+    ? defaultModel
+    : rawRequested;
   
-  // Multi-tier pool of high-capacity models with distinct fallback order
-  const candidateModels = [
+  // Multi-tier pool of high-capacity modern models with distinct fallback order
+  const candidateModels = Array.from(new Set([
     requestedModel,
-    "gemini-2.5-flash",
-    "gemini-flash-latest",
-    "gemini-3.7-flash"
-  ];
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-flash-latest"
+  ])).filter(Boolean);
 
   let lastError: any = null;
 
@@ -217,26 +222,35 @@ async function generateGeminiContentWithRetry(
                                  errMsg.includes("UNAVAILABLE") || 
                                  errMsg.includes("high demand") ||
                                  errMsg.includes("overloaded");
+      const isNotFoundOr404 = errMsg.includes("404") || 
+                              errMsg.includes("NOT_FOUND") || 
+                              errMsg.includes("no longer available") ||
+                              errMsg.includes("not found");
 
-      console.warn(`[Gemini API Attempt ${attempt + 1}/${maxRetries}] Model "${currentModel}" encountered ${isQuotaOr429 ? '429 Quota/Rate-limit' : isUnavailableOr503 ? '503 Unavailable' : 'Error'}: ${errMsg.slice(0, 180)}`);
+      console.warn(`[Gemini API Attempt ${attempt + 1}/${maxRetries}] Model "${currentModel}" encountered ${isNotFoundOr404 ? '404 Deprecated/Not Found' : isQuotaOr429 ? '429 Quota/Rate-limit' : isUnavailableOr503 ? '503 Unavailable' : 'Error'}: ${errMsg.slice(0, 180)}`);
 
       if (attempt < maxRetries - 1) {
         let waitTimeMs = 3000 * (attempt + 1);
 
-        // Extract explicit retryDelay if provided in the Gemini API error body
-        const retryMatch = errMsg.match(/retry in\s+([\d\.]+)\s*s/i) || 
-                           errMsg.match(/retryDelay["']?:\s*["']?(\d+)/i);
-        if (retryMatch && retryMatch[1]) {
-          const parsedSec = parseFloat(retryMatch[1]);
-          if (!isNaN(parsedSec) && parsedSec > 0) {
-            waitTimeMs = Math.min(Math.ceil(parsedSec * 1000) + 1000, 15000);
+        if (isNotFoundOr404) {
+          // Instant switch to modern supported model without wasted delay
+          waitTimeMs = 50;
+        } else {
+          // Extract explicit retryDelay if provided in the Gemini API error body
+          const retryMatch = errMsg.match(/retry in\s+([\d\.]+)\s*s/i) || 
+                             errMsg.match(/retryDelay["']?:\s*["']?(\d+)/i);
+          if (retryMatch && retryMatch[1]) {
+            const parsedSec = parseFloat(retryMatch[1]);
+            if (!isNaN(parsedSec) && parsedSec > 0) {
+              waitTimeMs = Math.min(Math.ceil(parsedSec * 1000) + 1000, 15000);
+            }
+          } else if (isUnavailableOr503) {
+            // Instant failover to alternate model cluster for temporary model high-demand spikes
+            waitTimeMs = 250;
+          } else if (isQuotaOr429) {
+            // Exponential backoff to allow RPM/TPM quota windows to refresh
+            waitTimeMs = Math.min(4000 * (attempt + 1), 18000);
           }
-        } else if (isUnavailableOr503) {
-          // Instant failover to alternate model cluster for temporary model high-demand spikes
-          waitTimeMs = 250;
-        } else if (isQuotaOr429) {
-          // Exponential backoff to allow RPM/TPM quota windows to refresh
-          waitTimeMs = Math.min(4000 * (attempt + 1), 18000);
         }
 
         const nextModel = candidateModels[Math.min(attempt + 1, candidateModels.length - 1)];
@@ -357,7 +371,7 @@ async function startServer() {
       }
 
       const response = await generateGeminiContentWithRetry(ai, {
-        model: "gemini-3.7-flash",
+        model: "gemini-3.8-flash",
         contents: {
           parts: contentsParts
         },
@@ -365,7 +379,7 @@ async function startServer() {
           systemInstruction,
           responseMimeType: "application/json",
           thinkingConfig: {
-            thinkingBudget: 0
+            thinkingLevel: ThinkingLevel.LOW
           },
           responseSchema: {
             type: Type.OBJECT,
@@ -599,7 +613,7 @@ ${subjectOverride && subjectOverride !== "auto" ? `   - "subject": "${subjectOve
         }
 
         const response = await generateGeminiContentWithRetry(ai, {
-          model: "gemini-3.7-flash",
+          model: "gemini-3.8-flash",
           contents: {
             parts: targetParts
           },
@@ -609,7 +623,7 @@ ${subjectOverride && subjectOverride !== "auto" ? `   - "subject": "${subjectOve
             maxOutputTokens: 16384,
             temperature: 0.2,
             thinkingConfig: {
-              thinkingBudget: 0
+              thinkingLevel: ThinkingLevel.LOW
             },
             responseSchema: questionResponseSchema
           }
@@ -789,7 +803,7 @@ ${correctAnswer ? `- الإجابة الصحيحة: "${correctAnswer}"` : ""}
       let hintText = "";
       try {
         const response = await generateGeminiContentWithRetry(ai, {
-          model: "gemini-2.5-flash",
+          model: "gemini-3.8-flash",
           contents: prompt,
           config: {
             systemInstruction: "أنت موجه تعليمي خبير يقدم إرشادات وتلميحات تربوية ذكية ومحفزة لمساعدة الطلاب على الفهم والحل الذاتي.",

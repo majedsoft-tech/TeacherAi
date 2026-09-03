@@ -71,9 +71,9 @@ ${correctAnswer ? `- الإجابة الصحيحة: "${correctAnswer}"` : ""}
 - أسلوب تربوي ومحفز ومناسب للطلاب.`;
 
     const candidateModels = [
-      "gemini-2.5-flash",
-      "gemini-flash-latest",
-      "gemini-3.7-flash"
+      "gemini-3.8-flash",
+      "gemini-3.6-flash",
+      "gemini-flash-latest"
     ];
 
     let hintText = "";

@@ -772,17 +772,7 @@ export default function StudentCurriculumReview({
       hint = `حلل معطيات السؤال واستحضر القواعد والتعريفات الأساسية في الدرس لحصر الإجابة الصحيحة وتأكيدها.`;
     }
 
-    // 4. Motivational Encouragement
-    const encouragements = [
-      "ثق بقدراتك وركز خطوة بخطوة وستصل للحل الصحيح بإذن الله! 🌟",
-      "أنت رائع وقادر على التفكير الذكي والوصول للإجابة الصحيحة بكل ثقة! 🌟",
-      "تأنَّ في القراءة وستكتشف الخيار الدقيق بكل سهولة وتفوق! 🌟",
-      "كل سؤال تحله بذكاء يقربك أكثر من التميز والدرجة الكاملة! 🌟",
-      "التفكير المنهجي والتركيز هما مفتاح التفوق الدراسي.. استمر! 🌟"
-    ];
-    const chosenEncouragement = encouragements[Math.abs((text.length || 1) % encouragements.length)];
-
-    return `💡 **فكرة السؤال:** ${idea}\n🔍 **تلميح واستراتيجية الحل:** ${hint}\n🌟 **تشجيع:** ${chosenEncouragement}`;
+    return `💡 **فكرة السؤال:** ${idea}\n🔍 **تلميح واستراتيجية الحل:** ${hint}`;
   };
 
   const handleFetchAiHint = async (force: boolean = false) => {
@@ -823,10 +813,9 @@ export default function StudentCurriculumReview({
 ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ? `- الخيارات: ${currentQuestion.options.join(" - ")}` : ""}
 - المادة / الدرس: ${selectedSubject || ""} / ${activeLesson?.name || ""}
 
-يرجى صياغة الإرشاد بدقة في 3 نقاط واضحة باللغة العربية:
+يرجى صياغة الإرشاد بدقة في نقطتين واضحتين باللغة العربية:
 💡 **فكرة السؤال:** (المفهوم الأساسي بشكل مبسط)
-🔍 **تلميح واستراتيجية الحل:** (طريقة التفكير واستبعاد الخيارات)
-🌟 **تشجيع:** (عبارة تحفيزية إيجابية قصيرة)`;
+🔍 **تلميح واستراتيجية الحل:** (طريقة التفكير واستبعاد الخيارات)`;
 
           const geminiRes = await fetch(
             `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${viteGeminiKey}`,
@@ -836,7 +825,7 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
               signal: clientController.signal,
               body: JSON.stringify({
                 contents: [{ parts: [{ text: promptText }] }],
-                generationConfig: { maxOutputTokens: 600, temperature: 0.7 }
+                generationConfig: { maxOutputTokens: 500, temperature: 0.7 }
               })
             }
           );
@@ -1941,8 +1930,14 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
                                 {/* Formatted Hint Cards */}
                                 <div className="space-y-2.5">
                                   {(() => {
-                                    const parts = hint.split(/(?=💡|🔍|🌟)/g).map((s) => s.trim()).filter(Boolean);
-                                    if (parts.length >= 2) {
+                                    // Strictly filter out any encouragement element
+                                    const parts = hint
+                                      .split(/(?=💡|🔍|🌟)/g)
+                                      .map((s) => s.trim())
+                                      .filter(Boolean)
+                                      .filter((part) => !part.startsWith("🌟") && !part.includes("تشجيع"));
+
+                                    if (parts.length >= 1) {
                                       return (
                                         <div className="grid grid-cols-1 gap-2.5">
                                           {parts.map((part, pIdx) => {
@@ -1951,15 +1946,12 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
                                             if (part.startsWith("🔍")) {
                                               cardStyle = "bg-amber-50/80 border-amber-200/80 text-amber-950";
                                               icon = "🔍";
-                                            } else if (part.startsWith("🌟")) {
-                                              cardStyle = "bg-emerald-50/80 border-emerald-200/80 text-emerald-950";
-                                              icon = "🌟";
                                             }
 
-                                            const cleanText = part.replace(/^(💡|🔍|🌟)\s*\**([^*:]+)\**:\s*/, "");
-                                            const matchTitle = part.match(/^(💡|🔍|🌟)\s*\**([^*:]+)\**/);
+                                            const cleanText = part.replace(/^(💡|🔍)\s*\**([^*:]+)\**:\s*/, "");
+                                            const matchTitle = part.match(/^(💡|🔍)\s*\**([^*:]+)\**/);
                                             const title = matchTitle?.[2] || (
-                                              part.startsWith("💡") ? "فكرة السؤال" : part.startsWith("🔍") ? "تلميح واستراتيجية الحل" : "تشجيع"
+                                              part.startsWith("💡") ? "فكرة السؤال" : "تلميح واستراتيجية الحل"
                                             );
 
                                             return (
@@ -1978,9 +1970,15 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
                                       );
                                     }
 
+                                    const cleanFallback = hint
+                                      .split("\n")
+                                      .filter((l) => !l.includes("🌟") && !l.includes("تشجيع"))
+                                      .join("\n")
+                                      .trim();
+
                                     return (
                                       <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-xs md:text-sm text-slate-800 leading-relaxed font-bold whitespace-pre-line">
-                                        {hint}
+                                        {cleanFallback || hint}
                                       </div>
                                     );
                                   })()}

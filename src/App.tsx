@@ -126,32 +126,100 @@ const DEFAULT_GRADES: string[] = [];
 
 const DEFAULT_SEMESTERS: string[] = [];
 
-const normalizeSemesterName = (name: string) => {
+export const normalizeGradeName = (name: string) => {
   if (!name) return "";
   let base = name.trim().toLowerCase();
-  base = base
-    .replace("الدراسي ", "")
-    .replace("شعبة ", "")
-    .replace("الشعبة ", "")
-    .replace("الفصل ", "")
-    .trim();
   base = base
     .replace(/[أإآ]/g, "ا")
     .replace(/ة/g, "ه")
     .replace(/ى/g, "ي")
-    .replace(/\s+/g, "");
+    .replace(/\s+/g, " ")
+    .trim();
   return base;
 };
 
-const normalizeGradeName = (name: string) => {
+export const normalizeSemesterName = (name: string) => {
   if (!name) return "";
   let base = name.trim().toLowerCase();
+
+  // Normalize Arabic letters
   base = base
     .replace(/[أإآ]/g, "ا")
     .replace(/ة/g, "ه")
-    .replace(/ى/g, "ي")
-    .replace(/\s+/g, " ");
+    .replace(/ى/g, "ي");
+
+  // Remove common prefixes safely
+  base = base
+    .replace(/^(الدراسي|شعبة|الشعبة|الفصل|فصل)\s*/g, "")
+    .replace(/^(الدراسي|شعبة|الشعبة|الفصل|فصل)\s*/g, "")
+    .trim();
+
+  // Map Arabic ordinals to numeric strings so "الفصل 1" and "الفصل الأول" match identically
+  if (base === "الاول" || base === "اول" || base === "1") return "1";
+  if (base === "الثاني" || base === "ثاني" || base === "2") return "2";
+  if (base === "الثالث" || base === "ثالث" || base === "3") return "3";
+  if (base === "الرابع" || base === "رابع" || base === "4") return "4";
+  if (base === "الخامس" || base === "خامس" || base === "5") return "5";
+  if (base === "السادس" || base === "سادس" || base === "6") return "6";
+  if (base === "السابع" || base === "سابع" || base === "7") return "7";
+  if (base === "الثامن" || base === "ثامن" || base === "8") return "8";
+  if (base === "التاسع" || base === "تاسع" || base === "9") return "9";
+  if (base === "العاشر" || base === "عاشر" || base === "10") return "10";
+
+  base = base.replace(/\s+/g, "");
   return base;
+};
+
+export const getStudentGradeAndSemester = (student: {
+  grade?: string;
+  semester?: string;
+  gradeClass?: string;
+}) => {
+  let grade = (student.grade || "").trim();
+  let semester = (student.semester || "").trim();
+
+  if ((!grade || !semester) && student.gradeClass) {
+    const gc = student.gradeClass.trim();
+    if (gc.includes(" - ")) {
+      const parts = gc.split(" - ");
+      if (!grade) grade = (parts[0] || "").trim();
+      if (!semester) semester = (parts[1] || "").trim();
+    } else if (gc.includes(" / ")) {
+      const parts = gc.split(" / ");
+      if (!grade) grade = (parts[0] || "").trim();
+      if (!semester) semester = (parts[1] || "").trim();
+    } else if (gc.includes("/")) {
+      const parts = gc.split("/");
+      if (!grade) grade = (parts[0] || "").trim();
+      if (!semester) semester = (parts[1] || "").trim();
+    } else if (gc.includes("-")) {
+      const parts = gc.split("-");
+      if (!grade) grade = (parts[0] || "").trim();
+      if (!semester) semester = (parts[1] || "").trim();
+    } else {
+      if (!grade) grade = gc;
+    }
+  }
+
+  return { grade, semester };
+};
+
+export const isStudentInClass = (
+  student: { grade?: string; semester?: string; gradeClass?: string },
+  targetGrade: string,
+  targetSemester: string,
+): boolean => {
+  if (!targetGrade || !targetSemester) return false;
+  const { grade: sGrade, semester: sSemester } = getStudentGradeAndSemester(student);
+  if (!sGrade || !sSemester) return false;
+
+  const normTargetGrade = normalizeGradeName(targetGrade);
+  const normStudentGrade = normalizeGradeName(sGrade);
+  if (normTargetGrade !== normStudentGrade) return false;
+
+  const normTargetSem = normalizeSemesterName(targetSemester);
+  const normStudentSem = normalizeSemesterName(sSemester);
+  return normTargetSem === normStudentSem;
 };
 
 export function getQuizAvailability(quiz: {
@@ -2437,24 +2505,10 @@ export default function App() {
     if (activeTab === "students" && selectedTabGrade && selectedTabSemester) {
       const activeGrade = selectedTabGrade || "";
       const activeSemester = selectedTabSemester || "";
-      const activeClassStudents = students.filter((student) => {
-        const sGrade =
-          student.grade ||
-          (student.gradeClass && student.gradeClass.includes(" - ")
-            ? student.gradeClass.split(" - ")[0].trim()
-            : "الصف العاشر");
-        const sSemester =
-          student.semester ||
-          (student.gradeClass && student.gradeClass.includes(" - ")
-            ? student.gradeClass.split(" - ")[1].trim()
-            : "الفصل الأول");
-        return (
-          normalizeGradeName(sGrade) === normalizeGradeName(activeGrade) &&
-          normalizeSemesterName(sSemester) ===
-            normalizeSemesterName(activeSemester)
-        );
-      });
-      const anyRequired = activeClassStudents.some(
+      const activeClassStudents = students.filter((student) =>
+        isStudentInClass(student, activeGrade, activeSemester),
+      );
+      const anyRequired = activeClassStudents.length > 0 && activeClassStudents.some(
         (s) => s.passwordRequired === true,
       );
       setIsPasswordRequiredGlobal(anyRequired);
@@ -2481,23 +2535,14 @@ export default function App() {
 
     const activeGrade = selectedTabGrade || "";
     const activeSemester = selectedTabSemester || "";
-    const activeClassStudents = students.filter((student) => {
-      const sGrade =
-        student.grade ||
-        (student.gradeClass && student.gradeClass.includes(" - ")
-          ? student.gradeClass.split(" - ")[0].trim()
-          : "الصف العاشر");
-      const sSemester =
-        student.semester ||
-        (student.gradeClass && student.gradeClass.includes(" - ")
-          ? student.gradeClass.split(" - ")[1].trim()
-          : "الفصل الأول");
-      return (
-        normalizeGradeName(sGrade) === normalizeGradeName(activeGrade) &&
-        normalizeSemesterName(sSemester) ===
-          normalizeSemesterName(activeSemester)
-      );
-    });
+    const activeClassStudents = students.filter((student) =>
+      isStudentInClass(student, activeGrade, activeSemester),
+    );
+
+    if (activeClassStudents.length === 0) {
+      triggerToast(`لا يوجد طلاب مسجلون في فصل (${activeSemester}) لتغيير إعداد كلمة المرور`, "info");
+      return;
+    }
 
     try {
       const batch = writeBatch(db);
@@ -2506,36 +2551,61 @@ export default function App() {
         batch.update(studentRef, { passwordRequired: required });
       });
       await batch.commit();
+
+      // Immediate local state update isolated strictly to this class
+      setStudents((prev) =>
+        prev.map((s) => {
+          const isTarget = activeClassStudents.some((acs) => acs.id === s.id);
+          return isTarget ? { ...s, passwordRequired: required } : s;
+        }),
+      );
+
+      triggerToast(
+        required
+          ? `تم تفعيل متطلب كلمة المرور لطلاب فصل (${activeSemester}) فقط بنجاح`
+          : `تم إلغاء متطلب كلمة المرور لطلاب فصل (${activeSemester}) فقط بنجاح`,
+        "success",
+      );
     } catch (err) {
       console.error("Error updating passwordRequired in batch", err);
+      triggerToast("حدث خطأ أثناء تعديل متطلب كلمة المرور", "error");
     }
-
-    triggerToast(
-      required
-        ? "تم تفعيل متطلب كلمة المرور لجميع طلاب هذا الصف بنجاح"
-        : "تم إلغاء متطلب كلمة المرور لجميع طلاب هذا الصف بنجاح",
-      "success",
-    );
   };
 
-  const handleClearAllPasswords = async () => {
-    if (filteredStudents.length === 0) {
-      triggerToast("لا يوجد طلاب مسجلون حالياً لمسح كلمات مرورهم", "info");
+  const handleClearAllPasswords = async (grade?: string, semester?: string) => {
+    const activeGrade = grade || selectedTabGrade || "";
+    const activeSemester = semester || selectedTabSemester || "";
+
+    if (!activeGrade || !activeSemester) {
+      triggerToast("يرجى اختيار الصف والفصل أولاً", "info");
       return;
     }
 
-    const studentsWithPasswords = filteredStudents.filter((s) => s.password);
+    // Filter students belonging strictly to the chosen class/semester (completely isolated)
+    const activeClassStudents = students.filter((student) =>
+      isStudentInClass(student, activeGrade, activeSemester),
+    );
+
+    if (activeClassStudents.length === 0) {
+      triggerToast(
+        `لا يوجد طلاب مسجلون حالياً في فصل (${activeGrade} - ${activeSemester}) لمسح كلمات مرورهم`,
+        "info",
+      );
+      return;
+    }
+
+    const studentsWithPasswords = activeClassStudents.filter((s) => s.password);
     if (studentsWithPasswords.length === 0) {
       triggerToast(
-        "لا توجد كلمات مرور مسجلة لمسحها لدى طلاب الصف المعروضين حالياً",
+        `لا توجد كلمات مرور مسجلة لمسحها لدى طلاب فصل (${activeGrade} - ${activeSemester})`,
         "info",
       );
       return;
     }
 
     triggerConfirm(
-      "تأكيد مسح جميع كلمات المرور للطلاب",
-      `هل أنت متأكد من رغبتك في مسح وحذف كلمات المرور لجميع الطلاب المعروضين بالجدول حالياً (عدد الطلاب: ${studentsWithPasswords.length})؟ هذا الإجراء سيتم تطبيقه على الفور وبسرعة فائقة.`,
+      `تأكيد مسح كلمات مرور فصل: ${activeGrade} - ${activeSemester}`,
+      `هل أنت متأكد من مسح وحذف كلمات المرور لطلاب هذا الفصل فقط: "${activeGrade} - ${activeSemester}"؟\n\n- الصف: ${activeGrade}\n- الفصل المستهدف: ${activeSemester}\n- عدد الطلاب المتأثرين: ${studentsWithPasswords.length} طالب\n\n🔒 ملاحظة أمان: هذا الإجراء معزول تماماً وسيتم مسح كلمات المرور لهذا الفصل فقط دون المساس بكلمات مرور أي فصل أو صف آخر إطلاقاً.`,
       async () => {
         try {
           const batch = writeBatch(db);
@@ -2546,7 +2616,7 @@ export default function App() {
           
           await batch.commit();
 
-          // Update local state
+          // Update local state strictly for targeted students of this class only
           setStudents((prev) =>
             prev.map((s) => {
               const isTargeted = studentsWithPasswords.some(
@@ -2557,7 +2627,7 @@ export default function App() {
           );
 
           triggerToast(
-            `تم مسح كلمات المرور بنجاح لعدد ${studentsWithPasswords.length} من الطلاب 🔑`,
+            `تم مسح كلمات المرور بنجاح لطلاب فصل (${activeSemester}) فقط (${studentsWithPasswords.length} طالب) 🔑`,
             "success",
           );
         } catch (err) {
@@ -2566,52 +2636,29 @@ export default function App() {
         }
       },
       undefined,
-      "نعم، مسح جميع كلمات المرور",
+      `نعم، مسح كلمات مرور (${activeSemester})`,
       "إلغاء الإجراء",
     );
   };
 
-  const handleAutoGeneratePasswords = async () => {
+  const handleAutoGeneratePasswords = async (grade?: string, semester?: string) => {
     if (!currentUser) return;
     
-    const activeGrade = selectedTabGrade || "";
-    const activeSemester = selectedTabSemester || "";
+    const activeGrade = grade || selectedTabGrade || "";
+    const activeSemester = semester || selectedTabSemester || "";
 
     if (!activeGrade || !activeSemester) {
       triggerToast("يرجى اختيار الصف والفصل الدراسي أولاً", "info");
       return;
     }
 
-    // Resolve student class and filter by selected activeGrade and activeSemester
-    const activeClassStudents = students.filter((student) => {
-      const sGrade =
-        student.grade ||
-        (student.gradeClass && student.gradeClass.includes(" - ")
-          ? student.gradeClass.split(" - ")[0].trim()
-          : "الصف العاشر");
-      const sSemester =
-        student.semester ||
-        (student.gradeClass && student.gradeClass.includes(" - ")
-          ? student.gradeClass.split(" - ")[1].trim()
-          : "الفصل الأول");
-      return (
-        normalizeGradeName(sGrade) === normalizeGradeName(activeGrade) &&
-        normalizeSemesterName(sSemester) === normalizeSemesterName(activeSemester)
-      );
-    });
-
-    // Apply any active search filter on this list
-    const queryVal = studentSearch.toLowerCase().trim();
-    const targetStudents = activeClassStudents.filter((student) => {
-      return (
-        !queryVal ||
-        student.name.toLowerCase().includes(queryVal) ||
-        student.email.toLowerCase().includes(queryVal)
-      );
-    });
+    // Resolve student class and filter strictly by activeGrade and activeSemester (completely isolated)
+    const targetStudents = students.filter((student) =>
+      isStudentInClass(student, activeGrade, activeSemester),
+    );
 
     if (targetStudents.length === 0) {
-      triggerToast(`لا يوجد طلاب مسجلون في ${activeGrade} (${activeSemester}) لتوليد كلمات مرور لهم`, "info");
+      triggerToast(`لا يوجد طلاب مسجلون في فصل (${activeGrade} - ${activeSemester}) لتوليد كلمات مرور لهم`, "info");
       return;
     }
 
@@ -2622,8 +2669,8 @@ export default function App() {
     ];
 
     triggerConfirm(
-      "تأكيد توليد كلمات مرور سهلة تلقائياً",
-      `هل أنت متأكد من رغبتك في توليد كلمات مرور سهلة وتلقائية لطلاب هذا الفصل فقط: "${activeGrade} - ${activeSemester}" (عدد الطلاب: ${targetStudents.length})؟ سيتم تحديث وتثبيت كلمات المرور لهم فوراً وبسرعة فائقة.`,
+      `تأكيد توليد كلمات مرور لفصل: ${activeGrade} - ${activeSemester}`,
+      `هل أنت متأكد من توليد كلمات مرور سهلة وتلقائية لطلاب هذا الفصل فقط: "${activeGrade} - ${activeSemester}"؟\n\n- الصف: ${activeGrade}\n- الفصل المستهدف: ${activeSemester}\n- عدد الطلاب المستهدفين: ${targetStudents.length} طالب\n\n🔒 ملاحظة أمان: هذا الإجراء مخصص ومعزول بالكامل لهذا الفصل فقط، ولن تتغير كلمات مرور أي فصل أو صف آخر نهائياً.`,
       async () => {
         // Start process and show progress indicator
         setPasswordGenProgress({
@@ -2640,7 +2687,7 @@ export default function App() {
           targetStudents.forEach((student) => {
             const randPattern = easyPatterns[Math.floor(Math.random() * easyPatterns.length)];
             const studentRef = doc(db, "students", student.id);
-            batch.update(studentRef, { password: randPattern });
+            batch.update(studentRef, { password: randPattern, passwordRequired: true });
             updatedResults.push({ id: student.id, password: randPattern });
           });
 
@@ -2655,14 +2702,16 @@ export default function App() {
             studentName: "اكتمل",
           });
 
+          // Update local state strictly for targeted students of this class
           setStudents((prev) =>
             prev.map((s) => {
               const updated = updatedResults.find((ur) => ur.id === s.id);
-              return updated ? { ...s, password: updated.password } : s;
+              return updated ? { ...s, password: updated.password, passwordRequired: true } : s;
             })
           );
+          setIsPasswordRequiredGlobal(true);
 
-          triggerToast(`تم توليد كلمات مرور سهلة بنجاح لعدد ${updatedResults.length} من طلاب الفصل المختار! 🔑`, "success");
+          triggerToast(`تم توليد كلمات مرور سهلة بنجاح لطلاب فصل (${activeSemester}) فقط (${updatedResults.length} طالب)! 🔑`, "success");
         } catch (err: any) {
           console.error("Error auto-generating passwords", err);
           triggerToast("حدث خطأ أثناء توليد كلمات المرور تلقائياً", "error");
@@ -2674,7 +2723,7 @@ export default function App() {
         }
       },
       undefined,
-      "نعم، توليد كلمات مرور",
+      `نعم، توليد كلمات مرور (${activeSemester})`,
       "إلغاء الإجراء"
     );
   };
@@ -4211,11 +4260,7 @@ export default function App() {
     (gName: string): number => {
       if (!gName) return 0;
       return students.filter((student) => {
-        const sGrade =
-          student.grade ||
-          (student.gradeClass && student.gradeClass.includes(" - ")
-            ? student.gradeClass.split(" - ")[0].trim()
-            : "الصف العاشر");
+        const { grade: sGrade } = getStudentGradeAndSemester(student);
         return normalizeGradeName(sGrade) === normalizeGradeName(gName);
       }).length;
     },
@@ -4225,22 +4270,17 @@ export default function App() {
   const getStudentsCountForSemester = useCallback(
     (gName: string, semName: string): number => {
       if (!gName || !semName) return 0;
-      return students.filter((student) => {
-        const sGrade =
-          student.grade ||
-          (student.gradeClass && student.gradeClass.includes(" - ")
-            ? student.gradeClass.split(" - ")[0].trim()
-            : "الصف العاشر");
-        const sSemester =
-          student.semester ||
-          (student.gradeClass && student.gradeClass.includes(" - ")
-            ? student.gradeClass.split(" - ")[1].trim()
-            : "الفصل الأول");
-        return (
-          normalizeGradeName(sGrade) === normalizeGradeName(gName) &&
-          normalizeSemesterName(sSemester) === normalizeSemesterName(semName)
-        );
-      }).length;
+      return students.filter((student) => isStudentInClass(student, gName, semName)).length;
+    },
+    [students],
+  );
+
+  const getStudentsWithPasswordsCountForSemester = useCallback(
+    (gName: string, semName: string): number => {
+      if (!gName || !semName) return 0;
+      return students.filter(
+        (student) => isStudentInClass(student, gName, semName) && !!student.password,
+      ).length;
     },
     [students],
   );
@@ -10958,25 +10998,10 @@ export default function App() {
                 const activeGrade = selectedTabGrade || "";
                 const activeSemester = selectedTabSemester || "";
 
-                // Resolve student class and filter by selected activeGrade and activeSemester
-                const activeClassStudents = students.filter((student) => {
-                  const sGrade =
-                    student.grade ||
-                    (student.gradeClass && student.gradeClass.includes(" - ")
-                      ? student.gradeClass.split(" - ")[0].trim()
-                      : "الصف العاشر");
-                  const sSemester =
-                    student.semester ||
-                    (student.gradeClass && student.gradeClass.includes(" - ")
-                      ? student.gradeClass.split(" - ")[1].trim()
-                      : "الفصل الأول");
-                  return (
-                    normalizeGradeName(sGrade) ===
-                      normalizeGradeName(activeGrade) &&
-                    normalizeSemesterName(sSemester) ===
-                      normalizeSemesterName(activeSemester)
-                  );
-                });
+                // Resolve student class and filter by selected activeGrade and activeSemester strictly
+                const activeClassStudents = students.filter((student) =>
+                  isStudentInClass(student, activeGrade, activeSemester),
+                );
 
                 // Apply search query only
                 const queryVal = studentSearch.toLowerCase().trim();
@@ -11830,6 +11855,7 @@ export default function App() {
                             };
                             const semesterNum = getSemesterNumber(s, idx);
                             const semCount = getStudentsCountForSemester(selectedTabGrade, s);
+                            const semWithPass = getStudentsWithPasswordsCountForSemester(selectedTabGrade, s);
 
                             return (
                               <button
@@ -11845,7 +11871,7 @@ export default function App() {
                                     ? "border-[#5352ed] shadow-md shadow-[#5352ed]/20 transform scale-105"
                                     : "border-indigo-200 hover:border-indigo-400 bg-white shadow-3xs"
                                 }`}
-                                title={`${s} - (${semCount} طالب)`}
+                                title={`${s} - (${semCount} طالب${semWithPass > 0 ? ` - ${semWithPass} بكلمة مرور` : ""})`}
                               >
                                 {/* Top Section: Class number and check/plus */}
                                 <div
@@ -11858,6 +11884,9 @@ export default function App() {
                                   <span>{semesterNum}</span>
                                   {isSemSelected && (
                                     <Check className="w-3.5 h-3.5 text-white stroke-[3]" />
+                                  )}
+                                  {semWithPass > 0 && !isSemSelected && (
+                                    <span className="text-[10px] opacity-75" title={`${semWithPass} طالب لديهم كلمات مرور`}>🔑</span>
                                   )}
                                 </div>
 
@@ -11891,23 +11920,29 @@ export default function App() {
                               )}
                             </div>
                             <div>
-                              <h4 className="font-extrabold text-slate-800 text-sm">
-                                {activeTab === "students"
-                                  ? "كشف طلاب:"
-                                  : "كشف نتائج طلاب:"}{" "}
+                              <h4 className="font-extrabold text-slate-800 text-sm flex flex-wrap items-center gap-1.5">
+                                <span>{activeTab === "students" ? "كشف طلاب:" : "كشف نتائج طلاب:"}</span>
                                 <span className="text-indigo-700 font-black">
                                   {selectedTabGrade}
                                 </span>{" "}
-                                -{" "}
-                                <span className="text-indigo-700 font-black">
+                                <span className="text-slate-400 font-normal">-</span>
+                                <span className="text-indigo-700 font-black bg-indigo-50/80 border border-indigo-200/80 px-2 py-0.5 rounded-lg text-xs">
                                   {selectedTabSemester}
                                 </span>
                               </h4>
-                              <p className="text-[11px] text-slate-400 font-semibold mt-0.5">
-                                {activeTab === "students"
-                                  ? "تصفح كشف الطلاب، تفاصيل التحصيل، والتحكم في إضافة الطلاب أو السجلات."
-                                  : "استعراض مستمر لمستويات التقدم والتحصيل العام ونسب النجاح."}
-                              </p>
+                              <div className="flex flex-wrap items-center gap-2 mt-1">
+                                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-600">
+                                  {activeTab === "students"
+                                    ? "تصفح كشف الطلاب، تفاصيل التحصيل، والتحكم في كلمات المرور والسجلات."
+                                    : "استعراض مستمر لمستويات التقدم والتحصيل العام ونسب النجاح."}
+                                </span>
+                                {activeTab === "students" && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-50 text-blue-700 border border-blue-200/70">
+                                    <Key className="w-2.5 h-2.5" />
+                                    <span>عمليات كلمات المرور مستقلة وخاصة بفصل ({selectedTabSemester}) فقط</span>
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           </div>
 
@@ -12226,19 +12261,21 @@ export default function App() {
                                     <button
                                       type="button"
                                       disabled={passwordGenProgress.active}
-                                      onClick={handleAutoGeneratePasswords}
+                                      onClick={() => handleAutoGeneratePasswords(activeGrade, activeSemester)}
                                       className="flex items-center justify-center gap-1.5 py-2 px-2 text-[10px] font-black rounded-xl border border-blue-200 bg-blue-50 text-blue-700 active:scale-95 transition-all cursor-pointer"
+                                      title={`توليد تلقائي لكلمات مرور سهلة لطلاب فصل (${activeSemester}) فقط`}
                                     >
                                       <Sparkles className="w-3 h-3 text-blue-500" />
-                                      <span>توليد تلقائي 🔑</span>
+                                      <span>توليد كلمات ({activeSemester}) 🔑</span>
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={handleClearAllPasswords}
+                                      onClick={() => handleClearAllPasswords(activeGrade, activeSemester)}
                                       className="flex items-center justify-center gap-1.5 py-2 px-2 text-[10px] font-black rounded-xl border border-rose-200 bg-rose-50 text-rose-600 active:scale-95 transition-all cursor-pointer"
+                                      title={`مسح وحذف كلمات مرور طلاب فصل (${activeSemester}) فقط`}
                                     >
                                       <Eraser className="w-3 h-3 text-rose-500" />
-                                      <span>مسح الكلمات</span>
+                                      <span>مسح كلمات ({activeSemester})</span>
                                     </button>
                                   </div>
                                 </div>
@@ -12438,10 +12475,10 @@ export default function App() {
                                                  <span className="text-xl shrink-0">💡</span>
                                                  <div className="space-y-1">
                                                    <span className="font-extrabold text-amber-300 block text-xs">
-                                                     ملاحظة مهمة حول كلمة المرور
+                                                     ملاحظة: كلمات المرور مستقلة لكل فصل
                                                    </span>
                                                    <p className="text-slate-200 text-xs font-normal leading-relaxed">
-                                                     بعد تفعيل كلمة المرور لأول مرة، سوف يتم مطالبة الطالب بإنشاء كلمة المرور لأول مرة عند تسجيل دخوله، أو يمكنك إنشاء كلمة المرور تلقائية وتوزيعها على الطلاب.
+                                                     توليد ومسح كلمات المرور هنا مستقل لكل فصل تماماً ولا يؤثر على الفصول أو الصفوف الأخرى. بعد تفعيلها، يطالب الطالب بكلمة المرور عند الدخول، أو يمكنك توليدها وتوزيعها فوراً.
                                                    </p>
                                                  </div>
                                                </div>
@@ -12453,7 +12490,7 @@ export default function App() {
                                           <button
                                             type="button"
                                             disabled={passwordGenProgress.active}
-                                            onClick={handleAutoGeneratePasswords}
+                                            onClick={() => handleAutoGeneratePasswords(activeGrade, activeSemester)}
                                             className={`w-full inline-flex items-center justify-center gap-1.5 px-2 py-1.5 text-[10px] font-black rounded-lg border transition-all cursor-pointer shadow-3xs ${
                                               passwordGenProgress.active
                                                 ? "bg-amber-50 text-amber-800 border-amber-200 cursor-not-allowed"
@@ -12462,7 +12499,7 @@ export default function App() {
                                             title={
                                               passwordGenProgress.active
                                                 ? `جاري إنشاء كلمات المرور للطلاب (${passwordGenProgress.current} من ${passwordGenProgress.total})`
-                                                : "توليد تلقائي لكلمات مرور سهلة لجميع الطلاب"
+                                                : `توليد تلقائي لكلمات مرور سهلة لطلاب فصل (${activeSemester}) فقط دون التأثير على الفصول الأخرى`
                                             }
                                           >
                                             {passwordGenProgress.active ? (
@@ -12473,18 +12510,18 @@ export default function App() {
                                             ) : (
                                               <>
                                                 <Sparkles className="w-3 h-3 text-blue-500 shrink-0 animate-pulse" />
-                                                <span>توليد تلقائي سهل 🔑</span>
+                                                <span className="truncate">توليد كلمات ({activeSemester}) 🔑</span>
                                               </>
                                             )}
                                           </button>
                                           <button
                                             type="button"
-                                            onClick={handleClearAllPasswords}
+                                            onClick={() => handleClearAllPasswords(activeGrade, activeSemester)}
                                             className="w-full inline-flex items-center justify-center gap-1.5 px-2 py-1.5 text-[10px] font-black bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg border border-rose-200 transition-all cursor-pointer shadow-3xs"
-                                            title="مسح كلمات مرور جميع الطلاب بالجدول"
+                                            title={`مسح وحذف كلمات مرور طلاب فصل (${activeSemester}) فقط دون التأثير على الفصول الأخرى`}
                                           >
                                             <Eraser className="w-3 h-3 text-rose-500 shrink-0" />
-                                            <span>مسح جميع الكلمات</span>
+                                            <span className="truncate">مسح كلمات ({activeSemester})</span>
                                           </button>
                                         </div>
                                       </div>

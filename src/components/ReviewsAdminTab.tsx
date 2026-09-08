@@ -1567,74 +1567,86 @@ export default function ReviewsAdminTab({
     const matchingChallenges = reviewChallenges.filter(c => c.id === fixedId || c.gameType === fg.gameType);
     const challenge = reviewChallenges.find(c => c.id === fixedId) || matchingChallenges[0];
 
-    if (!challenge || !challenge.questions || challenge.questions.length === 0) {
-      triggerToast(`يرجى تحديد وتعيين أسئلة للعبة (${fg.title}) أولاً لتفعيلها للطلاب`, "info");
-      handleEditGameQuestions(fg.gameType);
-      return;
+    const isCurrentlyActive = challenge ? (challenge.status === "active") : false;
+
+    // Only validate questions when ACTIVATING the game! If pausing/stopping, allow it immediately!
+    if (!isCurrentlyActive) {
+      if (!challenge || !challenge.questions || challenge.questions.length === 0) {
+        triggerToast(`يرجى تحديد وتعيين أسئلة للعبة (${fg.title}) أولاً لتفعيلها للطلاب`, "info");
+        handleEditGameQuestions(fg.gameType);
+        return;
+      }
     }
 
-    const targetDocId = challenge.id || fixedId;
-    const newStatus = challenge.status === "active" ? "completed" : "active";
-    const initialLiveState = "playing";
+    const { ids, targetChallenge, docId, gameType, title, teacherUid } = getAllMatchingDocIds(fg.id);
+    const newStatus = isCurrentlyActive ? "completed" : "active";
+    const initialLiveState = newStatus === "active" ? "playing" : "waiting";
     try {
       if (newStatus === "active") {
-        setSelectedChallengeId(targetDocId);
+        setSelectedChallengeId(docId);
         setActiveSubTab("leaderboard");
+      } else {
+        setSelectedChallengeId(null);
+        setSelectedLeaderboardChallengeId(null);
       }
 
-      await setDoc(doc(db, "reviewChallenges", targetDocId), {
-        ...challenge,
-        id: targetDocId,
-        status: newStatus,
-        liveState: newStatus === "active" ? initialLiveState : "waiting",
-        podiumAt: deleteField()
-      }, { merge: true });
-
-      // Synchronize any other documents matching this gameType so no stale active challenge exists
-      for (const ch of matchingChallenges) {
-        if (ch.id && ch.id !== targetDocId) {
-          await setDoc(doc(db, "reviewChallenges", ch.id), {
-            status: newStatus,
-            liveState: newStatus === "active" ? initialLiveState : "waiting",
-            podiumAt: deleteField()
-          }, { merge: true }).catch(() => {});
-        }
+      for (const id of ids) {
+        await setDoc(doc(db, "reviewChallenges", id), {
+          id,
+          status: newStatus,
+          liveState: initialLiveState,
+          podiumAt: deleteField(),
+          teacherId: teacherUid,
+          gameType: fg.gameType,
+          title: challenge?.title || fg.title
+        }, { merge: true }).catch(() => {});
       }
 
       // If pausing/stopping or activating/reactivating the game, eject all students and clear existing scores/presence completely
       if (newStatus === "completed" || newStatus === "active") {
-        await ejectAllStudentsForChallenge(targetDocId, fg.gameType);
-        await handleClearScores(targetDocId, fg.gameType, true, true);
+        await ejectAllStudentsForChallenge(docId, fg.gameType);
+        await handleClearScores(docId, fg.gameType, true, true);
       }
 
       triggerToast(
         newStatus === "active"
-          ? `تم تفعيل لعبة (${challenge.title}) للطلاب بالمعمل بنجاح 🟢`
+          ? `تم تفعيل لعبة (${fg.title}) للطلاب بالمعمل بنجاح 🟢`
           : `تم إيقاف اللعبة وإخراج جميع الطلاب وتصفير لوحة النتائج بنجاح ⏸️`,
         "success"
       );
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `reviewChallenges/${targetDocId}`);
+      handleFirestoreError(err, OperationType.UPDATE, `reviewChallenges/${docId}`);
     }
   };
 
   // Toggle status
   const toggleChallengeStatus = async (challenge: ReviewChallenge) => {
-    const newStatus = challenge.status === "active" ? "completed" : "active";
-    const initialLiveState = "playing";
+    const isCurrentlyActive = challenge.status === "active";
+    const newStatus = isCurrentlyActive ? "completed" : "active";
+    const initialLiveState = newStatus === "active" ? "playing" : "waiting";
+    const { ids, docId, gameType, teacherUid } = getAllMatchingDocIds(challenge.id);
+
     if (newStatus === "active") {
-      setSelectedChallengeId(challenge.id);
+      setSelectedChallengeId(docId);
       setActiveSubTab("leaderboard");
+    } else {
+      setSelectedChallengeId(null);
+      setSelectedLeaderboardChallengeId(null);
     }
+
     try {
-      await updateDoc(doc(db, "reviewChallenges", challenge.id), {
-        status: newStatus,
-        liveState: newStatus === "active" ? initialLiveState : "waiting",
-        podiumAt: deleteField()
-      });
+      for (const id of ids) {
+        await setDoc(doc(db, "reviewChallenges", id), {
+          status: newStatus,
+          liveState: initialLiveState,
+          podiumAt: deleteField(),
+          teacherId: teacherUid
+        }, { merge: true }).catch(() => {});
+      }
+
       if (newStatus === "completed" || newStatus === "active") {
-        await ejectAllStudentsForChallenge(challenge.id, challenge.gameType);
-        await handleClearScores(challenge.id, challenge.gameType, true, true);
+        await ejectAllStudentsForChallenge(docId, gameType);
+        await handleClearScores(docId, gameType, true, true);
       }
       triggerToast(
         newStatus === "active" ? "تم تفعيل التحدي للطلاب بنجاح" : "تم إيقاف وتجميد المراجعة وإخراج جميع الطلاب بنجاح ⏸️",
@@ -1737,20 +1749,51 @@ export default function ReviewsAdminTab({
     return { targetChallenge, docId, gameType, title };
   };
 
+  // Helper to get all document IDs that represent this challenge/game
+  const getAllMatchingDocIds = (challengeId: string) => {
+    const { targetChallenge, docId, gameType, title } = getResolvedChallenge(challengeId);
+    const teacherUid = currentUser?.uid || "teacher";
+    const ids = new Set<string>([
+      docId,
+      challengeId,
+      `fixed_game_${teacherUid}_${gameType}`,
+      `fixed_game_${gameType}`
+    ]);
+    if (targetChallenge?.id) ids.add(targetChallenge.id);
+
+    reviewChallenges.forEach(c => {
+      if (c.gameType === gameType || c.id === challengeId || c.id === docId) {
+        if (c.id) ids.add(c.id);
+      }
+    });
+
+    FIXED_GAMES.forEach(fg => {
+      if (fg.gameType === gameType) {
+        ids.add(fg.id);
+        ids.add(`fixed_game_${teacherUid}_${fg.gameType}`);
+      }
+    });
+
+    return { ids: Array.from(ids), targetChallenge, docId, gameType, title, teacherUid };
+  };
+
   const handleStartLiveGame = async (challengeId: string) => {
     try {
-      const { targetChallenge, docId, gameType, title } = getResolvedChallenge(challengeId);
+      const { ids, targetChallenge, docId, gameType, title, teacherUid } = getAllMatchingDocIds(challengeId);
       setSelectedChallengeId(docId);
       setActiveSubTab("leaderboard");
       triggerToast("تم بدء اللعبة المباشرة! الطلاب الآن في مواجهة حماسية 🚀", "success");
 
-      await setDoc(doc(db, "reviewChallenges", docId), {
-        status: "active",
-        liveState: "playing",
-        podiumAt: deleteField(),
-        gameType,
-        title: targetChallenge?.title || title
-      }, { merge: true });
+      for (const id of ids) {
+        await setDoc(doc(db, "reviewChallenges", id), {
+          status: "active",
+          liveState: "playing",
+          podiumAt: deleteField(),
+          teacherId: teacherUid,
+          gameType,
+          title: targetChallenge?.title || title
+        }, { merge: true }).catch(() => {});
+      }
       // Clear previous scores for this game when starting a fresh live session
       await handleClearScores(docId, gameType, true);
     } catch (err) {
@@ -1761,13 +1804,27 @@ export default function ReviewsAdminTab({
 
   const handleEndLiveGame = async (challengeId: string) => {
     try {
-      const { docId } = getResolvedChallenge(challengeId);
-      await setDoc(doc(db, "reviewChallenges", docId), {
-        status: "completed",
-        liveState: "podium",
-        podiumAt: new Date().toISOString()
-      }, { merge: true });
-      triggerToast("تم إنهاء اللعبة وتتويج الأبطال وإلغاء تفعيل اللعبة بنجاح 🏆", "success");
+      const { ids, targetChallenge, docId, gameType, title, teacherUid } = getAllMatchingDocIds(challengeId);
+      const podiumAt = new Date().toISOString();
+
+      // Update all documents representing this game to podium state
+      for (const id of ids) {
+        await setDoc(doc(db, "reviewChallenges", id), {
+          status: "active",
+          liveState: "podium",
+          podiumAt,
+          teacherId: teacherUid,
+          gameType,
+          title: targetChallenge?.title || title
+        }, { merge: true }).catch(err => console.warn(`Error updating challenge ${id} for podium:`, err));
+      }
+
+      // Transition teacher view to leaderboard podium view
+      setSelectedChallengeId(docId);
+      setActiveSubTab("leaderboard");
+      setSelectedLeaderboardChallengeId(null); // Close quick modal so teacher views full podium screen
+
+      triggerToast("تم إنهاء اللعبة وتتويج الأبطال بنجاح 🏆", "success");
     } catch (err) {
       console.error(err);
       triggerToast("فشل إنهاء اللعبة", "error");
@@ -1776,23 +1833,18 @@ export default function ReviewsAdminTab({
 
   const handleCloseWithoutPodium = async (challengeId: string) => {
     try {
-      const { docId } = getResolvedChallenge(challengeId);
-      await setDoc(doc(db, "reviewChallenges", docId), {
-        status: "completed",
-        liveState: "finished",
-        podiumAt: deleteField()
-      }, { merge: true });
+      const { ids, docId, gameType, teacherUid } = getAllMatchingDocIds(challengeId);
 
-      const q = query(
-        collection(db, "livePlayroomPresence"),
-        where("challengeId", "==", docId)
-      );
-      const snapshot = await getDocs(q);
-      const batch = writeBatch(db);
-      snapshot.forEach((docSnap) => {
-        batch.delete(docSnap.ref);
-      });
-      await batch.commit();
+      for (const id of ids) {
+        await setDoc(doc(db, "reviewChallenges", id), {
+          status: "completed",
+          liveState: "waiting",
+          podiumAt: deleteField(),
+          teacherId: teacherUid
+        }, { merge: true }).catch(() => {});
+      }
+
+      await ejectAllStudentsForChallenge(docId, gameType);
 
       // Return to main games list and close any active leaderboard view/modal
       setSelectedChallengeId(null);
@@ -1809,28 +1861,24 @@ export default function ReviewsAdminTab({
   const handleClosePodiumAndReturn = async (challengeId: string) => {
     // Return to main games list immediately to avoid showing waiting room screen
     setSelectedChallengeId(null);
+    setSelectedLeaderboardChallengeId(null);
     setActiveSubTab("list");
 
     try {
-      const { docId, gameType } = getResolvedChallenge(challengeId);
-      await updateDoc(doc(db, "reviewChallenges", docId), {
-        status: "completed",
-        liveState: "waiting",
-        podiumAt: deleteField()
-      });
-      await handleClearScores(docId, gameType, true);
+      const { ids, docId, gameType, teacherUid } = getAllMatchingDocIds(challengeId);
 
-      // Clear presence
-      const q = query(
-        collection(db, "livePlayroomPresence"),
-        where("challengeId", "==", docId)
-      );
-      const snapshot = await getDocs(q);
-      const batch = writeBatch(db);
-      snapshot.forEach((docSnap) => {
-        batch.delete(docSnap.ref);
-      });
-      await batch.commit();
+      for (const id of ids) {
+        await setDoc(doc(db, "reviewChallenges", id), {
+          status: "completed",
+          liveState: "waiting",
+          podiumAt: deleteField(),
+          teacherId: teacherUid
+        }, { merge: true }).catch(() => {});
+      }
+
+      await handleClearScores(docId, gameType, true);
+      await ejectAllStudentsForChallenge(docId, gameType);
+
       triggerToast("تم إغلاق شاشة التتويج والعودة للرئيسية بنجاح 🟢", "info");
     } catch (err) {
       console.warn("Error closing podium:", err);
@@ -1839,11 +1887,17 @@ export default function ReviewsAdminTab({
 
   const handleResetLiveGame = async (challengeId: string) => {
     try {
-      const { docId, gameType } = getResolvedChallenge(challengeId);
-      await setDoc(doc(db, "reviewChallenges", docId), {
-        liveState: "waiting",
-        podiumAt: deleteField()
-      }, { merge: true });
+      const { ids, docId, gameType, teacherUid } = getAllMatchingDocIds(challengeId);
+
+      for (const id of ids) {
+        await setDoc(doc(db, "reviewChallenges", id), {
+          status: "active",
+          liveState: "waiting",
+          podiumAt: deleteField(),
+          teacherId: teacherUid
+        }, { merge: true }).catch(() => {});
+      }
+
       // Also clear scores of the live challenge so we can play fresh
       await handleClearScores(docId, gameType, true);
       triggerToast("تمت إعادة تعيين اللعبة وصالة الانتظار وتصفير النقاط لتحدي جديد 🔄", "success");
@@ -1855,15 +1909,19 @@ export default function ReviewsAdminTab({
 
   const handleKickAllAndReset = async (challengeId: string) => {
     try {
-      const { docId, gameType } = getResolvedChallenge(challengeId);
+      const { ids, docId, gameType, teacherUid } = getAllMatchingDocIds(challengeId);
       // 1. Delete all presence records for this challenge & gameType
       await ejectAllStudentsForChallenge(docId, gameType);
 
-      // 2. Reset the challenge's live state to waiting and delete podiumAt
-      await setDoc(doc(db, "reviewChallenges", docId), {
-        liveState: "waiting",
-        podiumAt: deleteField()
-      }, { merge: true });
+      // 2. Reset the challenge's live state to waiting and delete podiumAt for all docs
+      for (const id of ids) {
+        await setDoc(doc(db, "reviewChallenges", id), {
+          status: "completed",
+          liveState: "waiting",
+          podiumAt: deleteField(),
+          teacherId: teacherUid
+        }, { merge: true }).catch(() => {});
+      }
 
       // 3. Clear the leaderboard/scores of the live challenge
       await handleClearScores(docId, gameType, true, true);

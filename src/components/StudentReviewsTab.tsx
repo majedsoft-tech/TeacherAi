@@ -907,6 +907,73 @@ export default function StudentReviewsTab({
   const [leaderboardTab, setLeaderboardTab] = useState<"live" | "cumulative">("live");
   const [liveActivePlayers, setLiveActivePlayers] = useState<any[]>([]);
 
+  // Helper to compute top 3 podium scores combining live presence, final submitted scores, and current session score
+  const getPodiumScores = () => {
+    const scoresMap = new Map<string, {
+      studentId: string;
+      studentName: string;
+      gradeClass: string;
+      score: number;
+    }>();
+
+    // 1. From liveActivePlayers
+    liveActivePlayers.forEach((p) => {
+      const key = (p.studentId || p.studentName || "").toString();
+      if (!key) return;
+      scoresMap.set(key, {
+        studentId: p.studentId || key,
+        studentName: p.studentName || "طالب",
+        gradeClass: p.gradeClass || activeStudent?.gradeClass || "عام",
+        score: p.score || 0
+      });
+    });
+
+    // 2. From reviewScores (persisted final scores for this challenge / gameType)
+    if (activeChallenge) {
+      const challengeScores = reviewScores.filter(s => 
+        s.challengeId === activeChallenge.id || 
+        s.challengeId === activeChallenge.gameType || 
+        s.challengeId === `fixed_game_${activeChallenge.gameType}`
+      );
+      challengeScores.forEach(s => {
+        const key = (s.studentId || s.studentName || "").toString();
+        if (!key) return;
+        const existing = scoresMap.get(key);
+        if (existing) {
+          existing.score = Math.max(existing.score, s.score || 0);
+          if (s.gradeClass) existing.gradeClass = s.gradeClass;
+        } else {
+          scoresMap.set(key, {
+            studentId: s.studentId || key,
+            studentName: s.studentName || "طالب",
+            gradeClass: s.gradeClass || "عام",
+            score: s.score || 0
+          });
+        }
+      });
+    }
+
+    // 3. Make sure current student's score is present
+    if (activeStudent) {
+      const myKey = activeStudent.id;
+      const existing = scoresMap.get(myKey);
+      if (existing) {
+        existing.score = Math.max(existing.score, score);
+      } else if (score > 0) {
+        scoresMap.set(myKey, {
+          studentId: activeStudent.id,
+          studentName: activeStudent.name,
+          gradeClass: activeStudent.gradeClass,
+          score: score
+        });
+      }
+    }
+
+    return Array.from(scoresMap.values())
+      .sort((a, b) => (b.score || 0) - (a.score || 0))
+      .slice(0, 3);
+  };
+
   // 1. Keep track of highest score achieved in this session per challenge
   useEffect(() => {
     if (!activeChallenge) return;
@@ -1120,24 +1187,40 @@ export default function StudentReviewsTab({
   useEffect(() => {
     if (!activeChallenge || !reviewChallenges || reviewChallenges.length === 0) return;
     
-    // 1. First attempt exact ID match
-    let matchingChallenge = reviewChallenges.find(c => c.id === activeChallenge.id);
+    // 1. First check if ANY challenge with same ID or same gameType is in podium state!
+    let matchingChallenge = reviewChallenges.find(
+      c => (c.id === activeChallenge.id || c.gameType === activeChallenge.gameType) && c.liveState === "podium"
+    );
 
-    // 2. If not found by exact ID, fallback to an ACTIVE challenge matching the gameType
+    // 2. If no podium, try exact ID match
     if (!matchingChallenge) {
-      matchingChallenge = reviewChallenges.find(c => c.gameType === activeChallenge.gameType && c.status === "active");
+      matchingChallenge = reviewChallenges.find(c => c.id === activeChallenge.id);
+    }
+
+    // 3. Fallback to any challenge matching the gameType
+    if (!matchingChallenge) {
+      matchingChallenge = reviewChallenges.find(
+        c => c.gameType === activeChallenge.gameType && (c.status === "active" || c.liveState === "podium")
+      );
+    }
+
+    // 4. Last fallback to any matching gameType
+    if (!matchingChallenge) {
+      matchingChallenge = reviewChallenges.find(c => c.gameType === activeChallenge.gameType);
     }
 
     if (!matchingChallenge) return;
     if (dismissedChallengeIdsRef.current.has(matchingChallenge.id) || dismissedChallengeIdsRef.current.has(matchingChallenge.gameType)) return;
 
-    // Only exit game if the EXACT challenge being played was explicitly deactivated/completed by the teacher AND it's not in podium state
-    if (
-      matchingChallenge.id === activeChallenge.id &&
-      matchingChallenge.status !== "active" &&
-      matchingChallenge.liveState !== "podium"
-    ) {
+    // Check if the game has been deactivated or stopped by the teacher (when not in podium)
+    const isDeactivatedOrStopped = (
+      (matchingChallenge.status !== "active" && matchingChallenge.liveState !== "podium") ||
+      (matchingChallenge.liveState === "waiting" && (prevLiveStateRef.current === "playing" || prevLiveStateRef.current === "podium"))
+    );
+
+    if (isDeactivatedOrStopped) {
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+      if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
       sfx.stopBGM();
       handleExitGame();
       clearSavedProgressForChallenge(matchingChallenge.id, matchingChallenge.gameType);
@@ -1164,6 +1247,7 @@ export default function StudentReviewsTab({
         triggerToast("انطلق! تم بدء المواجهة الحماسية الآن! 🚀", "success");
       } else if (newLiveState === "waiting" && (oldLiveState === "playing" || oldLiveState === "podium")) {
         if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+        if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
         sfx.stopBGM();
         setGameState("idle");
         setScore(0);
@@ -1175,15 +1259,16 @@ export default function StudentReviewsTab({
         sessionBestScoresRef.current = {};
         clearSavedProgressForChallenge(matchingChallenge.id, matchingChallenge.gameType);
         triggerToast("تمت العودة لصالة الانتظار للتحضير للجولة القادمة 🏟️", "info");
-      } else if (oldLiveState && oldLiveState !== "podium" && newLiveState === "podium") {
+      } else if (newLiveState === "podium") {
         if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+        if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
         sfx.stopBGM();
         sfx.playGameOver();
         setShowGameOverIntro(true);
         setTimeout(() => {
           setShowGameOverIntro(false);
         }, 1500);
-        if (matchingChallenge.gameType !== "wayground_arena") {
+        if (gameState !== "finished") {
           handleFinishGame();
         }
       }
@@ -3327,7 +3412,7 @@ export default function StudentReviewsTab({
                           </div>
 
                           <LivePodiumView
-                            scores={[...liveActivePlayers].sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 3)}
+                            scores={getPodiumScores()}
                             onReset={() => {}}
                             onClose={handleExitGame}
                             isAdmin={false}
@@ -3665,7 +3750,7 @@ export default function StudentReviewsTab({
                           </div>
 
                           <LivePodiumView
-                            scores={[...liveActivePlayers].sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 3)}
+                            scores={getPodiumScores()}
                             onReset={() => {}}
                             onClose={handleExitGame}
                             isAdmin={false}
@@ -3878,7 +3963,7 @@ export default function StudentReviewsTab({
                           </div>
 
                           <LivePodiumView
-                            scores={[...liveActivePlayers].sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 3)}
+                            scores={getPodiumScores()}
                             onReset={() => {}}
                             onClose={handleExitGame}
                             isAdmin={false}
@@ -4450,7 +4535,7 @@ export default function StudentReviewsTab({
                           </div>
 
                           <LivePodiumView
-                            scores={[...liveActivePlayers].sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 3)}
+                            scores={getPodiumScores()}
                             onReset={() => {}}
                             onClose={handleExitGame}
                             isAdmin={false}

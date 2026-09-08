@@ -1474,15 +1474,53 @@ export default function StudentReviewsTab({
       .replace(/\s+/g, " ");
   };
 
-  // Filter challenges appropriate for this student's grade
+  // Filter challenges appropriate for this student's grade and teacher
   const getMyChallenges = () => {
+    const currentTeacherId = teacherId || activeStudent?.teacherId;
     return reviewChallenges.filter(c => {
-      // Hide non-active (completed, draft, archived, etc.) challenges
+      // Must be strictly active
       const statusStr = (c.status as string) || "active";
       if (statusStr !== "active") return false;
+
+      // Must have actual questions to be considered active/playable
+      if (!c.questions || c.questions.length === 0) return false;
       
+      // If student has a specific teacher, do not show challenges from other teachers
+      if (currentTeacherId && c.teacherId && c.teacherId !== currentTeacherId) {
+        return false;
+      }
+
       return isGradeMatching(c.grade, activeStudent?.grade, activeStudent?.gradeClass);
     });
+  };
+
+  // Helper to accurately resolve a fixed game and its activation state for this student
+  const resolveFixedGameForStudent = (gameType: string, defaultId: string) => {
+    const myActiveChallenges = getMyChallenges();
+    const currentTeacherId = teacherId || activeStudent?.teacherId;
+
+    // 1. Is there an active, question-populated challenge for this student?
+    const activeChallenge = myActiveChallenges.find(
+      c => c.gameType === gameType || c.id === defaultId || (c.id && c.id.endsWith(`_${gameType}`))
+    );
+    if (activeChallenge) {
+      return { challenge: activeChallenge, isActivated: true };
+    }
+
+    // 2. Otherwise, find the best reference challenge (to display title, questions count, etc.)
+    const candidates = reviewChallenges.filter(
+      c => c.gameType === gameType || c.id === defaultId || (c.id && c.id.endsWith(`_${gameType}`))
+    );
+
+    const teacherCandidateWithQuestions = candidates.find(
+      c => currentTeacherId && c.teacherId === currentTeacherId && (c.questions?.length || 0) > 0
+    );
+    const candidateWithQuestions = candidates.find(c => (c.questions?.length || 0) > 0);
+    const teacherCandidate = candidates.find(c => currentTeacherId && c.teacherId === currentTeacherId);
+    const fallbackCandidate = candidates[0] || null;
+
+    const resolved = teacherCandidateWithQuestions || candidateWithQuestions || teacherCandidate || fallbackCandidate;
+    return { challenge: resolved, isActivated: false };
   };
 
   // Start or resume a challenge
@@ -2719,8 +2757,13 @@ export default function StudentReviewsTab({
 
               {/* Activated Games Highlight Banner */}
               {(() => {
-                const activeGamesList = getMyChallenges().filter(c => c.status === "active" && c.questions && c.questions.length > 0);
-                if (activeGamesList.length === 0) return null;
+                const activeFixedGames = [
+                  { gameType: "wayground_arena", id: "fixed_game_wayground_arena" },
+                  { gameType: "space_invaders", id: "fixed_game_space_invaders" },
+                  { gameType: "car_racing", id: "fixed_game_car_racing" },
+                ].filter(fg => resolveFixedGameForStudent(fg.gameType, fg.id).isActivated);
+
+                if (activeFixedGames.length === 0) return null;
                 return (
                   <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-600 rounded-2xl p-4 text-white shadow-lg flex flex-col sm:flex-row items-center justify-between gap-3 border border-emerald-400/40">
                     <div className="flex items-center gap-3">
@@ -2774,13 +2817,11 @@ export default function StudentReviewsTab({
                     headerBg: "bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 border-b-2 border-indigo-500/50",
                   }
                 ].map((fg) => {
-                  const myChallenges = getMyChallenges();
-                  const challenge = myChallenges.find(c => c.id === fg.id) || myChallenges.find(c => c.gameType === fg.gameType);
-                  const isActivated = challenge ? (challenge.status === "active" && challenge.questions && challenge.questions.length > 0) : false;
+                  const { challenge, isActivated } = resolveFixedGameForStudent(fg.gameType, fg.id);
                   
                   const questionsCount = challenge?.questions?.length || 0;
                   const totalScoresCount = challenge ? reviewScores.filter(s => s.challengeId === challenge.id).length : 0;
-                  const myBestScore = challenge ? reviewScores.find(s => s.challengeId === challenge.id && s.studentId === activeStudent.id) : null;
+                  const myBestScore = challenge ? reviewScores.find(s => s.challengeId === challenge.id && s.studentId === activeStudent?.id) : null;
 
                   return (
                     <div

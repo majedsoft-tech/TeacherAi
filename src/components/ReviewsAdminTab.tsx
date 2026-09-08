@@ -1563,11 +1563,10 @@ export default function ReviewsAdminTab({
 
   // Toggle Activation directly from Fixed Games List
   const handleToggleGameActivation = async (fg: typeof FIXED_GAMES[0]) => {
-    const fixedId = fg.id;
-    const matchingChallenges = reviewChallenges.filter(c => c.id === fixedId || c.gameType === fg.gameType);
-    const challenge = reviewChallenges.find(c => c.id === fixedId) || matchingChallenges[0];
+    const { ids, targetChallenge, docId, gameType, title, teacherUid } = getAllMatchingDocIds(fg.id);
+    const challenge = targetChallenge;
 
-    const isCurrentlyActive = challenge ? (challenge.status === "active") : false;
+    const isCurrentlyActive = challenge ? (challenge.status === "active" && (challenge.questions?.length || 0) > 0) : false;
 
     // Only validate questions when ACTIVATING the game! If pausing/stopping, allow it immediately!
     if (!isCurrentlyActive) {
@@ -1578,7 +1577,6 @@ export default function ReviewsAdminTab({
       }
     }
 
-    const { ids, targetChallenge, docId, gameType, title, teacherUid } = getAllMatchingDocIds(fg.id);
     const newStatus = isCurrentlyActive ? "completed" : "active";
     const initialLiveState = newStatus === "active" ? "playing" : "waiting";
     try {
@@ -1591,7 +1589,7 @@ export default function ReviewsAdminTab({
       }
 
       for (const id of ids) {
-        await setDoc(doc(db, "reviewChallenges", id), {
+        const updatePayload: any = {
           id,
           status: newStatus,
           liveState: initialLiveState,
@@ -1599,7 +1597,15 @@ export default function ReviewsAdminTab({
           teacherId: teacherUid,
           gameType: fg.gameType,
           title: challenge?.title || fg.title
-        }, { merge: true }).catch(() => {});
+        };
+        if (challenge?.questions && challenge.questions.length > 0) {
+          updatePayload.questions = challenge.questions;
+        }
+        if (challenge?.grade) updatePayload.grade = challenge.grade;
+        if (challenge?.semester) updatePayload.semester = challenge.semester;
+        if (challenge?.subject) updatePayload.subject = challenge.subject;
+
+        await setDoc(doc(db, "reviewChallenges", id), updatePayload, { merge: true }).catch(() => {});
       }
 
       // If pausing/stopping or activating/reactivating the game, eject all students and clear existing scores/presence completely
@@ -1739,12 +1745,34 @@ export default function ReviewsAdminTab({
 
   const getResolvedChallenge = (challengeId: string) => {
     const matchedFixedGame = FIXED_GAMES.find(fg => fg.id === challengeId || fg.gameType === challengeId);
-    const targetChallenge = reviewChallenges.find(c => c.id === challengeId) ||
-      reviewChallenges.find(c => c.gameType === challengeId) ||
-      reviewChallenges.find(c => matchedFixedGame && (c.gameType === matchedFixedGame.gameType || c.id === matchedFixedGame.id));
+    const teacherUid = currentUser?.uid;
+    const targetGameType = matchedFixedGame?.gameType || (challengeId.startsWith("fixed_game_") ? challengeId.replace(/^fixed_game_([^_]+_)?/, "") : challengeId);
+
+    const candidates = reviewChallenges.filter(c => 
+      c.id === challengeId ||
+      c.gameType === challengeId ||
+      (targetGameType && c.gameType === targetGameType) ||
+      (matchedFixedGame && (c.gameType === matchedFixedGame.gameType || c.id === matchedFixedGame.id))
+    );
+
+    // Prioritize candidates:
+    // 1. Active with questions belonging to this teacher
+    const activeTeacherCandidate = candidates.find(c => (!teacherUid || !c.teacherId || c.teacherId === teacherUid) && c.status === "active" && (c.questions?.length || 0) > 0);
+    // 2. Any active with questions
+    const anyActiveCandidate = candidates.find(c => c.status === "active" && (c.questions?.length || 0) > 0);
+    // 3. Belonging to this teacher with questions > 0
+    const teacherCandidateWithQuestions = candidates.find(c => (!teacherUid || !c.teacherId || c.teacherId === teacherUid) && (c.questions?.length || 0) > 0);
+    // 4. Any candidate with questions > 0
+    const candidateWithQuestions = candidates.find(c => (c.questions?.length || 0) > 0);
+    // 5. Belonging to this teacher
+    const teacherCandidate = candidates.find(c => !teacherUid || !c.teacherId || c.teacherId === teacherUid);
+    // 6. First candidate
+    const fallbackCandidate = candidates[0];
+
+    const targetChallenge = activeTeacherCandidate || anyActiveCandidate || teacherCandidateWithQuestions || candidateWithQuestions || teacherCandidate || fallbackCandidate;
     
     const docId = targetChallenge?.id || matchedFixedGame?.id || challengeId;
-    const gameType = targetChallenge?.gameType || matchedFixedGame?.gameType || "space_invaders";
+    const gameType = targetChallenge?.gameType || matchedFixedGame?.gameType || targetGameType || "space_invaders";
     const title = targetChallenge?.title || matchedFixedGame?.title || "لعبة مراجعة";
     return { targetChallenge, docId, gameType, title };
   };
@@ -2110,7 +2138,8 @@ export default function ReviewsAdminTab({
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {FIXED_GAMES.map((fg) => {
-                const challenge = reviewChallenges.find(c => c.id === fg.id) || reviewChallenges.find(c => c.gameType === fg.gameType);
+                const { targetChallenge } = getResolvedChallenge(fg.id);
+                const challenge = targetChallenge;
                 const isActivated = challenge && challenge.status === "active" && (challenge.questions?.length || 0) > 0;
                 const questionsCount = challenge?.questions?.length || 0;
                 const totalScoresCount = challenge ? reviewScores.filter(s => s.challengeId === challenge.id).length : 0;

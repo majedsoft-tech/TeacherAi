@@ -75,7 +75,7 @@ import {
   ReviewChallenge,
   ReviewScore,
 } from "./types";
-import { isTrueFalseQuestion, normalizeQuestion } from "./utils/questionUtils";
+import { isTrueFalseQuestion, normalizeQuestion, isGradeMatching } from "./utils/questionUtils";
 import {
   initialQuizzes,
   initialStudents,
@@ -934,7 +934,29 @@ export default function App() {
   const [bankQuestions, setBankQuestions] = useState<BankQuestion[]>(initialBankQuestions);
   const [bankQuestionsLoaded, setBankQuestionsLoaded] = useState<boolean>(true);
   const [reviewChallenges, setReviewChallenges] = useState<ReviewChallenge[]>(initialReviewChallenges);
-  const hasActiveChallenge = reviewChallenges.some(c => c.status === "active");
+  const hasActiveChallenge = useMemo(() => {
+    if (studentPortalActive) {
+      const activeStudentObj = students.find((s) => s.id === studentSelectedId);
+      const studentGradeVal = activeStudentObj?.grade || studentSelectedGrade;
+      const studentClassVal = activeStudentObj?.gradeClass || "";
+      const targetTeacher = studentPortalTeacherId || activeStudentObj?.teacherId;
+
+      return reviewChallenges.some(c => {
+        if (c.status !== "active") return false;
+        if (!c.questions || c.questions.length === 0) return false;
+        if (targetTeacher && c.teacherId && c.teacherId !== targetTeacher) return false;
+        return isGradeMatching(c.grade, studentGradeVal, studentClassVal);
+      });
+    }
+
+    // For teacher/admin
+    return reviewChallenges.some(c => {
+      if (c.status !== "active") return false;
+      if (!c.questions || c.questions.length === 0) return false;
+      if (currentUser?.uid && c.teacherId && c.teacherId !== currentUser.uid) return false;
+      return true;
+    });
+  }, [reviewChallenges, studentPortalActive, students, studentSelectedId, studentSelectedGrade, studentPortalTeacherId, currentUser?.uid]);
   const [reviewScores, setReviewScores] = useState<ReviewScore[]>(initialReviewScores);
 
   // Question Bank Import States inside Quiz Builder
@@ -2501,19 +2523,34 @@ export default function App() {
   const [isPasswordRequiredGlobal, setIsPasswordRequiredGlobal] =
     useState(false);
 
+  // Map of grade+semester to password requirement status for immediate UI feedback
+  const [classPasswordRequiredMap, setClassPasswordRequiredMap] = useState<Record<string, boolean>>(() => {
+    try {
+      const saved = localStorage.getItem("app_class_password_required_map");
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return {};
+  });
+
   useEffect(() => {
     if (activeTab === "students" && selectedTabGrade && selectedTabSemester) {
       const activeGrade = selectedTabGrade || "";
       const activeSemester = selectedTabSemester || "";
-      const activeClassStudents = students.filter((student) =>
-        isStudentInClass(student, activeGrade, activeSemester),
-      );
-      const anyRequired = activeClassStudents.length > 0 && activeClassStudents.some(
-        (s) => s.passwordRequired === true,
-      );
-      setIsPasswordRequiredGlobal(anyRequired);
+      const key = `${normalizeGradeName(activeGrade)}__${normalizeSemesterName(activeSemester)}`;
+      
+      if (classPasswordRequiredMap[key] !== undefined) {
+        setIsPasswordRequiredGlobal(classPasswordRequiredMap[key]);
+      } else {
+        const activeClassStudents = students.filter((student) =>
+          isStudentInClass(student, activeGrade, activeSemester),
+        );
+        const anyRequired = activeClassStudents.length > 0 && activeClassStudents.some(
+          (s) => s.passwordRequired === true,
+        );
+        setIsPasswordRequiredGlobal(anyRequired);
+      }
     }
-  }, [students, selectedTabGrade, selectedTabSemester, activeTab]);
+  }, [students, selectedTabGrade, selectedTabSemester, activeTab, classPasswordRequiredMap]);
 
   // Scroll to top of the page when switching tabs, sections, or detail views
   useEffect(() => {
@@ -2535,41 +2572,48 @@ export default function App() {
 
     const activeGrade = selectedTabGrade || "";
     const activeSemester = selectedTabSemester || "";
+    const key = `${normalizeGradeName(activeGrade)}__${normalizeSemesterName(activeSemester)}`;
+
+    setClassPasswordRequiredMap((prev) => {
+      const updated = { ...prev, [key]: required };
+      try {
+        localStorage.setItem("app_class_password_required_map", JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
+
     const activeClassStudents = students.filter((student) =>
       isStudentInClass(student, activeGrade, activeSemester),
     );
 
-    if (activeClassStudents.length === 0) {
-      triggerToast(`لا يوجد طلاب مسجلون في فصل (${activeSemester}) لتغيير إعداد كلمة المرور`, "info");
-      return;
+    if (activeClassStudents.length > 0) {
+      try {
+        const batch = writeBatch(db);
+        activeClassStudents.forEach((student) => {
+          const studentRef = doc(db, "students", student.id);
+          batch.update(studentRef, { passwordRequired: required });
+        });
+        await batch.commit();
+
+        // Immediate local state update isolated strictly to this class
+        setStudents((prev) =>
+          prev.map((s) => {
+            const isTarget = activeClassStudents.some((acs) => acs.id === s.id);
+            return isTarget ? { ...s, passwordRequired: required } : s;
+          }),
+        );
+      } catch (err) {
+        console.error("Error updating passwordRequired in batch", err);
+        triggerToast("حدث خطأ أثناء تعديل متطلب كلمة المرور في قاعدة البيانات", "error");
+      }
     }
 
-    try {
-      const batch = writeBatch(db);
-      activeClassStudents.forEach((student) => {
-        const studentRef = doc(db, "students", student.id);
-        batch.update(studentRef, { passwordRequired: required });
-      });
-      await batch.commit();
-
-      // Immediate local state update isolated strictly to this class
-      setStudents((prev) =>
-        prev.map((s) => {
-          const isTarget = activeClassStudents.some((acs) => acs.id === s.id);
-          return isTarget ? { ...s, passwordRequired: required } : s;
-        }),
-      );
-
-      triggerToast(
-        required
-          ? `تم تفعيل متطلب كلمة المرور لطلاب فصل (${activeSemester}) فقط بنجاح`
-          : `تم إلغاء متطلب كلمة المرور لطلاب فصل (${activeSemester}) فقط بنجاح`,
-        "success",
-      );
-    } catch (err) {
-      console.error("Error updating passwordRequired in batch", err);
-      triggerToast("حدث خطأ أثناء تعديل متطلب كلمة المرور", "error");
-    }
+    triggerToast(
+      required
+        ? `تم تفعيل متطلب كلمة المرور لطلاب فصل (${activeSemester}) وستظهر علامة المفتاح بجانبه 🔑`
+        : `تم إلغاء متطلب كلمة المرور لطلاب فصل (${activeSemester}) بنجاح`,
+      "success",
+    );
   };
 
   const handleClearAllPasswords = async (grade?: string, semester?: string) => {
@@ -2710,6 +2754,14 @@ export default function App() {
             })
           );
           setIsPasswordRequiredGlobal(true);
+          const key = `${normalizeGradeName(activeGrade)}__${normalizeSemesterName(activeSemester)}`;
+          setClassPasswordRequiredMap((prev) => {
+            const updated = { ...prev, [key]: true };
+            try {
+              localStorage.setItem("app_class_password_required_map", JSON.stringify(updated));
+            } catch (e) {}
+            return updated;
+          });
 
           triggerToast(`تم توليد كلمات مرور سهلة بنجاح لطلاب فصل (${activeSemester}) فقط (${updatedResults.length} طالب)! 🔑`, "success");
         } catch (err: any) {
@@ -4283,6 +4335,29 @@ export default function App() {
       ).length;
     },
     [students],
+  );
+
+  const isPasswordRequiredForSemester = useCallback(
+    (gName: string, semName: string): boolean => {
+      if (!gName || !semName) return false;
+      const key = `${normalizeGradeName(gName)}__${normalizeSemesterName(semName)}`;
+      if (classPasswordRequiredMap[key] !== undefined) {
+        return classPasswordRequiredMap[key];
+      }
+      if (
+        selectedTabGrade &&
+        normalizeGradeName(selectedTabGrade) === normalizeGradeName(gName) &&
+        selectedTabSemester &&
+        normalizeSemesterName(selectedTabSemester) === normalizeSemesterName(semName)
+      ) {
+        return isPasswordRequiredGlobal;
+      }
+      return students.some(
+        (student) =>
+          isStudentInClass(student, gName, semName) && student.passwordRequired === true,
+      );
+    },
+    [students, selectedTabGrade, selectedTabSemester, isPasswordRequiredGlobal, classPasswordRequiredMap],
   );
 
   const semestersList = useMemo(() => {
@@ -11856,6 +11931,8 @@ export default function App() {
                             const semesterNum = getSemesterNumber(s, idx);
                             const semCount = getStudentsCountForSemester(selectedTabGrade, s);
                             const semWithPass = getStudentsWithPasswordsCountForSemester(selectedTabGrade, s);
+                            const isPassRequired = isPasswordRequiredForSemester(selectedTabGrade, s);
+                            const showKey = isPassRequired || semWithPass > 0;
 
                             return (
                               <button
@@ -11871,22 +11948,29 @@ export default function App() {
                                     ? "border-[#5352ed] shadow-md shadow-[#5352ed]/20 transform scale-105"
                                     : "border-indigo-200 hover:border-indigo-400 bg-white shadow-3xs"
                                 }`}
-                                title={`${s} - (${semCount} طالب${semWithPass > 0 ? ` - ${semWithPass} بكلمة مرور` : ""})`}
+                                title={`${s} - (${semCount} طالب${showKey ? " - كلمة المرور مطلوبة 🔑" : ""})`}
                               >
-                                {/* Top Section: Class number and check/plus */}
+                                {/* Top Section: Class number, key icon, and check/plus */}
                                 <div
-                                  className={`px-3 py-1.5 flex items-center justify-center gap-1 text-sm sm:text-base font-black font-sans ${
+                                  className={`px-2.5 py-1.5 flex items-center justify-center gap-1.5 text-sm sm:text-base font-black font-sans relative ${
                                     isSemSelected
                                       ? "bg-[#5352ed] text-white"
                                       : "bg-white text-[#5352ed] hover:bg-slate-50"
                                   }`}
                                 >
                                   <span>{semesterNum}</span>
-                                  {isSemSelected && (
-                                    <Check className="w-3.5 h-3.5 text-white stroke-[3]" />
+                                  {showKey && (
+                                    <span
+                                      className={`inline-flex items-center justify-center shrink-0 transition-transform duration-150 animate-in fade-in zoom-in-75 ${
+                                        isSemSelected ? "text-amber-300 drop-shadow-xs" : "text-amber-500"
+                                      }`}
+                                      title={`كلمة المرور مطلوبة لفصل (${s}) 🔑`}
+                                    >
+                                      <Key className="w-3.5 h-3.5 fill-current" />
+                                    </span>
                                   )}
-                                  {semWithPass > 0 && !isSemSelected && (
-                                    <span className="text-[10px] opacity-75" title={`${semWithPass} طالب لديهم كلمات مرور`}>🔑</span>
+                                  {isSemSelected && (
+                                    <Check className="w-3.5 h-3.5 text-white stroke-[3] shrink-0" />
                                   )}
                                 </div>
 
@@ -11926,8 +12010,14 @@ export default function App() {
                                   {selectedTabGrade}
                                 </span>{" "}
                                 <span className="text-slate-400 font-normal">-</span>
-                                <span className="text-indigo-700 font-black bg-indigo-50/80 border border-indigo-200/80 px-2 py-0.5 rounded-lg text-xs">
-                                  {selectedTabSemester}
+                                <span className="text-indigo-700 font-black bg-indigo-50/80 border border-indigo-200/80 px-2 py-0.5 rounded-lg text-xs inline-flex items-center gap-1.5">
+                                  <span>{selectedTabSemester}</span>
+                                  {isPasswordRequiredGlobal && (
+                                    <span className="inline-flex items-center gap-1 text-amber-600 font-black" title="كلمة المرور مطلوبة لهذا الفصل">
+                                      <Key className="w-3 h-3 text-amber-500 fill-amber-500 shrink-0" />
+                                      <span className="text-[10px] hidden sm:inline font-bold text-amber-700 bg-amber-100/80 px-1 py-0.2 rounded">مطلوبة</span>
+                                    </span>
+                                  )}
                                 </span>
                               </h4>
                               <div className="flex flex-wrap items-center gap-2 mt-1">
@@ -12251,8 +12341,11 @@ export default function App() {
                                         checked={isPasswordRequiredGlobal}
                                         onChange={(e) => handleTogglePasswordRequired(e.target.checked)}
                                       />
-                                      <label htmlFor="mobileGlobalPasswordRequired" className="text-slate-800 font-extrabold text-xs cursor-pointer">
-                                        كلمة المرور مطلوبة
+                                      <label htmlFor="mobileGlobalPasswordRequired" className="text-slate-800 font-extrabold text-xs cursor-pointer flex items-center gap-1">
+                                        <span>كلمة المرور مطلوبة</span>
+                                        {isPasswordRequiredGlobal && (
+                                          <Key className="w-3.5 h-3.5 text-amber-500 fill-amber-500 shrink-0" />
+                                        )}
                                       </label>
                                     </div>
                                     <span className="text-[10px] text-slate-500 font-bold">إجمالي: {filteredStudents.length} طالب</span>
@@ -12460,9 +12553,12 @@ export default function App() {
                                            />
                                            <label
                                              htmlFor="globalPasswordRequired"
-                                             className="text-slate-750 font-black text-xs cursor-pointer select-none"
+                                             className="text-slate-750 font-black text-xs cursor-pointer select-none flex items-center gap-1"
                                            >
-                                             كلمة المرور (مطلوبة)
+                                             <span>كلمة المرور (مطلوبة)</span>
+                                             {isPasswordRequiredGlobal && (
+                                               <Key className="w-3 h-3 text-amber-500 fill-amber-500 shrink-0" />
+                                             )}
                                            </label>
                                            <div className="relative group inline-flex items-center cursor-pointer">
                                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200/90 px-2 py-0.5 rounded-full transition-all duration-200 hover:scale-105 shadow-xs">

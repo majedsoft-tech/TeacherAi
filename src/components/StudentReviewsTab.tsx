@@ -747,6 +747,10 @@ export default function StudentReviewsTab({
   const shipXRef = useRef(50);
   const carVelocityRef = useRef(0);
   const carAngleRef = useRef(0);
+  const playerShipRef = useRef<HTMLDivElement | null>(null);
+  const playerCarRef = useRef<HTMLDivElement | null>(null);
+  const meteorDomRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
+  const roadCarDomRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
 
   const [isQuestionIntro, setIsQuestionIntro] = useState(false);
   const [introCountdown, setIntroCountdown] = useState(3);
@@ -1373,8 +1377,10 @@ export default function StudentReviewsTab({
       if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " ", "Spacebar"].includes(e.key)) {
         e.preventDefault();
       }
+      if (e.repeat && (e.key === " " || e.key === "Spacebar")) return;
+
       keysPressedRef.current[e.key] = true;
-      if (e.key === " ") {
+      if (e.key === " " || e.key === "Spacebar") {
         setIsBoostingState(true);
       }
 
@@ -1383,18 +1389,15 @@ export default function StudentReviewsTab({
 
       if (challenge.gameType === "space_invaders") {
         if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") {
-          setShipX(prev => {
-            const val = Math.max(5, prev - 6);
-            shipXRef.current = val;
-            return val;
-          });
+          const val = Math.max(5, shipXRef.current - 6);
+          shipXRef.current = val;
+          if (playerShipRef.current) playerShipRef.current.style.left = `${val}%`;
         } else if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") {
-          setShipX(prev => {
-            const val = Math.min(95, prev + 6);
-            shipXRef.current = val;
-            return val;
-          });
+          const val = Math.min(95, shipXRef.current + 6);
+          shipXRef.current = val;
+          if (playerShipRef.current) playerShipRef.current.style.left = `${val}%`;
         } else if (e.key === " " || e.key === "Enter") {
+          if (e.repeat) return;
           const currentMeteors = fallingMeteorsRef.current;
           const currentShipX = shipXRef.current;
           if (currentMeteors && currentMeteors.length > 0) {
@@ -1415,7 +1418,7 @@ export default function StudentReviewsTab({
 
     const handleKeyUp = (e: KeyboardEvent) => {
       keysPressedRef.current[e.key] = false;
-      if (e.key === " ") {
+      if (e.key === " " || e.key === "Spacebar") {
         setIsBoostingState(false);
       }
     };
@@ -1428,7 +1431,7 @@ export default function StudentReviewsTab({
     };
   }, [gameState]);
 
-  // Mouse & Touch movement handlers over the canvas area
+  // Mouse & Touch movement handlers over the canvas area - 60 FPS hardware direct manipulation
   const handleCanvasMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     const challenge = activeChallengeRef.current;
     const isGameWithMovement = challenge && (challenge.gameType === "space_invaders" || challenge.gameType === "car_racing");
@@ -1436,8 +1439,9 @@ export default function StudentReviewsTab({
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const percentage = Math.max(5, Math.min(95, (x / rect.width) * 100));
-    setShipX(percentage);
     shipXRef.current = percentage;
+    if (playerShipRef.current) playerShipRef.current.style.left = `${percentage}%`;
+    if (playerCarRef.current) playerCarRef.current.style.left = `${percentage}%`;
   };
 
   const handleCanvasTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
@@ -1449,8 +1453,9 @@ export default function StudentReviewsTab({
     if (!touch) return;
     const x = touch.clientX - rect.left;
     const percentage = Math.max(5, Math.min(95, (x / rect.width) * 100));
-    setShipX(percentage);
     shipXRef.current = percentage;
+    if (playerShipRef.current) playerShipRef.current.style.left = `${percentage}%`;
+    if (playerCarRef.current) playerCarRef.current.style.left = `${percentage}%`;
   };
 
   // Cleanup timers
@@ -1880,6 +1885,7 @@ export default function StudentReviewsTab({
     // Reset answer revealed flags to ensure loop runs smoothly
     isAnswerRevealedRef.current = false;
     setIsAnswerRevealed(false);
+    meteorDomRefs.current = {};
 
     const numOpts = targetQ.options.length;
     const spacing = 80 / Math.max(1, numOpts);
@@ -1908,6 +1914,21 @@ export default function StudentReviewsTab({
       const dt = Math.min((now - lastTime) / 16.66, 2.0);
       lastTime = now;
 
+      // Smooth keyboard steering directly in animation loop
+      const leftPressed = keysPressedRef.current["ArrowLeft"] || keysPressedRef.current["a"] || keysPressedRef.current["A"];
+      const rightPressed = keysPressedRef.current["ArrowRight"] || keysPressedRef.current["d"] || keysPressedRef.current["D"];
+      if (leftPressed) {
+        shipXRef.current = Math.max(5, shipXRef.current - 1.2 * dt);
+        if (playerShipRef.current) {
+          playerShipRef.current.style.left = `${shipXRef.current}%`;
+        }
+      } else if (rightPressed) {
+        shipXRef.current = Math.min(95, shipXRef.current + 1.2 * dt);
+        if (playerShipRef.current) {
+          playerShipRef.current.style.left = `${shipXRef.current}%`;
+        }
+      }
+
       const list = fallingMeteorsRef.current || items;
       const updated = list.map(m => {
         let newY = m.y + (m.speed || 0.22) * dt;
@@ -1918,7 +1939,15 @@ export default function StudentReviewsTab({
       });
 
       fallingMeteorsRef.current = updated;
-      setFallingMeteors(updated);
+
+      // Ultra-performant direct DOM update: ZERO React re-render!
+      updated.forEach((m) => {
+        const el = meteorDomRefs.current[m.idx];
+        if (el) {
+          el.style.top = `${m.y}%`;
+          el.style.left = `${m.x}%`;
+        }
+      });
 
       gameLoopRef.current = requestAnimationFrame(animate);
     };
@@ -1930,6 +1959,10 @@ export default function StudentReviewsTab({
   const setupRoadItems = (q: Question) => {
     if (!q) return;
     
+    isAnswerRevealedRef.current = false;
+    setIsAnswerRevealed(false);
+    roadCarDomRefs.current = {};
+
     // Position options horizontally based on number of choices, distributed as lanes
     const count = q.options.length;
     const laneWidth = 100 / count;
@@ -1944,22 +1977,25 @@ export default function StudentReviewsTab({
         isCorrect: checkIsCorrect(q, i),
         x: x,
         y: -15 - (i * 25), // staggered vertical offsets so they do not fall aligned
-        speed: 0.18 // slower descend speed as per user request
+        speed: 0.18 // slower descend speed
       };
     });
-    setFallingMeteors(items);
     fallingMeteorsRef.current = items;
+    setFallingMeteors(items);
 
     if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
     
     let isColliding = false;
+    let lastTime = performance.now();
 
-    const animate = () => {
-      // If answer is revealed, immediately cancel this loop and return
+    const animate = (now: number) => {
       if (isAnswerRevealedRef.current) {
         if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
         return;
       }
+
+      const dt = Math.min((now - lastTime) / 16.66, 2.0);
+      lastTime = now;
 
       // 1. Process Drift Physics: Acceleration, Inertia, Friction
       let accel = 0;
@@ -1967,13 +2003,12 @@ export default function StudentReviewsTab({
       const rightPressed = keysPressedRef.current["ArrowRight"] || keysPressedRef.current["d"] || keysPressedRef.current["D"];
 
       if (leftPressed) {
-        accel = -0.75; // responsive left acceleration
+        accel = -0.75 * dt;
         carVelocityRef.current = (carVelocityRef.current + accel) * 0.85;
       } else if (rightPressed) {
-        accel = 0.75; // responsive right acceleration
+        accel = 0.75 * dt;
         carVelocityRef.current = (carVelocityRef.current + accel) * 0.85;
       } else {
-        // Stop very quickly in the same place immediately when arrow key is released!
         carVelocityRef.current = 0;
       }
       
@@ -1986,54 +2021,61 @@ export default function StudentReviewsTab({
         carVelocityRef.current = 0;
       }
       shipXRef.current = nextX;
-      setShipX(nextX);
 
-      // Calculate Drift angle based on velocity (max 22 degrees tilt)
       const targetAngle = carVelocityRef.current * 4.5;
       carAngleRef.current = carAngleRef.current * 0.75 + targetAngle * 0.25;
-      setCarAngle(carAngleRef.current);
+
+      // Direct player car DOM update - 60 FPS hardware accelerated without React re-render
+      if (playerCarRef.current) {
+        playerCarRef.current.style.left = `${nextX}%`;
+        playerCarRef.current.style.transform = `translateX(-50%) rotate(${carAngleRef.current}deg)`;
+      }
 
       // Check booster speed modifier (Space key)
-      const isBoosting = !!keysPressedRef.current[" "];
+      const isBoosting = !!keysPressedRef.current[" "] || !!keysPressedRef.current["Spacebar"];
+      const boosterMultiplier = isBoosting ? 2.5 : 1.0;
 
-      setFallingMeteors(prev => {
-        let collisionDetected = false;
-        let collidingMeteor: any = null;
+      let collisionDetected = false;
+      let collidingMeteor: any = null;
 
-        prev.forEach(m => {
-          if (!isColliding && m.y >= 72 && m.y <= 85) {
-            // Check horizontal proximity (if within 11% width)
-            if (Math.abs(m.x - nextX) < 11) {
-              collisionDetected = true;
-              collidingMeteor = m;
-            }
-          }
-        });
-
-        if (collisionDetected && collidingMeteor && !isColliding) {
-          isColliding = true;
-          const targetMeteor = collidingMeteor;
-          setTimeout(() => {
-            handleCarCollision(targetMeteor, nextX);
-          }, 0);
+      const list = fallingMeteorsRef.current || items;
+      const updated = list.map(m => {
+        let newY = m.y + (m.speed || 0.18) * boosterMultiplier * dt;
+        if (newY > 95) {
+          // Respawn at top if it passed the bottom
+          newY = -20;
         }
-
-        const boosterMultiplier = isBoosting ? 2.5 : 1.0;
-
-        const updated = prev.map(m => {
-          let newY = m.y + m.speed * boosterMultiplier;
-          if (newY > 95) {
-            // Respawn at top if it passed the bottom
-            newY = -20;
+        if (!isColliding && newY >= 72 && newY <= 85) {
+          // Proximity collision check
+          if (Math.abs(m.x - nextX) < 11) {
+            collisionDetected = true;
+            collidingMeteor = { ...m, y: newY };
           }
-          return { ...m, y: newY };
-        });
-        fallingMeteorsRef.current = updated;
-        return updated;
+        }
+        return { ...m, y: newY };
       });
+
+      fallingMeteorsRef.current = updated;
+
+      // Direct road cars DOM update - ZERO React re-render!
+      updated.forEach((m) => {
+        const el = roadCarDomRefs.current[m.idx];
+        if (el) {
+          el.style.top = `${m.y}%`;
+          el.style.left = `${m.x}%`;
+        }
+      });
+
+      if (collisionDetected && collidingMeteor && !isColliding) {
+        isColliding = true;
+        if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
+        handleCarCollision(collidingMeteor, nextX);
+        return;
+      }
 
       gameLoopRef.current = requestAnimationFrame(animate);
     };
+
     gameLoopRef.current = requestAnimationFrame(animate);
   };
 
@@ -2043,16 +2085,21 @@ export default function StudentReviewsTab({
     if (!challenge || isAnswerRevealedRef.current) return;
 
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
 
     setIsAnswerRevealed(true);
     isAnswerRevealedRef.current = true;
-    if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
+    if (fallingMeteorsRef.current) {
+      setFallingMeteors([...fallingMeteorsRef.current]);
+    }
+    const activeX = currentShipX !== undefined ? currentShipX : shipXRef.current;
+    setShipX(activeX);
+    setCarAngle(carAngleRef.current);
 
     const currentIdx = currentQuestionIdxRef.current;
     const currentQ = challenge.questions[currentIdx];
     if (!currentQ) return;
     const isCorrect = item.isCorrect !== undefined ? item.isCorrect : checkIsCorrect(currentQ, item.idx);
-    const activeX = currentShipX !== undefined ? currentShipX : shipXRef.current;
 
     // sparks/particles effect
     const colors = isCorrect ? ["#fbbf24", "#34d399", "#10b981"] : ["#ef4444", "#f87171", "#f59e0b"];
@@ -2503,14 +2550,16 @@ export default function StudentReviewsTab({
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
 
+    const currentM = (fallingMeteorsRef.current || []).find(it => it.idx === meteor.idx) || meteor;
     const targetX = meteor.x;
-    const targetY = meteor.y;
+    const targetY = currentM.y !== undefined ? currentM.y : meteor.y;
     // Impact point directly at the meteor target option card
     const impactY = Math.max(4, targetY);
 
     // Instantly align player spaceship directly underneath target option for straight vertical flight
     setShipX(targetX);
     shipXRef.current = targetX;
+    if (playerShipRef.current) playerShipRef.current.style.left = `${targetX}%`;
         
     // Play sound effect
     sfx.playLaser();
@@ -2525,6 +2574,9 @@ export default function StudentReviewsTab({
 
     setIsAnswerRevealed(true);
     isAnswerRevealedRef.current = true;
+    if (fallingMeteorsRef.current) {
+      setFallingMeteors([...fallingMeteorsRef.current]);
+    }
 
     const currentIdx = currentQuestionIdxRef.current;
     const currentQ = challenge.questions[currentIdx];
@@ -4125,16 +4177,16 @@ export default function StudentReviewsTab({
                           <div className="absolute bottom-1/3 -right-10 w-80 h-80 bg-purple-600/15 rounded-full blur-3xl" />
                           <div className="absolute top-2/3 left-1/3 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl" />
 
-                          {/* Twinkling Space Stars */}
+                          {/* Twinkling Space Stars - lightweight rendering */}
                           {Array.from({ length: 24 }).map((_, i) => (
                             <div
                               key={`space-bg-star-${i}`}
                               style={{
                                 left: `${(i * 17 + 7) % 96}%`,
                                 top: `${(i * 23 + 11) % 92}%`,
-                                opacity: 0.3 + (i % 5) * 0.15,
+                                opacity: 0.35 + (i % 4) * 0.15,
                               }}
-                              className={`absolute ${i % 3 === 0 ? "w-1.5 h-1.5 bg-cyan-300 shadow-[0_0_8px_#22d3ee] animate-pulse" : i % 2 === 0 ? "w-1 h-1 bg-amber-200 animate-ping" : "w-0.5 h-0.5 bg-white"} rounded-full`}
+                              className={`absolute ${i % 3 === 0 ? "w-1.5 h-1.5 bg-cyan-300 shadow-[0_0_4px_#22d3ee]" : i % 2 === 0 ? "w-1 h-1 bg-amber-200" : "w-0.5 h-0.5 bg-white"} rounded-full`}
                             />
                           ))}
 
@@ -4409,8 +4461,9 @@ export default function StudentReviewsTab({
                           return (
                             <div
                               key={m.id}
-                              style={{ left: `${m.x}%`, top: `${m.y}%` }}
-                              className={`absolute transform -translate-x-1/2 p-2.5 rounded-2xl bg-gradient-to-b ${theme.bg} border-2 ${theme.border} text-center select-none cursor-pointer max-w-[160px] min-w-[125px] ${theme.shadow} backdrop-blur-md group hover:scale-110 transition-transform duration-150 z-10`}
+                              ref={el => { meteorDomRefs.current[m.idx] = el; }}
+                              style={{ left: `${m.x}%`, top: `${m.y}%`, willChange: "top, left" }}
+                              className={`absolute transform -translate-x-1/2 p-2.5 rounded-2xl bg-gradient-to-b ${theme.bg} border-2 ${theme.border} text-center select-none cursor-pointer max-w-[160px] min-w-[125px] ${theme.shadow} group hover:scale-105 transition-transform duration-75 z-10`}
                               onClick={() => handleShootMeteor(m)}
                             >
                               {/* Sci-Fi HUD Corner Brackets */}
@@ -4425,7 +4478,7 @@ export default function StudentReviewsTab({
                                   <span>{icons[m.idx % icons.length]}</span>
                                   <span>خيار {m.idx + 1}</span>
                                 </span>
-                                <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping shrink-0" />
+                                <span className="w-2 h-2 rounded-full bg-cyan-400 shrink-0" />
                               </div>
 
                               {/* Answer Content Text */}
@@ -4434,7 +4487,7 @@ export default function StudentReviewsTab({
                               </div>
 
                               {/* Space Ion Thruster Trail Underneath Asteroid */}
-                              <div className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 w-4 h-4 bg-gradient-to-b from-cyan-400/80 via-purple-500/40 to-transparent rounded-b-full animate-pulse blur-[1px] pointer-events-none" />
+                              <div className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 w-4 h-4 bg-gradient-to-b from-cyan-400/80 via-purple-500/40 to-transparent rounded-b-full blur-[1px] pointer-events-none" />
                             </div>
                           );
                         })}
@@ -4518,21 +4571,16 @@ export default function StudentReviewsTab({
                             })}
 
                           {/* Local Student's Main Retro Rocket */}
-                          <motion.div
-                            animate={{
+                          <div
+                            ref={playerShipRef}
+                            style={{
                               left: `${shipX}%`,
-                              y: laserEffect?.active ? [0, 8, 0] : 0,
-                              scale: laserEffect?.active ? [1, 1.15, 1] : 1,
-                            }}
-                            transition={{
-                              left: { type: "spring", stiffness: 350, damping: 25 },
-                              y: { duration: 0.2 },
-                              scale: { duration: 0.2 },
+                              willChange: "left",
                             }}
                             className="absolute -bottom-1.5 w-16 h-20 flex flex-col items-center justify-end -translate-x-1/2 select-none pointer-events-none z-20"
                           >
-                            <RetroRocketGraphic className="w-12 h-20 filter drop-shadow-[0_0_20px_#f59e0b]" />
-                          </motion.div>
+                            <RetroRocketGraphic className="w-12 h-20 filter drop-shadow-[0_0_16px_#f59e0b]" />
+                          </div>
                         </div>
                       </div>
 
@@ -4990,15 +5038,17 @@ export default function StudentReviewsTab({
                           }
 
                           return (
-                            <motion.div
+                            <div
                               key={m.id}
-                              style={{ left: `${m.x}%`, top: `${m.y}%` }}
-                              className="absolute transform -translate-x-1/2 p-2 rounded-2xl text-center select-none w-[140px] max-w-[155px] shadow-lg transition-transform hover:scale-105 z-10"
+                              ref={el => { roadCarDomRefs.current[m.idx] = el; }}
+                              style={{ left: `${m.x}%`, top: `${m.y}%`, willChange: "top, left" }}
+                              onClick={() => handleCarCollision(m)}
+                              className="absolute transform -translate-x-1/2 p-2 rounded-2xl text-center select-none w-[140px] max-w-[155px] shadow-lg hover:scale-105 z-10 cursor-pointer"
                             >
                               <div className={`rounded-xl p-2.5 shadow-md ${cardClasses}`}>
                                 {cardContent}
                               </div>
-                            </motion.div>
+                            </div>
                           );
                         })}
 
@@ -5013,13 +5063,14 @@ export default function StudentReviewsTab({
 
                         {/* Player Drift Sports Car at the bottom */}
                         <div className="w-full h-24 bg-slate-950/30 border-t border-white/5 relative z-20 overflow-hidden">
-                          <motion.div
-                            animate={{ 
+                          <div
+                            ref={playerCarRef}
+                            style={{ 
                               left: `${shipX}%`,
-                              rotate: carAngle
+                              transform: `translateX(-50%) rotate(${carAngle}deg)`,
+                              willChange: "left, transform",
                             }}
-                            transition={{ type: "spring", stiffness: 220, damping: 24 }}
-                            className="absolute bottom-3 w-16 h-16 flex flex-col items-center -translate-x-1/2"
+                            className="absolute bottom-3 w-16 h-16 flex flex-col items-center"
                           >
                             {/* Neon Drift Underglow */}
                             <div className="absolute inset-x-2 bottom-1 top-2 bg-cyan-400/30 blur-md rounded-full animate-pulse" />
@@ -5077,7 +5128,7 @@ export default function StudentReviewsTab({
                                 </div>
                               </div>
                             </div>
-                          </motion.div>
+                          </div>
                         </div>
                       </div>
 
@@ -5090,7 +5141,13 @@ export default function StudentReviewsTab({
                         <div className="grid grid-cols-2 gap-3 bg-slate-900/40 p-2.5 rounded-2xl border border-slate-800/80">
                           <button
                             type="button"
-                            onClick={() => setShipX(prev => Math.max(5, prev - 12))}
+                            onClick={() => {
+                              const nextVal = Math.max(5, shipXRef.current - 12);
+                              shipXRef.current = nextVal;
+                              if (playerCarRef.current) {
+                                playerCarRef.current.style.left = `${nextVal}%`;
+                              }
+                            }}
                             className="py-3.5 bg-slate-850 hover:bg-slate-800 active:scale-95 text-slate-200 rounded-xl text-xs font-black transition cursor-pointer select-none flex items-center justify-center gap-2 border border-slate-800"
                           >
                             <span>🏎️ انعطف يساراً ◀</span>
@@ -5098,7 +5155,13 @@ export default function StudentReviewsTab({
 
                           <button
                             type="button"
-                            onClick={() => setShipX(prev => Math.min(95, prev + 12))}
+                            onClick={() => {
+                              const nextVal = Math.min(95, shipXRef.current + 12);
+                              shipXRef.current = nextVal;
+                              if (playerCarRef.current) {
+                                playerCarRef.current.style.left = `${nextVal}%`;
+                              }
+                            }}
                             className="py-3.5 bg-slate-850 hover:bg-slate-800 active:scale-95 text-slate-200 rounded-xl text-xs font-black transition cursor-pointer select-none flex items-center justify-center gap-2 border border-slate-800"
                           >
                             <span>▶ انعطف يميناً 🏎️</span>

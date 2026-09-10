@@ -75,7 +75,7 @@ import {
   ReviewChallenge,
   ReviewScore,
 } from "./types";
-import { isTrueFalseQuestion, normalizeQuestion, isGradeMatching } from "./utils/questionUtils";
+import { isTrueFalseQuestion, normalizeQuestion, isGradeMatching, isClassMatching } from "./utils/questionUtils";
 import {
   initialQuizzes,
   initialStudents,
@@ -981,6 +981,7 @@ export default function App() {
   const [builderTargetGrade, setBuilderTargetGrade] = useState("all");
   const [builderTargetSemester, setBuilderTargetSemester] = useState("all");
   const [isBuilderTargetAudienceEnabled, setIsBuilderTargetAudienceEnabled] = useState(false);
+  const [autoBuilderPublishNow, setAutoBuilderPublishNow] = useState(true);
 
   // Clear selected lessons when parent levels change
   useEffect(() => {
@@ -2010,13 +2011,19 @@ export default function App() {
         // Read and update the existing Student profile array
         const origStudent = students.find((s) => s.id === studentSelectedId);
         if (origStudent) {
-          const updatedGrades = [...origStudent.detailedGrades, gRecord];
+          const currentGrades = Array.isArray(origStudent.detailedGrades) ? [...origStudent.detailedGrades] : [];
+          const existingIdx = currentGrades.findIndex((g) => g.quizTitle === gRecord.quizTitle);
+          if (existingIdx >= 0) {
+            currentGrades[existingIdx] = gRecord;
+          } else {
+            currentGrades.push(gRecord);
+          }
 
           let sumEarned = 0;
           let sumMax = 0;
-          updatedGrades.forEach((g) => {
-            sumEarned += g.score;
-            sumMax += g.maxScore;
+          currentGrades.forEach((g) => {
+            sumEarned += Number(g.score) || 0;
+            sumMax += Number(g.maxScore) || 0;
           });
           const newAvg = Math.round((sumEarned / (sumMax || 1)) * 100);
           const newStatus =
@@ -2029,7 +2036,7 @@ export default function App() {
                   : "needs_improvement";
 
           await updateDoc(doc(db, "students", studentSelectedId), {
-            detailedGrades: updatedGrades,
+            detailedGrades: currentGrades,
             averageScore: newAvg,
             status: newStatus,
           });
@@ -2040,13 +2047,33 @@ export default function App() {
               s.id === studentSelectedId
                 ? {
                     ...s,
-                    detailedGrades: updatedGrades,
+                    detailedGrades: currentGrades,
                     averageScore: newAvg,
                     status: newStatus,
                   }
                 : s,
             ),
           );
+        } else {
+          // Fallback if origStudent not in local state
+          const newStudentObj: Student = {
+            id: targetStudentId,
+            name: currentStudentName || "طالب",
+            gradeClass: currentStudentClass,
+            grade: studentSelectedGrade,
+            semester: studentSelectedSemester,
+            email: currentStudentEmail,
+            averageScore: pct,
+            status: pct >= 90 ? "excellent" : pct >= 75 ? "good" : pct >= 60 ? "average" : "needs_improvement",
+            detailedGrades: [gRecord],
+          };
+
+          await setDoc(doc(db, "students", targetStudentId), {
+            ...newStudentObj,
+            teacherId: teacherUid,
+          });
+
+          setStudents((prev) => [...prev, newStudentObj]);
         }
       }
 
@@ -2474,7 +2501,7 @@ export default function App() {
     let totalDetailedGrades = 0;
     let passedGradesCount = 0;
     students.forEach((s) => {
-      s.detailedGrades.forEach((g) => {
+      (s.detailedGrades || []).forEach((g) => {
         totalDetailedGrades++;
         if (g.passed) passedGradesCount++;
       });
@@ -3127,6 +3154,7 @@ export default function App() {
     setBuilderTargetGrade(importFilterGrade);
     setBuilderTargetSemester(importFilterSemester);
     setIsBuilderTargetAudienceEnabled(false);
+    setAutoBuilderPublishNow(true);
     setShowBuilderAutoQuizModal(true);
   };
 
@@ -3237,8 +3265,25 @@ export default function App() {
 
     const quizTitle = parts.length > 0 ? parts.join(" - ") : "تقييم عام";
     const subject = importFilterSubject !== "all" ? importFilterSubject : "";
-    const grade = builderTargetGrade !== "all" ? builderTargetGrade : (importFilterGrade !== "all" ? importFilterGrade : "");
-    const semester = builderTargetSemester !== "all" ? builderTargetSemester : (importFilterSemester !== "all" ? importFilterSemester : "");
+    
+    // Target grade resolution:
+    // If target audience is enabled, "all" means ALL grades (general) -> store as null so it is open to all grades!
+    // It should NEVER fall back to importFilterGrade when the teacher explicitly chose "all" (جميع الصفوف).
+    let targetGradeResolved: string | null = null;
+    if (isBuilderTargetAudienceEnabled) {
+      targetGradeResolved = builderTargetGrade && builderTargetGrade !== "all" ? builderTargetGrade : null;
+    } else {
+      targetGradeResolved = importFilterGrade !== "all" ? importFilterGrade : null;
+    }
+
+    // Target class/semester resolution:
+    // If target audience is enabled, "all" means ALL classes/semesters (general) -> store as null so it is open to all classes!
+    let targetSemesterResolved: string | null = null;
+    if (isBuilderTargetAudienceEnabled) {
+      targetSemesterResolved = builderTargetSemester && builderTargetSemester !== "all" ? builderTargetSemester : null;
+    } else {
+      targetSemesterResolved = importFilterSemester !== "all" ? importFilterSemester : null;
+    }
 
     // Map questions
     const mapped: Question[] = finalSelected.map((bq, idx) => {
@@ -3259,10 +3304,10 @@ export default function App() {
       title: quizTitle,
       subject: subject || "عام",
       durationMinutes: 15,
-      status: "closed",
+      status: autoBuilderPublishNow ? "active" : "closed",
       dateCreated: new Date().toISOString().split("T")[0],
-      grade: grade || null,
-      semester: semester || null,
+      grade: targetGradeResolved,
+      semester: targetSemesterResolved,
       showResultToStudent: true,
       shuffleQuestions: true,
       availabilityStart: null,
@@ -3282,13 +3327,17 @@ export default function App() {
         });
       }
 
+      setQuizzes((prev) => [newQuiz, ...prev.filter((q) => q.id !== newQuizId)]);
+
       // Close modal layers
       setShowBuilderAutoQuizModal(false);
       setShowBankImportModal(false);
       setShowBankImportInline(false);
 
       triggerToast(
-        `تم توليد وحفظ الاختبار التلقائي "${quizTitle}" بنجاح!`,
+        autoBuilderPublishNow
+          ? `تم توليد ونشر الاختبار التلقائي "${quizTitle}" بنجاح! أصبح متاحاً للطلاب في بوابتهم 🚀`
+          : `تم توليد وحفظ الاختبار التلقائي "${quizTitle}" كمسودة مغلقة بنجاح! يمكنك تفعيله من لوحة التحكم.`,
         "success"
       );
       setActiveTab("dashboard");
@@ -5205,7 +5254,7 @@ export default function App() {
             });
           }
 
-          // Update Firestore
+          // Update Firestore and clear localStorage quiz tracking
           try {
             const studentRef = doc(db, "students", sId);
             await updateDoc(studentRef, {
@@ -5213,6 +5262,27 @@ export default function App() {
               averageScore: newAvg,
               status: newStatus,
             });
+
+            const qObj = quizzes.find((q) => q.title === quizTitle);
+            const keysToClear = [
+              `seb_student_${sId}_quiz_${quizTitle}_started`,
+              `seb_student_${sId}_quiz_${quizTitle}_finished`,
+              `seb_student_${sId}_quiz_${quizTitle}_timer`,
+              `seb_student_${sId}_quiz_${quizTitle}_answers`,
+              `seb_student_${sId}_quiz_${quizTitle}_end_timestamp`,
+              `seb_student_${sId}_quiz_${quizTitle}_question_idx`,
+            ];
+            if (qObj) {
+              keysToClear.push(
+                `seb_student_${sId}_quiz_${qObj.id}_started`,
+                `seb_student_${sId}_quiz_${qObj.id}_finished`,
+                `seb_student_${sId}_quiz_${qObj.id}_timer`,
+                `seb_student_${sId}_quiz_${qObj.id}_answers`,
+                `seb_student_${sId}_quiz_${qObj.id}_end_timestamp`,
+                `seb_student_${sId}_quiz_${qObj.id}_question_idx`,
+              );
+            }
+            keysToClear.forEach((k) => localStorage.removeItem(k));
           } catch (err) {
             console.error("Firestore update error for student reset:", err);
           }
@@ -6208,29 +6278,35 @@ export default function App() {
         // Do not display closed or expired quizzes
         if (avail.code === "closed" || avail.code === "expired") return false;
 
-        // Grade matching if filtered
+        // Grade matching (handles null, "all", "جميع الصفوف (عام)", "عام", or specific grade)
         if (
-          q.grade &&
-          normalizeGradeName(q.grade) !==
-            normalizeGradeName(activeStudent.grade || studentSelectedGrade)
+          !isGradeMatching(
+            q.grade,
+            activeStudent.grade || studentSelectedGrade,
+            activeStudent.gradeClass
+          )
         ) {
           return false;
         }
 
-        // Semester matching if customized/filtered (excluding "جميع الفصول")
+        // Semester / Class section matching (handles null, "all", "جميع الفصول والشعب (عام)", "جميع الفصول", "عام", or specific class)
         if (
-          q.semester &&
-          q.semester !== "جميع الفصول" &&
-          normalizeSemesterName(q.semester) !==
-            normalizeSemesterName(activeStudent.semester || studentSelectedSemester)
+          !isClassMatching(
+            q.semester,
+            activeStudent.semester || studentSelectedSemester,
+            activeStudent.gradeClass
+          )
         ) {
           return false;
         }
 
-        // Ensure student has not submitted this quiz yet (matching by title)
+        // Ensure student has not submitted this quiz yet (matching by title or finished state in storage)
+        const qKey = q.id || q.title;
+        const isFinishedLocal = localStorage.getItem(`seb_student_${activeStudent.id}_quiz_${qKey}_finished`) === "true";
         const isTaken =
-          activeStudent.detailedGrades &&
-          activeStudent.detailedGrades.some((g) => g.quizTitle === q.title);
+          (activeStudent.detailedGrades &&
+            activeStudent.detailedGrades.some((g) => g.quizTitle === q.title)) ||
+          isFinishedLocal;
         return !isTaken;
       });
 
@@ -11093,33 +11169,13 @@ export default function App() {
                 // 1) Quizzes that match the grade and semester rules (both targeted and general quizzes)
                 const matchingQuizzes = quizzes.filter((q) => {
                   // A quiz matches if:
-                  // 1. It is explicitly assigned to this grade with q.grade matching activeGrade
-                  // 2. OR it has no grade restriction (general/global quiz)
-                  const isGradeMatch =
-                    !q.grade ||
-                    normalizeGradeName(q.grade) ===
-                      normalizeGradeName(activeGrade);
+                  // 1. It matches activeGrade or is general across all grades
+                  const isGradeMatch = isGradeMatching(q.grade, activeGrade);
                   if (!isGradeMatch) return false;
 
-                  // If no semester is restricted, it applies to all semesters
-                  if (!q.semester) return true;
-
-                  const qSem = q.semester;
-                  if (
-                    qSem === "الكل" ||
-                    qSem === "جميع الفصول" ||
-                    qSem === "جميع فصول الصف" ||
-                    qSem === "جميع الفصول والفرق المعتمدة"
-                  ) {
-                    return true;
-                  }
-
-                  const semestersAllowed = qSem
-                    .split(",")
-                    .map((s) => normalizeSemesterName(s.trim()));
-                  return semestersAllowed.includes(
-                    normalizeSemesterName(activeSemester),
-                  );
+                  // 2. It matches activeSemester or is general across all classes/semesters
+                  const isClassMatch = isClassMatching(q.semester, activeSemester);
+                  return isClassMatch;
                 });
 
                 // 2) Collect all quiz titles actually completed by the filtered students of this class
@@ -14434,6 +14490,24 @@ export default function App() {
                         </div>
                       </div>
 
+                      {/* Immediate Publishing Toggle */}
+                      <label className="flex items-center gap-3 cursor-pointer select-none p-3.5 rounded-2xl border border-emerald-200/90 bg-emerald-50/70 hover:bg-emerald-50 transition-all">
+                        <input
+                          type="checkbox"
+                          checked={autoBuilderPublishNow}
+                          onChange={(e) => setAutoBuilderPublishNow(e.target.checked)}
+                          className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer accent-emerald-600 shrink-0"
+                        />
+                        <div className="text-right">
+                          <span className="text-xs font-black text-emerald-950 block">
+                            تفعيل ونشر الاختبار فوراً في صفحة الطلاب (مفعل ومتاح للتقديم) 🚀
+                          </span>
+                          <span className="text-[10px] text-emerald-800 font-medium block mt-0.5">
+                            عند تفعيله، سيظهر الاختبار مباشرة لجميع طلاب الفئة المستهدفة عند دخولهم بوابتهم
+                          </span>
+                        </div>
+                      </label>
+
                       {/* Sum counter card */}
                       <div className="bg-indigo-50/50 rounded-2xl p-4 border border-indigo-100/40 flex justify-between items-center">
                         <span className="text-xs font-black text-indigo-900">مجموع الأسئلة المختارة للاختبار</span>
@@ -15258,7 +15332,7 @@ export default function App() {
                       </h4>
 
                       <div className="space-y-2.5">
-                        {selectedStudent.detailedGrades.map((grade, idx) => (
+                        {(selectedStudent.detailedGrades || []).map((grade, idx) => (
                           <div
                             key={idx}
                             className="p-4 rounded-xl border border-slate-100 flex justify-between items-center bg-slate-50/20"

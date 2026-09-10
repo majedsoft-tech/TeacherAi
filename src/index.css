@@ -22,6 +22,7 @@
     rgba(255, 255, 255, 0.5) 35px
   );
   animation: laneScroll 0.8s linear infinite;
+  will-change: background-position;
 }
 
 .lane-line-fast {
@@ -33,6 +34,7 @@
     rgba(255, 255, 255, 0.8) 35px
   );
   animation: laneScroll 0.25s linear infinite;
+  will-change: background-position;
 }
 
 @keyframes digitalPulse {

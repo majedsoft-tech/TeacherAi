@@ -1032,21 +1032,42 @@ ${correctAnswer ? `- الإجابة الصحيحة: "${correctAnswer}"` : ""}
         const sDoc = await getDoc(studentDocRef);
         if (sDoc.exists()) {
           const sData = sDoc.data() as any;
-          const updatedGrades = [...(sData.detailedGrades || []), gRecord];
+          const existingGrades: any[] = Array.isArray(sData.detailedGrades) ? [...sData.detailedGrades] : [];
+          const existingIdx = existingGrades.findIndex((g: any) => g.quizTitle === gRecord.quizTitle);
+          if (existingIdx >= 0) {
+            existingGrades[existingIdx] = gRecord;
+          } else {
+            existingGrades.push(gRecord);
+          }
           let sumEarned = 0;
           let sumMax = 0;
-          updatedGrades.forEach((g: any) => {
-            sumEarned += g.score || 0;
-            sumMax += g.maxScore || 0;
+          existingGrades.forEach((g: any) => {
+            sumEarned += Number(g.score) || 0;
+            sumMax += Number(g.maxScore) || 0;
           });
           const newAvg = Math.round((sumEarned / (sumMax || 1)) * 100);
           const newStatus = newAvg >= 90 ? "excellent" : newAvg >= 75 ? "good" : newAvg >= 60 ? "average" : "needs_improvement";
 
           await updateDoc(studentDocRef, {
-            detailedGrades: updatedGrades,
+            detailedGrades: existingGrades,
             averageScore: newAvg,
             status: newStatus,
           });
+        } else {
+          // If student document was not found under this ID, create it so grade is never lost
+          const newStudentObj = {
+            id: targetStudentId,
+            name: studentInfo.name || "طالب",
+            gradeClass: studentInfo.gradeClass || `${studentInfo.grade || ""} - ${studentInfo.semester || ""}`,
+            grade: studentInfo.grade || "",
+            semester: studentInfo.semester || "",
+            email: studentInfo.email || `${Date.now()}@student.edu`,
+            averageScore: pct,
+            status: pct >= 90 ? "excellent" : pct >= 75 ? "good" : pct >= 60 ? "average" : "needs_improvement",
+            detailedGrades: [gRecord],
+            teacherId: teacherUid,
+          };
+          await setDoc(studentDocRef, newStudentObj);
         }
       }
 

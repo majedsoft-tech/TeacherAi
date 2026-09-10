@@ -183,15 +183,19 @@ export function isGradeMatching(
   const ig = itemGrade.trim();
   if (
     !ig ||
-    ig === 'جميع الصفوف (عام)' ||
-    ig === 'جميع الفصول (عام)' ||
+    ig === 'all' ||
+    ig.toLowerCase() === 'all' ||
+    ig === 'general' ||
+    ig.toLowerCase() === 'general' ||
     ig === 'عام' ||
-    ig === 'جميع الصفوف' ||
-    ig === 'جميع الفصول' ||
     ig === 'الكل' ||
-    ig === 'جميع المراحل' ||
     ig === 'معاينة' ||
-    ig === 'معاينة تجريبية'
+    ig === 'معاينة تجريبية' ||
+    ig.includes('جميع الصفوف') ||
+    ig.includes('جميع الفصول') ||
+    ig.includes('جميع الشعب') ||
+    ig.includes('جميع المراحل') ||
+    ig.includes('(عام)')
   ) {
     return true;
   }
@@ -230,32 +234,50 @@ export function isGradeMatching(
 }
 
 /**
- * Checks whether a target class section matches a student's gradeClass.
+ * Checks whether a target class section matches a student's semester or gradeClass.
  */
 export function isClassMatching(
   targetClass?: string | null,
+  studentClassOrSemester?: string | null,
   studentGradeClass?: string | null
 ): boolean {
   if (!targetClass) return true;
   const tc = targetClass.trim();
   if (
     !tc ||
-    tc === 'جميع الفصول (عام)' ||
-    tc === 'جميع الفصول' ||
+    tc === 'all' ||
+    tc.toLowerCase() === 'all' ||
+    tc === 'general' ||
+    tc.toLowerCase() === 'general' ||
     tc === 'عام' ||
-    tc === 'الكل'
+    tc === 'الكل' ||
+    tc.includes('جميع الفصول') ||
+    tc.includes('جميع الشعب') ||
+    tc.includes('جميع الصفوف') ||
+    tc.includes('(عام)')
   ) {
     return true;
   }
 
+  const sCS = (studentClassOrSemester || '').trim();
   const sGC = (studentGradeClass || '').trim();
-  if (!sGC) return true; // If student record has no specific class section, allow
+  if (!sCS && !sGC) return true; // If student record has no specific class section, allow
+
+  // Comma-separated list support (e.g. "1/1, 1/2")
+  if (tc.includes(',')) {
+    const parts = tc.split(',').map((p) => p.trim()).filter(Boolean);
+    if (parts.length > 1) {
+      return parts.some((p) => isClassMatching(p, studentClassOrSemester, studentGradeClass));
+    }
+  }
 
   const normTC = normalizeGradeStr(tc);
+  const normSCS = normalizeGradeStr(sCS);
   const normSGC = normalizeGradeStr(sGC);
 
-  if (normTC === normSGC) return true;
-  if (normSGC.includes(normTC) || normTC.includes(normSGC)) return true;
+  if (normTC === normSCS || normTC === normSGC) return true;
+  if (normSCS && (normSCS.includes(normTC) || normTC.includes(normSCS))) return true;
+  if (normSGC && (normSGC.includes(normTC) || normTC.includes(normSGC))) return true;
 
   return false;
 }

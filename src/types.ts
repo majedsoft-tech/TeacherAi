@@ -68,6 +68,10 @@ export interface BankQuestion {
   subject: string;     // المادة
   unit: string;        // الوحدة
   lesson: string;      // الدرس
+  isRephrased?: boolean;
+  version?: number;
+  updatedAt?: string;
+  rephraseExplanation?: string;
 }
 
 export interface TeacherStats {

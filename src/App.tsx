@@ -92,6 +92,7 @@ import StudentReviewsTab from "./components/StudentReviewsTab";
 import StudentCurriculumReview from "./components/StudentCurriculumReview";
 import CurriculumReviewAdminTab from "./components/CurriculumReviewAdminTab";
 import { RegisteredTeachersTab } from "./components/RegisteredTeachersTab";
+import { getOngoingQuizzesForStudent, getLockingQuizForSubject } from "./utils/quizLockUtils";
 import { UnitLessonMultiSelect } from "./components/UnitLessonMultiSelect";
 import { QuestionBankSmartFilters } from "./components/QuestionBankSmartFilters";
 import { initializeApp, getApp, getApps } from "firebase/app";
@@ -297,6 +298,71 @@ export function getQuizAvailability(quiz: {
   };
 }
 
+/**
+ * Randomize questions order and choices (options) order every time a student takes or opens the quiz.
+ */
+export function randomizeQuizForStudent(quiz: Quiz): Quiz {
+  if (!quiz || !Array.isArray(quiz.questions) || quiz.questions.length === 0) {
+    return quiz;
+  }
+
+  // 1. Clone questions and randomize choices for multiple_choice questions
+  const clonedQuestions = quiz.questions.map((q) => {
+    let options = Array.isArray(q.options) ? [...q.options] : [];
+
+    if (q.type === "multiple_choice" && options.length > 1) {
+      const isPlaceholder = (text: string) => {
+        if (!text) return true;
+        const t = text.trim();
+        return (
+          t === "" ||
+          t === "الخيار الثالث" ||
+          t === "الخيار الرابع" ||
+          t === "الخيار الثالث..." ||
+          t === "الخيار الرابع..." ||
+          t === "option 3" ||
+          t === "option 4" ||
+          t === "option3" ||
+          t === "option4"
+        );
+      };
+
+      const validOpts = options.filter((opt) => !isPlaceholder(opt));
+      const placeholderOpts = options.filter((opt) => isPlaceholder(opt));
+
+      // Fisher-Yates shuffle for valid choices/options
+      for (let i = validOpts.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [validOpts[i], validOpts[j]] = [validOpts[j], validOpts[i]];
+      }
+
+      options = [...validOpts, ...placeholderOpts];
+    }
+
+    return {
+      ...q,
+      options,
+    };
+  });
+
+  // 2. Fisher-Yates shuffle for questions array
+  for (let i = clonedQuestions.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [clonedQuestions[i], clonedQuestions[j]] = [clonedQuestions[j], clonedQuestions[i]];
+  }
+
+  // 3. Security: strip correctAnswer before student presentation
+  const safeQuestions = clonedQuestions.map((q) => {
+    const { correctAnswer, ...safeQ } = q;
+    return safeQ as Question;
+  });
+
+  return {
+    ...quiz,
+    questions: safeQuestions,
+  };
+}
+
 function parseFirebaseConfig(pastedText: string): any {
   if (!pastedText || !pastedText.trim()) return null;
   // If it's a valid JSON, just parse it
@@ -327,6 +393,14 @@ function parseFirebaseConfig(pastedText: string): any {
 }
 
 const QUIZ_TEMPLATES: any[] = [];
+
+const GRADING_STAGES = [
+  { id: 0, title: "استلام وتشفير ورقة الإجابة", desc: "تم قفل الأسئلة وتأمين الإجابات بنجاح" },
+  { id: 1, title: "مطابقة الإجابات مع نموذج الحل", desc: "تدقيق الخيارات وحساب الإجابات الصحيحة والخاطئة" },
+  { id: 2, title: "احتساب الدرجات والنسبة المئوية", desc: "تطبيق توزيع الدرجات وحساب المجموع الكلي" },
+  { id: 3, title: "رصد النتيجة في السجل الأكاديمي", desc: "تحديث المعدل وحفظ النتيجة في ملف الطالب" },
+  { id: 4, title: "اعتماد النتيجة وإصدار الوثيقة", desc: "جاهز! جاري نقلك إلى وثيقة النتيجة النهائية" },
+];
 
 export default function App() {
   // Navigation active tab
@@ -767,6 +841,8 @@ export default function App() {
     return savedTimer ? parseInt(savedTimer, 10) : 0;
   }); // seconds remaining
   const [quizSubmitting, setQuizSubmitting] = useState(false);
+  const [gradingProgress, setGradingProgress] = useState(0);
+  const [gradingStep, setGradingStep] = useState(0);
   const [currentStudentQuestionIdx, setCurrentStudentQuestionIdx] = useState(() => {
     const activeId = sessionStorage.getItem("seb_student_logged_id");
     if (!activeId) return 0;
@@ -1578,7 +1654,8 @@ export default function App() {
                 return;
               }
 
-              setStudentQuiz(qData);
+              const randomizedQuiz = randomizeQuizForStudent(qData);
+              setStudentQuiz(randomizedQuiz);
               setQuizTimer(qData.durationMinutes * 60);
               const qTeacherId = (qData as any).teacherId;
               if (qTeacherId) {
@@ -1851,6 +1928,41 @@ export default function App() {
   const handleStudentSubmitQuiz = async (isAutoSubmit = false) => {
     if (!studentQuiz) return;
     setQuizSubmitting(true);
+    setGradingProgress(15);
+    setGradingStep(0);
+
+    const pTimer1 = setTimeout(() => {
+      setGradingProgress(40);
+      setGradingStep(1);
+    }, 450);
+
+    const pTimer2 = setTimeout(() => {
+      setGradingProgress(70);
+      setGradingStep(2);
+    }, 950);
+
+    const pTimer3 = setTimeout(() => {
+      setGradingProgress(90);
+      setGradingStep(3);
+    }, 1450);
+
+    const clearTimers = () => {
+      clearTimeout(pTimer1);
+      clearTimeout(pTimer2);
+      clearTimeout(pTimer3);
+    };
+
+    const finalizeGradingPresentation = async () => {
+      clearTimers();
+      setGradingProgress(100);
+      setGradingStep(4);
+      // Give the student a pleasant brief window to see that all steps completed 100%
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      setStudentQuizFinished(true);
+      setQuizSubmitting(false);
+      setGradingProgress(0);
+      setGradingStep(0);
+    };
 
     let currentStudentName = "";
     let currentStudentEmail = "";
@@ -1859,11 +1971,14 @@ export default function App() {
 
     if (studentNewToggle || !studentSelectedId) {
       if (!studentNameInput.trim()) {
+        clearTimers();
         triggerToast(
           "يرجى كتابة اسمك الثلاثي لطباعته في وثيقة النتيجة",
           "error",
         );
         setQuizSubmitting(false);
+        setGradingProgress(0);
+        setGradingStep(0);
         return;
       }
       currentStudentName = studentNameInput.trim();
@@ -1920,8 +2035,12 @@ export default function App() {
               if (!prev) return prev;
               const updatedQs = prev.questions.map((q) => {
                 const evaluated = resData.detailedQuestionResults.find((r: any) => r.questionId === q.id);
-                if (evaluated && evaluated.correctAnswer !== undefined) {
-                  return { ...q, correctAnswer: evaluated.correctAnswer };
+                if (evaluated) {
+                  return {
+                    ...q,
+                    correctAnswer: evaluated.correctOptionText || evaluated.correctAnswer || q.correctAnswer,
+                    isResultCorrect: evaluated.isCorrect,
+                  };
                 }
                 return q;
               });
@@ -1929,10 +2048,9 @@ export default function App() {
             });
           }
 
-          setStudentQuizFinished(true);
+          await finalizeGradingPresentation();
           const qKey = studentQuiz.id || studentQuiz.title;
           localStorage.setItem(`seb_student_${targetStudentId}_quiz_${qKey}_finished`, "true");
-          setQuizSubmitting(false);
 
           if (isAutoSubmit) {
             triggerToast(
@@ -1956,8 +2074,30 @@ export default function App() {
       studentQuiz.questions.forEach((q) => {
         totalPoints += q.points;
         const ans = quizAnswers[q.id];
-        if (ans !== undefined && q.correctAnswer && ans === q.correctAnswer) {
-          earnedPoints += q.points;
+        if (ans !== undefined && ans !== null) {
+          const sAns = String(ans).trim();
+          let isMatch = false;
+          if (q.correctAnswer !== undefined) {
+            const cAns = String(q.correctAnswer).trim();
+            if (sAns.toLowerCase() === cAns.toLowerCase()) {
+              isMatch = true;
+            } else if (q.type === "multiple_choice" && Array.isArray(q.options)) {
+              const cIdx = parseInt(cAns, 10);
+              const correctOptText = !isNaN(cIdx) && q.options[cIdx] ? String(q.options[cIdx]).trim() : cAns;
+              if (correctOptText && sAns.toLowerCase() === correctOptText.toLowerCase()) {
+                isMatch = true;
+              }
+            } else if (q.type === "true_false") {
+              const isStudentTrue = sAns === "true" || sAns === "صحيح" || sAns === "1";
+              const isCorrectTrue = cAns.toLowerCase() === "true" || cAns === "صحيح" || cAns === "1";
+              if (isStudentTrue === isCorrectTrue) {
+                isMatch = true;
+              }
+            }
+          }
+          if (isMatch) {
+            earnedPoints += q.points;
+          }
         }
       });
 
@@ -2077,7 +2217,7 @@ export default function App() {
         }
       }
 
-      setStudentQuizFinished(true);
+      await finalizeGradingPresentation();
       const qKey = studentQuiz.id || studentQuiz.title;
       localStorage.setItem(`seb_student_${targetStudentId}_quiz_${qKey}_finished`, "true");
 
@@ -2093,13 +2233,17 @@ export default function App() {
         );
       }
     } catch (err) {
+      clearTimers();
+      setQuizSubmitting(false);
+      setGradingProgress(0);
+      setGradingStep(0);
       console.error("Quiz submission error: ", err);
       triggerToast(
         "عذراً، واجهنا مشكلة في تخزين البيانات، حاول تسليم الورقة مجدداً.",
         "error",
       );
     } finally {
-      setQuizSubmitting(false);
+      clearTimers();
     }
   };
 
@@ -6334,6 +6478,43 @@ export default function App() {
 
       const completedQuizzes = activeStudent.detailedGrades || [];
 
+      // Active ongoing quizzes for student to manage lock state on Comprehensive Review
+      const ongoingQuizzesList = getOngoingQuizzesForStudent(
+        studentSelectedId,
+        quizzes,
+        studentQuiz,
+        studentQuizStarted,
+        studentQuizFinished
+      );
+
+      const handleResumeOngoingQuiz = (quizToResume: any) => {
+        const qKey = quizToResume.id || quizToResume.title;
+        const isSameQuiz = localStorage.getItem(`seb_student_${studentSelectedId}_quiz_${qKey}_started`) === "true" && localStorage.getItem(`seb_student_${studentSelectedId}_quiz_${qKey}_finished`) !== "true";
+
+        if (isSameQuiz) {
+          const savedQuizStr = localStorage.getItem(`seb_student_${studentSelectedId}_quiz_${qKey}`);
+          if (savedQuizStr) {
+            try {
+              setStudentQuiz(JSON.parse(savedQuizStr));
+            } catch (e) {
+              const randomized = randomizeQuizForStudent(quizToResume);
+              setStudentQuiz(randomized);
+            }
+          } else {
+            const randomized = randomizeQuizForStudent(quizToResume);
+            setStudentQuiz(randomized);
+          }
+        } else {
+          const randomized = randomizeQuizForStudent(quizToResume);
+          localStorage.setItem(`seb_student_${studentSelectedId}_quiz_${qKey}`, JSON.stringify(randomized));
+          setStudentQuiz(randomized);
+        }
+
+        setStudentQuizStarted(true);
+        setStudentQuizFinished(false);
+        setStudentActiveNav("quizzes");
+      };
+
       // Calculate level color
       const getStatusColor = (status: string) => {
         switch (status) {
@@ -6631,15 +6812,9 @@ export default function App() {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  let finalQuizToSet = { ...quiz };
-                                  if (quiz.shuffleQuestions && Array.isArray(quiz.questions)) {
-                                    let shuffled = [...quiz.questions];
-                                    for (let i = shuffled.length - 1; i > 0; i--) {
-                                      const j = Math.floor(Math.random() * (i + 1));
-                                      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-                                    }
-                                    finalQuizToSet.questions = shuffled;
-                                  }
+                                  const finalQuizToSet = randomizeQuizForStudent(quiz);
+                                  const qKey = quiz.id || quiz.title;
+                                  localStorage.setItem(`seb_student_${studentSelectedId}_quiz_${qKey}`, JSON.stringify(finalQuizToSet));
                                   setStudentQuiz(finalQuizToSet);
                                   const examDurationSeconds = quiz.durationMinutes === 9999 ? 999999 : (quiz.durationMinutes || 15) * 60;
                                   setQuizTimer(examDurationSeconds);
@@ -6721,6 +6896,8 @@ export default function App() {
                   setSelectedCurriculumSubject(null);
                 }}
                 teacherId={studentPortalTeacherId || currentUser?.uid || "demo_teacher"}
+                ongoingQuizzes={ongoingQuizzesList.map(item => item.quiz)}
+                onOpenOngoingQuiz={handleResumeOngoingQuiz}
               />
             );
 
@@ -6816,6 +6993,11 @@ export default function App() {
                       <Sparkles className="w-4 h-4 shrink-0 text-[#f4be1c]" />
                       <span>المراجعة الشاملة 📖</span>
                     </div>
+                    {ongoingQuizzesList.length > 0 && (
+                      <span className="p-1 bg-amber-500/20 border border-amber-500/40 text-amber-400 rounded-lg flex items-center justify-center shadow-xs" title="توجد مواد مقفلة لاختبار نشط">
+                        <Lock className="w-3.5 h-3.5" />
+                      </span>
+                    )}
                   </button>
                 </div>
 
@@ -6862,6 +7044,11 @@ export default function App() {
                       <BookOpen className="w-4 h-4 shrink-0" />
                       <span>اختباراتي المدرسية 📝</span>
                     </div>
+                    {ongoingQuizzesList.length > 0 && (
+                      <span className="px-2 py-0.5 bg-rose-500 text-white rounded-full text-[10px] font-black animate-pulse shadow-xs">
+                        نشط ({ongoingQuizzesList.length})
+                      </span>
+                    )}
                   </button>
                 </div>
               </nav>
@@ -7029,18 +7216,44 @@ export default function App() {
                       {/* Sections Bento-Grid / Custom Responsive Cards */}
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                         {/* CARD 1: المراجعة الشاملة */}
-                        <div className="bg-white border border-slate-150 rounded-3xl p-6 shadow-xs hover:shadow-md transition-all duration-350 flex flex-col justify-between group">
+                        <div className={`bg-white border rounded-3xl p-6 shadow-xs hover:shadow-md transition-all duration-350 flex flex-col justify-between group ${
+                          ongoingQuizzesList.length > 0 ? "border-amber-300 bg-amber-50/20" : "border-slate-150"
+                        }`}>
                           <div className="space-y-4">
-                            <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center border border-indigo-100/50 group-hover:scale-110 transition-transform">
-                              <Sparkles className="w-6 h-6 text-[#f4be1c]" />
+                            <div className="flex items-center justify-between">
+                              <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center border border-indigo-100/50 group-hover:scale-110 transition-transform">
+                                <Sparkles className="w-6 h-6 text-[#f4be1c]" />
+                              </div>
+                              {ongoingQuizzesList.length > 0 && (
+                                <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-100 border border-amber-300 text-amber-900 rounded-full text-[11px] font-black shadow-xs">
+                                  <Lock className="w-3.5 h-3.5 text-amber-600" />
+                                  <span>مقفلة لاختبار نشط</span>
+                                </span>
+                              )}
                             </div>
                             
                             <div className="space-y-1">
-                              <h4 className="font-extrabold text-base text-slate-900">المراجعة الشاملة 📖</h4>
+                              <h4 className="font-extrabold text-base text-slate-900 flex items-center gap-1.5">
+                                <span>المراجعة الشاملة 📖</span>
+                                {ongoingQuizzesList.length > 0 && <span className="text-xs text-amber-600 font-black">🔒</span>}
+                              </h4>
                               <p className="text-xs text-slate-500 leading-relaxed">
                                 راجع جميع الدروس المدرسية، وحل التمارين الذكية التفاعلية المخصصة لكل قسم لتثبيت معلوماتك المدرسية بشكل ممتاز.
                               </p>
                             </div>
+
+                            {/* Active Exam Lock Alert in Card */}
+                            {ongoingQuizzesList.length > 0 && (
+                              <div className="p-3 bg-amber-50/90 border border-amber-200/90 rounded-2xl space-y-1.5 text-right">
+                                <div className="flex items-center gap-2 text-amber-900 font-black text-xs">
+                                  <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                  <span>يوجد اختبار مدرسي نشط قيد التقديم:</span>
+                                </div>
+                                <p className="text-[11px] text-amber-800 font-bold leading-relaxed">
+                                  ({ongoingQuizzesList[0].title}) - يتم إقفال المادة في المراجعة الشاملة حتى إكمال الاختبار.
+                                </p>
+                              </div>
+                            )}
 
                             {/* Stats */}
                             <div className="p-3 bg-slate-50 rounded-2xl space-y-2 border border-slate-100">
@@ -7059,10 +7272,23 @@ export default function App() {
                             <button
                               type="button"
                               onClick={() => setStudentActiveNav("curriculum_review")}
-                              className="w-full py-2.5 px-4 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-extrabold text-xs rounded-xl flex items-center justify-center gap-2 transition cursor-pointer"
+                              className={`w-full py-2.5 px-4 font-extrabold text-xs rounded-xl flex items-center justify-center gap-2 transition cursor-pointer ${
+                                ongoingQuizzesList.length > 0
+                                  ? "bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300"
+                                  : "bg-indigo-50 hover:bg-indigo-100 text-indigo-700"
+                              }`}
                             >
-                              <span>ابدأ المراجعة الآن</span>
-                              <ChevronLeft className="w-4 h-4" />
+                              {ongoingQuizzesList.length > 0 ? (
+                                <>
+                                  <Lock className="w-4 h-4 text-amber-700 shrink-0" />
+                                  <span>دخول المراجعة الشاملة (تتضمن قفل 🔒)</span>
+                                </>
+                              ) : (
+                                <>
+                                  <span>ابدأ المراجعة الآن</span>
+                                  <ChevronLeft className="w-4 h-4" />
+                                </>
+                              )}
                             </button>
                           </div>
                         </div>
@@ -7481,64 +7707,19 @@ export default function App() {
                                             try {
                                               setStudentQuiz(JSON.parse(savedQuizStr));
                                             } catch (e) {
-                                              setStudentQuiz(quiz);
+                                              const finalQuizToSet = randomizeQuizForStudent(quiz);
+                                              localStorage.setItem(`seb_student_${studentSelectedId}_quiz_${qKey}`, JSON.stringify(finalQuizToSet));
+                                              setStudentQuiz(finalQuizToSet);
                                             }
                                           } else {
-                                            setStudentQuiz(quiz);
+                                            const finalQuizToSet = randomizeQuizForStudent(quiz);
+                                            localStorage.setItem(`seb_student_${studentSelectedId}_quiz_${qKey}`, JSON.stringify(finalQuizToSet));
+                                            setStudentQuiz(finalQuizToSet);
                                           }
                                         } else {
-                                          let finalQuizToSet = { ...quiz };
-                                          if (quiz.shuffleQuestions) {
-                                            let shuffled = [...quiz.questions];
-                                            for (let i = shuffled.length - 1; i > 0; i--) {
-                                              const j = Math.floor(Math.random() * (i + 1));
-                                              [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-                                            }
-                                            // Shuffle multiple_choice options/choices for each question
-                                            shuffled = shuffled.map(q => {
-                                              if (q.type === "multiple_choice" && Array.isArray(q.options) && q.options.length > 0) {
-                                                const originalCorrectIdx = parseInt(q.correctAnswer, 10);
-                                                const mapped = q.options.map((opt, idx) => ({
-                                                  text: opt,
-                                                  isCorrect: idx === originalCorrectIdx,
-                                                }));
-                                                const isPlaceholder = (text: string) => {
-                                                  if (!text) return true;
-                                                  const t = text.trim();
-                                                  return t === '' ||
-                                                    t === 'الخيار الثالث' ||
-                                                    t === 'الخيار الرابع' ||
-                                                    t === 'الخيار الثالث...' ||
-                                                    t === 'الخيار الرابع...' ||
-                                                    t === 'option 3' ||
-                                                    t === 'option 4' ||
-                                                    t === 'option3' ||
-                                                    t === 'option4';
-                                                };
-                                                const validOptions = mapped.filter(item => !isPlaceholder(item.text));
-                                                const placeholderOptions = mapped.filter(item => isPlaceholder(item.text));
-                                                const shuffledValid = [...validOptions];
-                                                for (let i = shuffledValid.length - 1; i > 0; i--) {
-                                                  const j = Math.floor(Math.random() * (i + 1));
-                                                  [shuffledValid[i], shuffledValid[j]] = [shuffledValid[j], shuffledValid[i]];
-                                                }
-                                                const newOptionsCombined = [...shuffledValid, ...placeholderOptions];
-                                                const newCorrectIdx = newOptionsCombined.findIndex(item => item.isCorrect);
-                                                return {
-                                                  ...q,
-                                                  options: newOptionsCombined.map(item => item.text),
-                                                  correctAnswer: newCorrectIdx !== -1 ? String(newCorrectIdx) : q.correctAnswer,
-                                                };
-                                              }
-                                              return q;
-                                            });
-                                            finalQuizToSet.questions = shuffled;
-                                          }
-                                          const safeQuestions = finalQuizToSet.questions.map(q => {
-                                            const { correctAnswer, ...safeQ } = q;
-                                            return safeQ as Question;
-                                          });
-                                          finalQuizToSet.questions = safeQuestions;
+                                          // Fresh quiz open: randomize both questions and choices unconditionally
+                                          const finalQuizToSet = randomizeQuizForStudent(quiz);
+                                          localStorage.setItem(`seb_student_${studentSelectedId}_quiz_${qKey}`, JSON.stringify(finalQuizToSet));
                                           setStudentQuiz(finalQuizToSet);
                                         }
                                         
@@ -7710,6 +7891,8 @@ export default function App() {
                     setSelectedCurriculumSubject(null);
                   }}
                   teacherId={studentPortalTeacherId || currentUser?.uid || "demo_teacher"}
+                  ongoingQuizzes={ongoingQuizzesList.map(item => item.quiz)}
+                  onOpenOngoingQuiz={handleResumeOngoingQuiz}
                 />
               )}
 
@@ -7810,13 +7993,18 @@ export default function App() {
                 onClick={() => {
                   setStudentActiveNav("curriculum_review");
                 }}
-                className={`flex flex-col items-center gap-0.5 py-1 px-2.5 rounded-xl transition-all cursor-pointer ${
+                className={`flex flex-col items-center gap-0.5 py-1 px-2.5 rounded-xl transition-all cursor-pointer relative ${
                   studentActiveNav === "curriculum_review"
                     ? "text-indigo-400 font-black scale-105"
                     : "text-slate-400 font-bold hover:text-slate-200"
                 }`}
               >
-                <Sparkles className="w-5 h-5 text-[#f4be1c]" />
+                <div className="relative">
+                  <Sparkles className="w-5 h-5 text-[#f4be1c]" />
+                  {ongoingQuizzesList.length > 0 && (
+                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-amber-500 rounded-full border-2 border-slate-900 shadow-xs" />
+                  )}
+                </div>
                 <span className="text-[10px]">المراجعة</span>
               </button>
 
@@ -7850,13 +8038,21 @@ export default function App() {
                   setStudentActiveNav("quizzes");
                   setSelectedCurriculumSubject(null);
                 }}
-                className={`flex flex-col items-center gap-0.5 py-1 px-2.5 rounded-xl transition-all cursor-pointer ${
+                className={`flex flex-col items-center gap-0.5 py-1 px-2.5 rounded-xl transition-all cursor-pointer relative ${
                   studentActiveNav === "quizzes"
                     ? "text-indigo-400 font-black scale-105"
                     : "text-slate-400 font-bold hover:text-slate-200"
                 }`}
               >
-                <BookOpen className="w-5 h-5" />
+                <div className="relative">
+                  <BookOpen className="w-5 h-5" />
+                  {ongoingQuizzesList.length > 0 && (
+                    <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500 border border-slate-900"></span>
+                    </span>
+                  )}
+                </div>
                 <span className="text-[10px]">اختباراتي</span>
               </button>
             </nav>
@@ -7930,20 +8126,8 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Left: Timer Indicator and Back Button */}
+              {/* Left: Timer Indicator */}
               <div className="flex flex-wrap items-center justify-start md:justify-end gap-3 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setStudentQuizStarted(false);
-                    triggerToast("تم الحفظ التلقائي لإجاباتك؛ بإمكانك الرجوع لإكمال الاختبار بأي وقت قبل انتهاء الزمن", "info");
-                  }}
-                  className="px-3.5 py-2 bg-slate-150 hover:bg-slate-200 text-slate-700 text-xs font-black rounded-xl border border-slate-200/50 flex items-center gap-2 transition cursor-pointer"
-                >
-                  <Home className="w-4 h-4 text-indigo-600" />
-                  <span>العودة للرئيسية</span>
-                </button>
-
                 <div
                   className={`flex items-center gap-2 px-3.5 py-2 bg-slate-50 rounded-xl border font-mono font-bold transition-all duration-300 ${
                     studentQuiz.durationMinutes === 9999
@@ -8082,17 +8266,16 @@ export default function App() {
                               t !== 'option4';
                           })
                           .map(({ option, oIdx }) => {
-                            const optVal = String(oIdx);
-                            const isChosen = selectedAnswer === optVal;
+                            const isChosen = selectedAnswer === option || selectedAnswer === String(oIdx);
 
                             return (
                               <button
-                                key={oIdx}
+                                key={`${question.id}-opt-${oIdx}`}
                                 type="button"
                                 onClick={() => {
                                   setQuizAnswers((prev) => ({
                                     ...prev,
-                                    [question.id]: optVal,
+                                    [question.id]: option,
                                   }));
                                 }}
                                 className={`p-3.5 rounded-xl border text-right text-xs transition-all duration-155 flex items-center justify-between font-bold cursor-pointer group hover:bg-slate-50/50 ${
@@ -8236,6 +8419,7 @@ export default function App() {
                     "تسليم ورقة الإجابة",
                     "هل أنت متأكد من تسليم ورقة الإجابة وتصحيحها ورصد درجتك نهائياً؟",
                     () => {
+                      setConfirmDialog(null);
                       handleStudentSubmitQuiz(false);
                     },
                     undefined,
@@ -8318,6 +8502,169 @@ export default function App() {
               </div>
             )}
           </AnimatePresence>
+
+          {/* Animated Grading Progress Screen (شاشة تقدم التصحيح والرصد) */}
+          <AnimatePresence>
+            {quizSubmitting && (
+              <div
+                id="grading-progress-modal"
+                className="fixed inset-0 z-[200] flex items-center justify-center p-4 sm:p-6 bg-slate-950/85 backdrop-blur-md"
+                dir="rtl"
+              >
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.92, y: 20 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: -10 }}
+                  transition={{ type: "spring", damping: 26, stiffness: 320 }}
+                  className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden text-slate-800 select-none"
+                >
+                  {/* Top Decorative Header */}
+                  <div className="relative bg-gradient-to-br from-indigo-900 via-indigo-800 to-slate-900 p-6 sm:p-7 text-white text-center overflow-hidden">
+                    {/* Subtle Ambient Background glow */}
+                    <div className="absolute -top-12 -right-12 w-44 h-44 bg-indigo-500/25 rounded-full blur-3xl pointer-events-none" />
+                    <div className="absolute -bottom-12 -left-12 w-44 h-44 bg-emerald-500/20 rounded-full blur-3xl pointer-events-none" />
+
+                    {/* Animated Central Icon */}
+                    <div className="relative mx-auto w-16 h-16 mb-3 flex items-center justify-center">
+                      <div className="absolute inset-0 bg-indigo-400/20 rounded-2xl animate-ping opacity-40" />
+                      <div className="relative w-16 h-16 bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl flex items-center justify-center shadow-inner">
+                        {gradingProgress >= 100 ? (
+                          <CheckCircle2 className="w-9 h-9 text-emerald-400 animate-bounce" />
+                        ) : (
+                          <Sparkles className="w-8 h-8 text-amber-300 animate-pulse" />
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-white/10 border border-white/15 text-indigo-200 text-xs font-bold mb-2 shadow-xs">
+                      <GraduationCap className="w-3.5 h-3.5 text-indigo-300" />
+                      <span>نظام التصحيح الإلكتروني الذكي</span>
+                    </div>
+
+                    <h3 className="text-xl sm:text-2xl font-black tracking-tight text-white mb-1">
+                      {gradingProgress >= 100
+                        ? "اكتمل التصحيح بنجاح! 🌟"
+                        : "جاري تصحيح ورقة الإجابة ورصد النتيجة"}
+                    </h3>
+                    <p className="text-xs text-indigo-200/90 font-semibold truncate max-w-sm mx-auto">
+                      {studentQuiz?.title} • {studentName}
+                    </p>
+                  </div>
+
+                  {/* Progress Bar & Percentage Section */}
+                  <div className="p-6 sm:p-7">
+                    <div className="mb-6">
+                      <div className="flex items-center justify-between mb-2 select-none">
+                        <span className="text-xs font-black text-slate-700">
+                          {gradingProgress >= 100
+                            ? "تم اعتماد ورصد نتيجتك بنجاح"
+                            : "مؤشر تقدم عملية التصحيح والرصد"}
+                        </span>
+                        <span className="text-base font-black font-mono text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-0.5 rounded-lg shadow-xs">
+                          {gradingProgress}%
+                        </span>
+                      </div>
+                      {/* The animated progress bar */}
+                      <div className="w-full h-3.5 bg-slate-100 rounded-full overflow-hidden p-0.5 border border-slate-200 shadow-inner">
+                        <motion.div
+                          className={`h-full rounded-full transition-all duration-300 ${
+                            gradingProgress >= 100
+                              ? "bg-gradient-to-r from-emerald-500 to-teal-500 shadow-xs"
+                              : "bg-gradient-to-r from-indigo-600 via-indigo-500 to-emerald-500 shadow-xs"
+                          }`}
+                          style={{ width: `${gradingProgress}%` }}
+                          initial={{ width: "0%" }}
+                          animate={{ width: `${gradingProgress}%` }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Detailed Stages Checklist */}
+                    <div className="space-y-2.5 mb-6">
+                      {GRADING_STAGES.map((stg) => {
+                        const isDone = gradingStep > stg.id || gradingProgress >= 100;
+                        const isCurrent = gradingStep === stg.id && gradingProgress < 100;
+
+                        return (
+                          <div
+                            key={stg.id}
+                            className={`flex items-start gap-3 p-3 rounded-2xl transition-all duration-200 border ${
+                              isDone
+                                ? "bg-emerald-50/70 border-emerald-200 text-emerald-950"
+                                : isCurrent
+                                ? "bg-indigo-50/90 border-indigo-200 text-indigo-950 ring-2 ring-indigo-400/20 shadow-xs"
+                                : "bg-slate-50/60 border-slate-100 text-slate-400"
+                            }`}
+                          >
+                            <div className="mt-0.5 shrink-0">
+                              {isDone ? (
+                                <div className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-xs">
+                                  <Check className="w-3.5 h-3.5 stroke-[3]" />
+                                </div>
+                              ) : isCurrent ? (
+                                <div className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center shadow-xs">
+                                  <RotateCcw className="w-3 h-3 animate-spin" />
+                                </div>
+                              ) : (
+                                <div className="w-5 h-5 rounded-full bg-slate-200 text-slate-500 flex items-center justify-center text-[10px] font-black">
+                                  {stg.id + 1}
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center justify-between gap-2">
+                                <p
+                                  className={`text-xs font-black leading-tight ${
+                                    isDone
+                                      ? "text-emerald-900"
+                                      : isCurrent
+                                      ? "text-indigo-900"
+                                      : "text-slate-500"
+                                  }`}
+                                >
+                                  {stg.title}
+                                </p>
+                                {isDone && (
+                                  <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-100/90 px-2 py-0.5 rounded-md shrink-0">
+                                    مكتمل ✓
+                                  </span>
+                                )}
+                                {isCurrent && (
+                                  <span className="text-[10px] font-extrabold text-indigo-700 bg-indigo-100/90 px-2 py-0.5 rounded-md shrink-0 animate-pulse">
+                                    قيد المعالجة...
+                                  </span>
+                                )}
+                              </div>
+                              <p
+                                className={`text-[11px] mt-0.5 font-medium ${
+                                  isDone
+                                    ? "text-emerald-700/80"
+                                    : isCurrent
+                                    ? "text-indigo-700/80"
+                                    : "text-slate-400"
+                                }`}
+                              >
+                                {stg.desc}
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Footer note */}
+                    <div className="text-center bg-slate-50 border border-slate-100 rounded-2xl py-3 px-4">
+                      <p className="text-xs text-slate-500 font-bold flex items-center justify-center gap-2">
+                        <Clock className="w-3.5 h-3.5 text-indigo-500 shrink-0 animate-pulse" />
+                        <span>الرجاء عدم إغلاق الصفحة، جاري تجهيز وثيقة النتيجة النهائية...</span>
+                      </p>
+                    </div>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
         </div>
       );
     }
@@ -8372,11 +8719,41 @@ export default function App() {
 
             {/* Left: Score Badge and Return to Home Button */}
             <div className="flex flex-wrap items-center justify-start md:justify-end gap-3 shrink-0">
-              <div className="flex items-center gap-2 px-3.5 py-2 bg-indigo-50 rounded-xl border border-indigo-100 font-bold text-xs">
-                <span className="text-slate-500 font-medium">النتيجة:</span>
-                <span className="font-sans font-black text-indigo-700">
-                  {quizScore} من {quizTotalPoints} ({quizPercentage}%)
-                </span>
+              <div
+                className={`flex items-center gap-3 px-4 sm:px-5 py-2 sm:py-2.5 rounded-2xl border-2 shadow-md transition-all duration-300 select-none ${
+                  quizPercentage >= 90
+                    ? "bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 text-white border-emerald-300/80 shadow-emerald-600/25"
+                    : quizPercentage >= 75
+                    ? "bg-gradient-to-r from-teal-600 via-emerald-600 to-cyan-700 text-white border-teal-300/80 shadow-teal-600/25"
+                    : quizPercentage >= 50
+                    ? "bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 text-white border-blue-300/80 shadow-blue-600/25"
+                    : "bg-gradient-to-r from-amber-600 via-rose-600 to-rose-700 text-white border-rose-300/80 shadow-rose-600/25"
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-white/20 backdrop-blur-xs flex items-center justify-center shadow-inner shrink-0">
+                    <Award className="w-5 h-5 text-amber-300 drop-shadow-xs" />
+                  </div>
+                  <div className="flex flex-col text-right leading-tight">
+                    <span className="text-[11px] font-bold text-white/90">
+                      النتيجة:
+                    </span>
+                    <div className="flex items-baseline gap-1.5 font-mono">
+                      <span className="text-xl md:text-2xl font-black text-white tracking-tight drop-shadow-xs">
+                        {quizScore}
+                      </span>
+                      <span className="text-xs text-white/80 font-bold">
+                        من {quizTotalPoints}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="h-7 w-px bg-white/30 mx-0.5" />
+
+                <div className="px-2.5 py-1 bg-white/20 backdrop-blur-xs rounded-xl border border-white/30 text-white font-mono font-black text-sm md:text-base shadow-xs">
+                  {quizPercentage}%
+                </div>
               </div>
 
               <button
@@ -8410,7 +8787,13 @@ export default function App() {
                 const isCurrent = idx === reviewResultQuestionIdx;
                 const studentAns = quizAnswers[q.id];
                 const isAnswered = studentAns !== undefined;
-                const isCorrect = isAnswered && studentAns === q.correctAnswer;
+                const isCorrect = (q as any).isResultCorrect !== undefined
+                  ? (q as any).isResultCorrect
+                  : (isAnswered && (
+                      studentAns === q.correctAnswer ||
+                      (Array.isArray(q.options) && !isNaN(parseInt(q.correctAnswer, 10)) && q.options[parseInt(q.correctAnswer, 10)] === studentAns) ||
+                      (q.type === "true_false" && ((studentAns === "true" || studentAns === "صحيح") === (q.correctAnswer === "true" || q.correctAnswer === "صحيح")))
+                    ));
 
                 return (
                   <button
@@ -8431,7 +8814,10 @@ export default function App() {
                             : "bg-red-500 hover:bg-red-600 text-white border-2 border-red-600 shadow-xs font-black"
                     }`}
                   >
-                    <span className="text-sm font-black">{idx + 1}</span>
+                    <span className="text-xs font-black leading-none">{idx + 1}</span>
+                    <span className="text-[10px] mt-0.5 leading-none">
+                      {isCorrect ? "✓" : !isAnswered ? "⚠️" : "✗"}
+                    </span>
                   </button>
                 );
               })}
@@ -8446,7 +8832,13 @@ export default function App() {
             if (!currentQ) return null;
             const studentAns = quizAnswers[currentQ.id];
             const isAnswered = studentAns !== undefined;
-            const isCorrect = isAnswered && studentAns === currentQ.correctAnswer;
+            const isCorrect = (currentQ as any).isResultCorrect !== undefined
+              ? (currentQ as any).isResultCorrect
+              : (isAnswered && (
+                  studentAns === currentQ.correctAnswer ||
+                  (Array.isArray(currentQ.options) && !isNaN(parseInt(currentQ.correctAnswer, 10)) && currentQ.options[parseInt(currentQ.correctAnswer, 10)] === studentAns) ||
+                  (currentQ.type === "true_false" && ((studentAns === "true" || studentAns === "صحيح") === (currentQ.correctAnswer === "true" || currentQ.correctAnswer === "صحيح")))
+                ));
 
             return (
               <div className="space-y-4">
@@ -8472,7 +8864,21 @@ export default function App() {
                       <h4 className="font-extrabold text-slate-800 text-sm md:text-base leading-relaxed flex items-center gap-2">
                         <span>{currentQ.text}</span>
                         <span className="text-base shrink-0">
-                          {isCorrect ? "✔️" : !isAnswered ? "⚠️" : "❌"}
+                          {isCorrect ? (
+                            <span className="inline-flex items-center gap-1 text-emerald-600 bg-emerald-100/80 px-2 py-0.5 rounded-lg text-xs font-black">
+                              <Check className="w-4 h-4 stroke-[3]" />
+                              <span>إجابة صحيحة</span>
+                            </span>
+                          ) : !isAnswered ? (
+                            <span className="inline-flex items-center gap-1 text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-lg text-xs font-black">
+                              <span>⚠️ لم تتم الإجابة</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-rose-600 bg-rose-100/80 px-2 py-0.5 rounded-lg text-xs font-black">
+                              <X className="w-4 h-4 stroke-[3]" />
+                              <span>إجابة غير صحيحة</span>
+                            </span>
+                          )}
                         </span>
                       </h4>
                     </div>
@@ -8481,7 +8887,7 @@ export default function App() {
                     </span>
                   </div>
 
-                  {/* Options Display */}
+                  {/* Options Display - Correct answer is hidden as requested */}
                   {currentQ.type === "multiple_choice" ? (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
                       {(currentQ.options || [])
@@ -8502,25 +8908,49 @@ export default function App() {
                           );
                         })
                         .map(({ option, oIdx }) => {
-                          const optVal = String(oIdx);
-                          const isSelectedByStudent = studentAns === optVal;
+                          const isSelectedByStudent = studentAns === option || studentAns === String(oIdx);
 
                           return (
                             <div
                               key={oIdx}
                               className={`p-3.5 rounded-xl border text-right text-xs transition-all duration-155 flex items-center justify-between font-bold ${
                                 isSelectedByStudent
-                                  ? "bg-indigo-50 border-indigo-300 text-indigo-900 ring-1 ring-indigo-300 font-extrabold"
+                                  ? isCorrect
+                                    ? "bg-emerald-50 border-emerald-400 text-emerald-950 ring-2 ring-emerald-300 font-extrabold"
+                                    : "bg-red-50 border-red-300 text-red-950 ring-2 ring-red-300 font-extrabold"
                                   : "bg-white border-slate-200 text-slate-600"
                               }`}
                             >
-                              <span className="flex-1 leading-relaxed">
-                                {option}
+                              <span className="flex-1 leading-relaxed flex items-center justify-between gap-2">
+                                <span>{option}</span>
+                                {isSelectedByStudent && (
+                                  <span
+                                    className={`shrink-0 text-[10px] font-black px-2 py-0.5 rounded-md flex items-center gap-1 ${
+                                      isCorrect
+                                        ? "text-emerald-700 bg-emerald-100"
+                                        : "text-rose-700 bg-rose-100"
+                                    }`}
+                                  >
+                                    {isCorrect ? (
+                                      <>
+                                        <Check className="w-3 h-3 stroke-[3]" />
+                                        <span>إجابتك (صحيحة)</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <X className="w-3 h-3 stroke-[3]" />
+                                        <span>إجابتك (خطأ)</span>
+                                      </>
+                                    )}
+                                  </span>
+                                )}
                               </span>
                               <div
-                                className={`w-4 h-4 rounded-full border shrink-0 flex items-center justify-center transition-all ${
+                                className={`w-4 h-4 rounded-full border shrink-0 flex items-center justify-center transition-all mr-2 ${
                                   isSelectedByStudent
-                                    ? "border-indigo-600 bg-indigo-600"
+                                    ? isCorrect
+                                      ? "border-emerald-600 bg-emerald-600 text-white"
+                                      : "border-red-600 bg-red-600 text-white"
                                     : "border-slate-300 bg-white"
                                 }`}
                               >
@@ -8535,22 +8965,68 @@ export default function App() {
                   ) : (
                     <div className="flex flex-col sm:flex-row gap-4 pt-2">
                       <div
-                        className={`flex-1 p-3.5 rounded-xl border text-center text-xs font-bold transition-all flex items-center justify-center ${
-                          studentAns === "true"
-                            ? "bg-indigo-50 border-indigo-300 text-indigo-900 ring-1 ring-indigo-300 font-extrabold"
+                        className={`flex-1 p-3.5 rounded-xl border text-center text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                          studentAns === "true" || studentAns === "صحيح"
+                            ? isCorrect
+                              ? "bg-emerald-50 border-emerald-400 text-emerald-950 ring-2 ring-emerald-300 font-extrabold"
+                              : "bg-red-50 border-red-300 text-red-950 ring-2 ring-red-300 font-extrabold"
                             : "bg-white border-slate-200 text-slate-600"
                         }`}
                       >
-                        صحيح (True)
+                        <span>صحيح (True)</span>
+                        {(studentAns === "true" || studentAns === "صحيح") && (
+                          <span
+                            className={`text-[10px] font-black px-2 py-0.5 rounded-md flex items-center gap-1 ${
+                              isCorrect
+                                ? "text-emerald-700 bg-emerald-100"
+                                : "text-rose-700 bg-rose-100"
+                            }`}
+                          >
+                            {isCorrect ? (
+                              <>
+                                <Check className="w-3 h-3 stroke-[3]" />
+                                <span>إجابتك (صحيحة)</span>
+                              </>
+                            ) : (
+                              <>
+                                <X className="w-3 h-3 stroke-[3]" />
+                                <span>إجابتك (خطأ)</span>
+                              </>
+                            )}
+                          </span>
+                        )}
                       </div>
                       <div
-                        className={`flex-1 p-3.5 rounded-xl border text-center text-xs font-bold transition-all flex items-center justify-center ${
-                          studentAns === "false"
-                            ? "bg-indigo-50 border-indigo-300 text-indigo-900 ring-1 ring-indigo-300 font-extrabold"
+                        className={`flex-1 p-3.5 rounded-xl border text-center text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                          studentAns === "false" || studentAns === "خطأ"
+                            ? isCorrect
+                              ? "bg-emerald-50 border-emerald-400 text-emerald-950 ring-2 ring-emerald-300 font-extrabold"
+                              : "bg-red-50 border-red-300 text-red-950 ring-2 ring-red-300 font-extrabold"
                             : "bg-white border-slate-200 text-slate-600"
                         }`}
                       >
-                        خطأ (False)
+                        <span>خطأ (False)</span>
+                        {(studentAns === "false" || studentAns === "خطأ") && (
+                          <span
+                            className={`text-[10px] font-black px-2 py-0.5 rounded-md flex items-center gap-1 ${
+                              isCorrect
+                                ? "text-emerald-700 bg-emerald-100"
+                                : "text-rose-700 bg-rose-100"
+                            }`}
+                          >
+                            {isCorrect ? (
+                              <>
+                                <Check className="w-3 h-3 stroke-[3]" />
+                                <span>إجابتك (صحيحة)</span>
+                              </>
+                            ) : (
+                              <>
+                                <X className="w-3 h-3 stroke-[3]" />
+                                <span>إجابتك (خطأ)</span>
+                              </>
+                            )}
+                          </span>
+                        )}
                       </div>
                     </div>
                   )}

@@ -22,12 +22,22 @@ import {
   Search,
   Copy,
   CheckCheck,
-  Zap
+  Zap,
+  Lock,
+  Clock,
+  ArrowLeft
 } from "lucide-react";
 import { BankQuestion, Student } from "../types";
 import { isTrueFalseQuestion as isTFHelper, normalizeQuestion, isGradeMatching, isClassMatching } from "../utils/questionUtils";
 import { db } from "../firebase";
 import { collection, doc, setDoc, getDocs, query, where, onSnapshot } from "firebase/firestore";
+import { BigRealisticPadlock } from "./BigRealisticPadlock";
+import {
+  getOngoingQuizzesForStudent,
+  getLockingQuizForSubject,
+  formatRemainingTime,
+  OngoingQuizInfo
+} from "../utils/quizLockUtils";
 
 // --- RETRO SOUND SYNTHESIZER ENGINE FOR REVIEWS ---
 class ReviewSoundSynth {
@@ -527,6 +537,8 @@ interface StudentCurriculumReviewProps {
   onSelectedSubjectChange: (subj: string | null) => void;
   onGoBackToQuizzes: () => void;
   teacherId?: string;
+  ongoingQuizzes?: any[];
+  onOpenOngoingQuiz?: (quiz: any) => void;
 }
 
 export default function StudentCurriculumReview({
@@ -536,13 +548,67 @@ export default function StudentCurriculumReview({
   selectedSubject,
   onSelectedSubjectChange,
   onGoBackToQuizzes,
-  teacherId
+  teacherId,
+  ongoingQuizzes,
+  onOpenOngoingQuiz
 }: StudentCurriculumReviewProps) {
   // Sounds
   const synth = useMemo(() => new ReviewSoundSynth(), []);
 
   const [visibleSubjects, setVisibleSubjects] = useState<string[]>([]);
   const [subjectTargets, setSubjectTargets] = useState<Record<string, { targetGrade?: string; targetClass?: string; questionsPerLesson?: string | number }>>({});
+
+  // Ongoing quizzes state to strictly enforce subject locking during active exams
+  const [ongoingQuizzesState, setOngoingQuizzesState] = useState<OngoingQuizInfo[]>([]);
+
+  useEffect(() => {
+    const updateOngoingQuizzes = () => {
+      const studentId = activeStudent?.id;
+      if (!studentId) {
+        setOngoingQuizzesState([]);
+        return;
+      }
+
+      // Base list from props
+      const baseQuizzes: any[] = Array.isArray(ongoingQuizzes) ? [...ongoingQuizzes] : [];
+
+      // Also scan localStorage to pick up any active quiz started for this student
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith(`seb_student_${studentId}_quiz_`) && key.endsWith("_started")) {
+            const started = localStorage.getItem(key) === "true";
+            if (started) {
+              const qKey = key.replace(`seb_student_${studentId}_quiz_`, "").replace("_started", "");
+              const finished = localStorage.getItem(`seb_student_${studentId}_quiz_${qKey}_finished`) === "true";
+              if (!finished) {
+                const rawQuiz = localStorage.getItem(`seb_student_${studentId}_quiz_${qKey}`);
+                if (rawQuiz) {
+                  try {
+                    const parsed = JSON.parse(rawQuiz);
+                    if (!baseQuizzes.some((q) => (q.id && q.id === parsed.id) || q.title === parsed.title)) {
+                      baseQuizzes.push(parsed);
+                    }
+                  } catch (err) {
+                    // Ignore parse error
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // Ignore localStorage error
+      }
+
+      const activeList = getOngoingQuizzesForStudent(studentId, baseQuizzes);
+      setOngoingQuizzesState(activeList);
+    };
+
+    updateOngoingQuizzes();
+    const timer = setInterval(updateOngoingQuizzes, 1000);
+    return () => clearInterval(timer);
+  }, [activeStudent?.id, ongoingQuizzes]);
 
   // Listen to visible subjects based on teacher settings
   useEffect(() => {
@@ -587,9 +653,23 @@ export default function StudentCurriculumReview({
     return gradeMatches && classMatches;
   };
 
-  // If currently viewing a subject that becomes hidden or not targeted in real-time, redirect student
+  // If currently viewing a subject that becomes hidden, not targeted, or locked by an active quiz, redirect student
   useEffect(() => {
     if (selectedSubject) {
+      // 1. Check if locked by ongoing quiz
+      const lockingQuiz = getLockingQuizForSubject(selectedSubject, selectedSubject, ongoingQuizzesState);
+      if (lockingQuiz) {
+        onSelectedSubjectChange(null);
+        setIsPlaying(false);
+        synth.playIncorrect();
+        triggerToast(
+          `تم إقفال مراجعة مادة (${selectedSubject}) لوجود اختبار مدرسي نشط قيد التقديم (${lockingQuiz.title}).`,
+          "warning"
+        );
+        return;
+      }
+
+      // 2. Check visibility and targeting
       const isVisible = visibleSubjects.includes(selectedSubject);
       const isTargeted = isSubjectTargetingStudent(selectedSubject, activeStudent?.grade, activeStudent?.gradeClass);
       if (!isVisible || !isTargeted) {
@@ -598,7 +678,7 @@ export default function StudentCurriculumReview({
         triggerToast("عذراً، هذه المادة غير متاحة لصفك الدراسي أو تم إخفاؤها مؤخراً.", "warning");
       }
     }
-  }, [selectedSubject, visibleSubjects, subjectTargets, activeStudent?.grade, activeStudent?.gradeClass, onSelectedSubjectChange, triggerToast]);
+  }, [selectedSubject, visibleSubjects, subjectTargets, activeStudent?.grade, activeStudent?.gradeClass, ongoingQuizzesState, onSelectedSubjectChange, triggerToast]);
 
   // Dynamic Syllabus constructed ONLY from custom bankQuestions loaded from Firestore matching student's grade
   const syllabus = useMemo(() => {
@@ -1532,21 +1612,95 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
 
                       const isCompleted = totalLessons > 0 && solvedLessons === totalLessons;
 
+                      // Check if this subject is locked by an ongoing school quiz
+                      const lockingQuiz = getLockingQuizForSubject(subjectKey, sub.name, ongoingQuizzesState);
+                      const isLocked = Boolean(lockingQuiz);
+
                       return (
                         <motion.div
                           key={`student-subj-${subjectKey}-${sIdx}`}
-                          whileHover={{ y: -5, scale: 1.02 }}
-                          whileTap={{ scale: 0.98 }}
+                          whileHover={!isLocked ? { y: -5, scale: 1.02 } : {}}
+                          whileTap={!isLocked ? { scale: 0.98 } : {}}
                           onClick={() => {
+                            if (isLocked) {
+                              synth.playIncorrect();
+                              triggerToast(
+                                `عذراً! مادة (${sub.name}) مقفلة حالياً لوجود اختبار مدرسي نشط (${lockingQuiz?.title}). يرجى إنهاء الاختبار أولاً لتتمكن من مراجعة المنهج.`,
+                                "warning"
+                              );
+                              return;
+                            }
                             synth.playClick();
                             onSelectedSubjectChange(subjectKey);
                           }}
-                          className={`bg-white border rounded-3xl p-6 cursor-pointer transition-all duration-200 relative overflow-hidden group shadow-md hover:shadow-lg ${
-                            isCompleted 
-                              ? "border-emerald-300 bg-emerald-50/40 shadow-emerald-500/5" 
-                              : "border-slate-200 hover:border-indigo-300"
+                          className={`bg-white border rounded-3xl p-6 transition-all duration-200 relative overflow-hidden group shadow-md ${
+                            isLocked
+                              ? "border-amber-400 bg-slate-900/5 shadow-amber-500/10 cursor-not-allowed select-none"
+                              : isCompleted 
+                                ? "border-emerald-300 bg-emerald-50/40 shadow-emerald-500/5 hover:shadow-lg cursor-pointer" 
+                                : "border-slate-200 hover:border-indigo-300 hover:shadow-lg cursor-pointer"
                           }`}
                         >
+                          {/* Large Prominent Lock Overlay for Locked Subject */}
+                          {isLocked && (
+                            <div className="absolute inset-0 z-20 bg-gradient-to-b from-slate-950/92 via-slate-900/95 to-slate-950/95 backdrop-blur-[2px] p-5 flex flex-col items-center justify-between text-center rounded-3xl border-2 border-amber-500 shadow-2xl animate-fade-in">
+                              {/* Top Lock Badge and Timer */}
+                              <div className="w-full flex items-center justify-between gap-2">
+                                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-black bg-rose-500/25 text-rose-300 border border-rose-500/50 shadow-xs">
+                                  <Lock className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                                  <span>مادة مقفلة 🔒</span>
+                                </span>
+
+                                {lockingQuiz && !lockingQuiz.isUntimed && lockingQuiz.remainingSeconds > 0 && (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                    <Clock className="w-3 h-3 text-amber-400 shrink-0" />
+                                    <span className="font-mono">{formatRemainingTime(lockingQuiz.remainingSeconds)}</span>
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Center: Large, Clear 3D Realistic Padlock Graphic */}
+                              <div className="my-auto py-2 flex flex-col items-center">
+                                <BigRealisticPadlock size={96} glow={true} className="drop-shadow-2xl hover:scale-105 transition-transform" />
+                                <h4 className="mt-3 text-base md:text-lg font-black text-white leading-tight">
+                                  المراجعة مقفلة لاختبار نشط
+                                </h4>
+                                <p className="mt-1 text-[11px] md:text-xs text-slate-300 font-bold max-w-[240px] leading-relaxed line-clamp-2">
+                                  اختبار قيد التقديم حالياً:
+                                  <span className="text-amber-300 block font-black mt-0.5">{lockingQuiz?.title}</span>
+                                </p>
+                              </div>
+
+                              {/* Bottom Button to Resume/Jump to Quiz */}
+                              <div className="w-full pt-2">
+                                {onOpenOngoingQuiz && lockingQuiz ? (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onOpenOngoingQuiz(lockingQuiz.quiz);
+                                    }}
+                                    className="w-full py-2.5 px-3 bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-amber-500/25 transition-all flex items-center justify-center gap-2 cursor-pointer transform active:scale-95"
+                                  >
+                                    <span>متابعة الاختبار المدرسي الآن</span>
+                                    <ArrowLeft className="w-4 h-4 text-slate-950" />
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onGoBackToQuizzes();
+                                    }}
+                                    className="w-full py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40 font-black text-xs rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                                  >
+                                    <span>الذهاب لصفحة الاختبارات 📝</span>
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
                           <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-50 rounded-full blur-2xl group-hover:bg-indigo-100 transition-colors" />
                           
                           <div className="flex justify-between items-start mb-4">
@@ -1672,9 +1826,12 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
                       return (
                         <div
                           key={`bubble-${idx}`}
-                          className={`w-9 h-9 rounded-full text-xs md:text-sm font-black flex items-center justify-center transition-all duration-150 select-none cursor-default ${bubbleStyle}`}
+                          className={`w-9 h-9 rounded-full text-xs md:text-sm font-black flex items-center justify-center transition-all duration-150 select-none cursor-default relative ${bubbleStyle}`}
                         >
                           {idx + 1}
+                          {questions[idx]?.isRephrased && !ans && (
+                            <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-amber-500 rounded-full ring-2 ring-white" title="سؤال محدث 🔄" />
+                          )}
                         </div>
                       );
                     })}
@@ -1683,6 +1840,30 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
 
                 {/* Question Area */}
                 <div className="mb-6">
+                  {/* Updated Question Indicator Badge & Encouraging Notice */}
+                  {currentQuestion?.isRephrased && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="mb-4 p-3 bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-300 rounded-2xl flex items-center justify-between gap-3 text-amber-950 shadow-xs"
+                      dir="rtl"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <span className="px-2.5 py-1 rounded-xl bg-amber-500 text-white font-black text-xs shrink-0 shadow-2xs">
+                          سؤال محدث 🔄
+                        </span>
+                        <span className="text-xs font-bold text-amber-900 leading-tight">
+                          تم تحديث صياغة هذا السؤال لتنويع المراجعة! أجب عليه الآن بصياغته الجديدة (دون المساس بنتيجتك العامة السابقة 🌟).
+                        </span>
+                      </div>
+                      {currentQuestion.rephraseExplanation && (
+                        <span className="hidden sm:inline-block text-[11px] font-semibold text-amber-800/90 bg-amber-100/70 px-2.5 py-1 rounded-lg shrink-0">
+                          {currentQuestion.rephraseExplanation}
+                        </span>
+                      )}
+                    </motion.div>
+                  )}
+
                   <p className="text-lg md:text-xl font-black text-slate-900 leading-relaxed mb-6" style={{ direction: "rtl" }}>
                     {currentQuestion?.text}
                   </p>

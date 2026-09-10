@@ -839,6 +839,165 @@ ${correctAnswer ? `- الإجابة الصحيحة: "${correctAnswer}"` : ""}
     }
   });
 
+  // AI Smart True/False Rebalancer and Rephraser Endpoint
+  app.post("/api/rephrase-true-false-questions", async (req, res) => {
+    try {
+      const { questions, targetRatio = 0.5 } = req.body;
+
+      if (!Array.isArray(questions) || questions.length === 0) {
+        return res.status(400).json({ error: "لم يتم تقديم أي أسئلة لإعادة الصياغة" });
+      }
+
+      // Filter only true_false questions that are currently true/all-true
+      const tfQuestions = questions.filter((q: any) => {
+        const type = q.type === 'true_false' || (Array.isArray(q.options) && q.options.length === 2 && (q.options[0] === 'صحيح' || q.options[0] === 'صح'));
+        return type;
+      });
+
+      if (tfQuestions.length === 0) {
+        return res.status(400).json({ error: "لم يتم العثور على أسئلة صواب وخطأ في القائمة المحددة" });
+      }
+
+      // Decide which questions should be converted to false
+      // If questions are currently mostly true, select approximately half (or according to targetRatio) to convert to false
+      const countToMakeFalse = Math.max(1, Math.round(tfQuestions.length * targetRatio));
+
+      // Pick questions evenly across the list
+      const indicesToInvert = new Set<number>();
+      const step = tfQuestions.length / countToMakeFalse;
+      for (let i = 0; i < countToMakeFalse; i++) {
+        const chosenIdx = Math.min(tfQuestions.length - 1, Math.floor(i * step));
+        indicesToInvert.add(chosenIdx);
+      }
+
+      const questionsToProcess = tfQuestions.filter((_, idx) => indicesToInvert.has(idx));
+
+      const ai = getGeminiClient();
+
+      const questionsPayload = questionsToProcess.map((q: any, i: number) => ({
+        index: i,
+        id: q.id,
+        text: q.text,
+        unit: q.unit || "",
+        lesson: q.lesson || "",
+        subject: q.subject || "",
+      }));
+
+      const prompt = `أنت خبير تربوي ومصمم اختبارات ومناهج تعليمية معتمدة.
+لدينا قائمة أسئلة (صواب وخطأ) جميعها عبارات صحيحة علمياً (إجابتها "صحيح").
+المطلوب منك: إعادة صياغة نص كل سؤال في القائمة بحيث يتحول إلى عبارة "خاطئة علمياً" بأسلوب تربوي ذكي وواقعي، لتصبح الإجابة الصحيحة للسؤال الجديد هي "خطأ" (false).
+
+قواعد إعادة الصياغة التربوية:
+1. غيّر تفصيلاً علمياً دقيقاً، أو استبدل مفهوماً أو عدداً أو خاصية أو وظيفة أو مصطلحاً علمياً بمفهوم آخر قريب منه، بحيث يختبر دقة فهم الطالب وتفكيره النقدي دون إرباك أو تعقيد لغوي.
+2. تجنب النفي الركيك والمباشر (مثل وضع "لا" أو "ليس" فقط في أول الجملة) قدر الإمكان، بل اجعل العبارة تقريرية خاطئة بشكل طبيعي وواقعي.
+3. حافظ على وضوح المعنى والمستوى العمري للطلاب.
+4. أعد النتيجة كـ JSON Array بنفس ترتيب الأسئلة، بحيث يحتوي كل عنصر على:
+- "id": نفس معرّف السؤال
+- "newText": النص الجديد للعبارة الخاطئة علمياً
+- "correctAnswer": "false"
+- "explanation": سبب كون العبارة خاطئة بإيجاز لتوضيح المفهوم الصحيح للطالب.
+
+قائمة الأسئلة المطلوب تحويلها إلى عبارات خاطئة:
+${JSON.stringify(questionsPayload, null, 2)}`;
+
+      let rephrasedResults: any[] = [];
+
+      try {
+        const response = await generateGeminiContentWithRetry(ai, {
+          model: "gemini-3.1-flash-lite",
+          contents: prompt,
+          config: {
+            systemInstruction: "أنت خبير قياس وتقويم ومناهج. أعد فقط مصفوفة JSON تحتوي على الأسئلة بعد إعادة صياغتها لتكون عبارات خاطئة علمياً بدقة تربوية عالية.",
+            responseMimeType: "application/json",
+            temperature: 0.7,
+            maxOutputTokens: 4000,
+          }
+        });
+
+        if (response?.text) {
+          rephrasedResults = JSON.parse(response.text);
+        }
+      } catch (err: any) {
+        console.warn("AI rephrasing with Gemini failed, falling back to smart rule-based conversion:", err?.message || err);
+      }
+
+      // Map back to question IDs
+      const rephrasedMap = new Map<string, { newText: string; correctAnswer: string; explanation?: string }>();
+      if (Array.isArray(rephrasedResults)) {
+        rephrasedResults.forEach((item: any) => {
+          if (item && (item.id || item.newText)) {
+            const key = item.id || (questionsToProcess[item.index]?.id);
+            if (key) {
+              rephrasedMap.set(key, {
+                newText: item.newText || item.text,
+                correctAnswer: "false",
+                explanation: item.explanation || "",
+              });
+            }
+          }
+        });
+      }
+
+      // If AI failed or missed some, provide fallback
+      questionsToProcess.forEach((q: any) => {
+        if (!rephrasedMap.has(q.id)) {
+          let fallbackText = q.text;
+          // Apply smart rule-based inversion if needed
+          if (fallbackText.includes("يجب")) {
+            fallbackText = fallbackText.replace("يجب", "لا يلزم");
+          } else if (fallbackText.includes("دائماً")) {
+            fallbackText = fallbackText.replace("دائماً", "نادراً");
+          } else if (fallbackText.includes("جميع")) {
+            fallbackText = fallbackText.replace("جميع", "بعض");
+          } else if (fallbackText.includes("تعتبر") || fallbackText.includes("يعد")) {
+            fallbackText = "لا " + fallbackText;
+          } else {
+            fallbackText = "ليس من الصحيح أن: " + fallbackText;
+          }
+
+          rephrasedMap.set(q.id, {
+            newText: fallbackText,
+            correctAnswer: "false",
+            explanation: "تم تحديث العبارة لتصبح خاطئة لاختبار الفهم الدقيق.",
+          });
+        }
+      });
+
+      // Build the final modified questions array
+      const updatedQuestions = tfQuestions.map((q: any) => {
+        const rephrased = rephrasedMap.get(q.id);
+        if (rephrased) {
+          return {
+            ...q,
+            text: rephrased.newText,
+            correctAnswer: "false",
+            options: ["صحيح", "خطأ"],
+            updatedAt: new Date().toISOString(),
+            isRephrased: true,
+            version: (q.version || 1) + 1,
+            rephraseExplanation: rephrased.explanation || "",
+          };
+        }
+        return {
+          ...q,
+          correctAnswer: "true",
+          options: ["صحيح", "خطأ"],
+        };
+      });
+
+      return res.json({
+        success: true,
+        message: `تمت إعادة صياغة وموازنة (${rephrasedMap.size}) سؤالاً لتصبح عبارات خاطئة بنجاح، مع تنويع البنك بين الصح والخطأ.`,
+        invertedCount: rephrasedMap.size,
+        totalTfCount: tfQuestions.length,
+        updatedQuestions,
+      });
+    } catch (error: any) {
+      console.error("Error rephrasing questions:", error);
+      return res.status(500).json({ error: error?.message || "فشلت عملية إعادة صياغة الأسئلة" });
+    }
+  });
+
   // Secure Student Quiz Fetching Endpoint (Server-Side Answer Stripping)
   app.get("/api/student/get-quiz/:id", async (req, res) => {
     try {
@@ -959,7 +1118,56 @@ ${correctAnswer ? `- الإجابة الصحيحة: "${correctAnswer}"` : ""}
         const qPoints = typeof q.points === "number" ? q.points : 1;
         totalPoints += qPoints;
         const studentAns = answers[q.id];
-        const isCorrect = studentAns !== undefined && String(studentAns).trim() === String(q.correctAnswer).trim();
+
+        let isCorrect = false;
+        let resolvedCorrectText = "";
+
+        if (q.type === "multiple_choice" && Array.isArray(q.options)) {
+          const cRaw = String(q.correctAnswer ?? "").trim();
+          const cIdx = parseInt(cRaw, 10);
+          if (!isNaN(cIdx) && cIdx >= 0 && cIdx < q.options.length) {
+            resolvedCorrectText = String(q.options[cIdx]).trim();
+          } else {
+            resolvedCorrectText = cRaw;
+          }
+
+          if (studentAns !== undefined && studentAns !== null) {
+            const sRaw = String(studentAns).trim();
+            const sIdx = parseInt(sRaw, 10);
+
+            // Match if student answer equals correct text directly
+            if (resolvedCorrectText && sRaw.toLowerCase() === resolvedCorrectText.toLowerCase()) {
+              isCorrect = true;
+            } else if (sRaw === cRaw) {
+              // Direct string match (e.g. "0" === "0")
+              isCorrect = true;
+            } else if (!isNaN(sIdx) && sIdx >= 0 && sIdx < q.options.length) {
+              // Student submitted an index, check if that option's text matches the correct option's text
+              const studentOptText = String(q.options[sIdx]).trim();
+              if (resolvedCorrectText && studentOptText.toLowerCase() === resolvedCorrectText.toLowerCase()) {
+                isCorrect = true;
+              }
+            }
+          }
+        } else if (q.type === "true_false") {
+          const cRaw = String(q.correctAnswer ?? "").toLowerCase().trim();
+          const isCorrectTrue = cRaw === "true" || cRaw === "صحيح" || cRaw === "1";
+          resolvedCorrectText = isCorrectTrue ? "صحيح" : "خطأ";
+
+          if (studentAns !== undefined && studentAns !== null) {
+            const sRaw = String(studentAns).toLowerCase().trim();
+            const isStudentTrue = sRaw === "true" || sRaw === "صحيح" || sRaw === "1";
+            if (isStudentTrue === isCorrectTrue) {
+              isCorrect = true;
+            }
+          }
+        } else {
+          // Fallback direct match
+          if (studentAns !== undefined && studentAns !== null) {
+            isCorrect = String(studentAns).trim().toLowerCase() === String(q.correctAnswer ?? "").trim().toLowerCase();
+          }
+          resolvedCorrectText = String(q.correctAnswer ?? "");
+        }
 
         if (isCorrect) {
           earnedPoints += qPoints;
@@ -973,7 +1181,8 @@ ${correctAnswer ? `- الإجابة الصحيحة: "${correctAnswer}"` : ""}
           points: qPoints,
           isCorrect,
           studentAnswer: studentAns ?? null,
-          correctAnswer: quizData.showResultToStudent !== false ? q.correctAnswer : undefined,
+          correctAnswer: quizData.showResultToStudent !== false ? (resolvedCorrectText || q.correctAnswer) : undefined,
+          correctOptionText: resolvedCorrectText,
         });
       });
 

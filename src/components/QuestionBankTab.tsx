@@ -29,7 +29,8 @@ import {
   CheckCheck,
   ArrowRight,
   ArrowLeft,
-  Bookmark
+  Bookmark,
+  RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { BankQuestion, QuestionType, BookStructure, TextbookUnit, TextbookLesson } from '../types';
@@ -871,6 +872,11 @@ export default function QuestionBankTab({
   const [moveSubject, setMoveSubject] = useState('التقنية الرقمية');
   const [moveUnit, setMoveUnit] = useState('');
   const [moveLesson, setMoveLesson] = useState('');
+
+  // True/False Rephrasing states
+  const [isRephrasing, setIsRephrasing] = useState(false);
+  const [rephraseProgress, setRephraseProgress] = useState(0);
+  const [rephraseTotal, setRephraseTotal] = useState(0);
 
 
 
@@ -1762,6 +1768,120 @@ export default function QuestionBankTab({
     );
   };
 
+  // Smart Rephrasing of True/False Questions
+  // Converts a portion of "True" answers into "False" statements while preserving student history
+  const handleRephraseTrueFalse = async (targetScope: 'selected' | 'current_filter' | 'all') => {
+    if (!isAdmin) {
+      triggerToast('إعادة صياغة الأسئلة الذكية متاحة فقط للحساب الرئيسي.', 'error');
+      return;
+    }
+
+    let candidates: BankQuestion[] = [];
+
+    if (targetScope === 'selected') {
+      const selectedIds = Object.keys(selectedBqIds).filter(id => selectedBqIds[id]);
+      candidates = bankQuestions.filter(q => selectedIds.includes(q.id) && q.type === 'true_false');
+      if (candidates.length === 0) {
+        triggerToast('لم تقم بتحديد أي أسئلة من نوع صح وخطأ لإعادة صياغتها!', 'info');
+        return;
+      }
+    } else if (targetScope === 'current_filter') {
+      candidates = filteredBank.filter(q => q.type === 'true_false');
+      if (candidates.length === 0) {
+        triggerToast('لا توجد أسئلة صح وخطأ في التصفية الحالية لإعادة صياغتها!', 'info');
+        return;
+      }
+    } else {
+      candidates = bankQuestions.filter(q => q.type === 'true_false');
+      if (candidates.length === 0) {
+        triggerToast('لا توجد أسئلة صح وخطأ في بنك الأسئلة لإعادة صياغتها!', 'info');
+        return;
+      }
+    }
+
+    const trueCount = candidates.filter(q => q.correctAnswer === 'true' || q.correctAnswer === '0' || q.correctAnswer === 'صح').length;
+
+    triggerConfirm(
+      'إعادة صياغة وتنويع أسئلة الصح والخطأ بالذكاء الاصطناعي 🔄',
+      `تم إيجاد (${candidates.length}) سؤال صح وخطأ ضمن النطاق المختار (منها ${trueCount} إجابتها "صح").\n\n` +
+      `سيقوم النظام الذكي بإعادة صياغة نسبة 50% منها لتصبح عبارات خاطئة علمياً مع تصويب الإجابة إلى "خطأ"، مع الاحتفاظ التام بسجلات ونسب ودرجات الطلاب الحالية ووضع شارة "سؤال محدث 🔄" أمام الأسئلة المطورة فقط.\n\n` +
+      `هل تود المتابعة؟`,
+      async () => {
+        setIsRephrasing(true);
+        setRephraseProgress(0);
+        setRephraseTotal(candidates.length);
+
+        try {
+          // Send to server-side AI endpoint in batches of 20
+          const CHUNK_SIZE = 20;
+          let updatedQuestionsCount = 0;
+
+          for (let i = 0; i < candidates.length; i += CHUNK_SIZE) {
+            const chunk = candidates.slice(i, i + CHUNK_SIZE);
+
+            const res = await fetch('/api/rephrase-true-false-questions', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                questions: chunk,
+                targetRatio: 0.5
+              })
+            });
+
+            if (!res.ok) {
+              const errData = await res.json().catch(() => ({}));
+              throw new Error(errData.error || `خطأ في الخادم: ${res.status}`);
+            }
+
+            const data = await res.json();
+            const updatedChunk: BankQuestion[] = data.updatedQuestions || data.questions || [];
+
+            // Commit changed questions to Firestore in a batch
+            const batch = writeBatch(db);
+            let hasWrites = false;
+
+            for (const q of updatedChunk) {
+              if (q.isRephrased) {
+                const docRef = doc(db, 'question_bank', q.id);
+                batch.update(docRef, {
+                  text: q.text,
+                  correctAnswer: q.correctAnswer,
+                  isRephrased: true,
+                  version: (q.version || 1) + 1,
+                  updatedAt: new Date().toISOString(),
+                  ...(q.rephraseExplanation ? { rephraseExplanation: q.rephraseExplanation } : {})
+                });
+                hasWrites = true;
+                updatedQuestionsCount++;
+              }
+            }
+
+            if (hasWrites) {
+              await batch.commit();
+            }
+
+            setRephraseProgress(Math.min(candidates.length, i + CHUNK_SIZE));
+          }
+
+          triggerToast(
+            `اكتملت العملية بنجاح! تم تنويع وإعادة صياغة ${updatedQuestionsCount} سؤالاً لتصبح "خطأ" مع حفظ درجات الطلاب.`,
+            'success'
+          );
+        } catch (err: any) {
+          console.error("Error rephrasing questions:", err);
+          triggerToast(err.message || 'حدث خطأ أثناء محاولة إعادة صياغة الأسئلة.', 'error');
+        } finally {
+          setIsRephrasing(false);
+          setRephraseProgress(0);
+          setRephraseTotal(0);
+        }
+      },
+      undefined,
+      'نعم، أعد الصياغة ونوّع الأسئلة',
+      'إلغاء'
+    );
+  };
+
   // Filter logic (memoized for instantaneous UI response)
   const filteredBank = useMemo(() => {
     const search = searchQuery.trim().toLowerCase();
@@ -1871,6 +1991,20 @@ export default function QuestionBankTab({
             >
               <Upload className="w-4 h-4 text-slate-300" />
               <span>استيراد سريع بالنسخ واللصق من Excel</span>
+            </button>
+
+            <button
+              onClick={() => handleRephraseTrueFalse('current_filter')}
+              disabled={isRephrasing}
+              className={`flex items-center gap-2 px-5 py-3 rounded-xl font-bold text-xs shadow-md transition duration-150 cursor-pointer ${
+                isRephrasing
+                  ? 'bg-amber-100 text-amber-700 cursor-not-allowed shadow-none'
+                  : 'bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white shadow-amber-200 hover:shadow-lg'
+              }`}
+              title="إعادة صياغة وتنويع أسئلة الصح والخطأ بالذكاء الاصطناعي مع الحفاظ التام على درجات الطلاب"
+            >
+              <RefreshCw className={`w-4 h-4 ${isRephrasing ? 'animate-spin' : ''}`} />
+              <span>{isRephrasing ? `جاري التنويع (${rephraseProgress}/${rephraseTotal})...` : 'تنويع أسئلة الصح والخطأ 🔄'}</span>
             </button>
 
             <button
@@ -2349,6 +2483,21 @@ export default function QuestionBankTab({
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
+                      onClick={() => handleRephraseTrueFalse('selected')}
+                      disabled={isRephrasing}
+                      className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer shadow-3xs ${
+                        isRephrasing
+                          ? 'bg-amber-100 text-amber-700 cursor-not-allowed'
+                          : 'bg-amber-50 hover:bg-amber-100 border border-amber-250 text-amber-800'
+                      }`}
+                      title="تنويع أسئلة الصح والخطأ من بين الأسئلة المحددة"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isRephrasing ? 'animate-spin' : ''}`} />
+                      <span>تنويع المحددة (صح/خطأ)</span>
+                    </button>
+
+                    <button
+                      type="button"
                       id="btn-toggle-move-selected"
                       onClick={() => setIsMovePanelOpen(!isMovePanelOpen)}
                       className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer shadow-3xs ${
@@ -2569,6 +2718,11 @@ export default function QuestionBankTab({
                           {q.lesson && (
                             <span className="px-2.5 py-0.5 rounded-lg bg-cyan-50 border border-cyan-100 text-cyan-700">
                               {q.lesson}
+                            </span>
+                          )}
+                          {q.isRephrased && (
+                            <span className="px-2.5 py-0.5 rounded-lg bg-amber-100 border border-amber-300 text-amber-900 font-black flex items-center gap-1 shadow-2xs">
+                              <span>سؤال محدث 🔄</span>
                             </span>
                           )}
                           <span className="mr-auto px-2.5 py-0.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-500 font-sans">

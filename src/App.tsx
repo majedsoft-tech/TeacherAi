@@ -43,6 +43,7 @@ import {
   Library,
   Shuffle,
   Lock,
+  Unlock,
   Link,
   LayoutDashboard,
   LogOut,
@@ -62,6 +63,7 @@ import {
   UserCheck,
   LogIn,
   Menu,
+  Hourglass,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import * as XLSX from "xlsx";
@@ -959,6 +961,146 @@ export default function App() {
     }
   }, [currentStudentQuestionIdx, studentSelectedId, studentQuiz]);
 
+  // Real-time synchronization of active quiz settings (submit button lock, timer threshold, duration, status)
+  useEffect(() => {
+    if (!studentQuiz?.id) return;
+    const targetQuizId = studentQuiz.id;
+
+    // 1. Direct Firestore snapshot listener on the active quiz document
+    let unsubscribeSnapshot = () => {};
+    try {
+      unsubscribeSnapshot = onSnapshot(
+        doc(db, "quizzes", targetQuizId),
+        (snapshot) => {
+          if (!snapshot.exists()) return;
+          const freshData = snapshot.data() as Partial<Quiz>;
+
+          setStudentQuiz((prev) => {
+            if (!prev || prev.id !== targetQuizId) return prev;
+
+            const newEnableSubmitLock = freshData.enableSubmitLock !== false;
+            const newLockMinutes = freshData.submitLockMinutesBeforeEnd ?? 5;
+            const newDuration = freshData.durationMinutes || prev.durationMinutes;
+            const newStatus = freshData.status || prev.status;
+
+            const lockChanged =
+              prev.enableSubmitLock !== newEnableSubmitLock ||
+              prev.submitLockMinutesBeforeEnd !== newLockMinutes ||
+              prev.durationMinutes !== newDuration ||
+              prev.status !== newStatus;
+
+            if (!lockChanged) return prev;
+
+            // Notify student in real-time
+            if (prev.enableSubmitLock && !newEnableSubmitLock) {
+              triggerToast(
+                "قام المعلم بإتاحة زر تسليم الاختبار فوراً لجميع الطلاب! 🔓 يمكنك الآن تسليم ورقة الإجابة عند الانتهاء.",
+                "success",
+              );
+            } else if (!prev.enableSubmitLock && newEnableSubmitLock) {
+              triggerToast(
+                `قام المعلم بتعديل توقيت زر التسليم ليتفعل قبل ${newLockMinutes} دقائق من نهاية الاختبار. ⏳`,
+                "info",
+              );
+            }
+
+            const updated: Quiz = {
+              ...prev,
+              enableSubmitLock: newEnableSubmitLock,
+              submitLockMinutesBeforeEnd: newLockMinutes,
+              durationMinutes: newDuration,
+              status: newStatus,
+            };
+
+            // Update localStorage for recovery/persistence
+            if (studentSelectedId) {
+              const qKey = updated.id || updated.title;
+              localStorage.setItem(
+                `seb_student_${studentSelectedId}_quiz_${qKey}`,
+                JSON.stringify(updated),
+              );
+              localStorage.setItem(
+                `seb_student_${studentSelectedId}_quiz`,
+                JSON.stringify(updated),
+              );
+            }
+
+            return updated;
+          });
+        },
+        (err) => {
+          console.warn("Real-time quiz snapshot error:", err);
+        },
+      );
+    } catch (err) {
+      console.warn("Failed to subscribe to quiz snapshot:", err);
+    }
+
+    // 2. Window Custom Event for instant zero-latency cross-component / cross-tab updates
+    const handleLocalQuizSettingsUpdate = (e: Event) => {
+      const customEvent = e as CustomEvent<{
+        quizId: string;
+        enableSubmitLock?: boolean;
+        submitLockMinutesBeforeEnd?: number;
+      }>;
+      if (customEvent.detail && customEvent.detail.quizId === targetQuizId) {
+        setStudentQuiz((prev) => {
+          if (!prev || prev.id !== targetQuizId) return prev;
+          const nextLock = customEvent.detail.enableSubmitLock !== false;
+          const nextMins =
+            customEvent.detail.submitLockMinutesBeforeEnd ??
+            prev.submitLockMinutesBeforeEnd ??
+            5;
+
+          if (
+            prev.enableSubmitLock === nextLock &&
+            prev.submitLockMinutesBeforeEnd === nextMins
+          ) {
+            return prev;
+          }
+
+          if (prev.enableSubmitLock && !nextLock) {
+            triggerToast(
+              "قام المعلم بإتاحة زر تسليم الاختبار فوراً لجميع الطلاب! 🔓 يمكنك الآن تسليم ورقة الإجابة عند الانتهاء.",
+              "success",
+            );
+          } else if (!prev.enableSubmitLock && nextLock) {
+            triggerToast(
+              `قام المعلم بتعديل توقيت زر التسليم ليتفعل قبل ${nextMins} دقائق من نهاية الاختبار. ⏳`,
+              "info",
+            );
+          }
+
+          const updated: Quiz = {
+            ...prev,
+            enableSubmitLock: nextLock,
+            submitLockMinutesBeforeEnd: nextMins,
+          };
+
+          if (studentSelectedId) {
+            const qKey = updated.id || updated.title;
+            localStorage.setItem(
+              `seb_student_${studentSelectedId}_quiz_${qKey}`,
+              JSON.stringify(updated),
+            );
+            localStorage.setItem(
+              `seb_student_${studentSelectedId}_quiz`,
+              JSON.stringify(updated),
+            );
+          }
+
+          return updated;
+        });
+      }
+    };
+    window.addEventListener("seb_quiz_settings_updated", handleLocalQuizSettingsUpdate);
+
+    return () => {
+      unsubscribeSnapshot();
+      window.removeEventListener("seb_quiz_settings_updated", handleLocalQuizSettingsUpdate);
+    };
+  }, [studentQuiz?.id, studentSelectedId]);
+
   // Clean-up active quiz state helper
   const resetActiveQuizState = () => {
     if (studentSelectedId) {
@@ -1006,6 +1148,34 @@ export default function App() {
 
   // Core Data States from Firestore
   const [quizzes, setQuizzes] = useState<Quiz[]>(initialQuizzes);
+
+  // Sync active quiz settings when quizzes state updates
+  useEffect(() => {
+    if (!studentQuiz?.id || quizzes.length === 0) return;
+    const match = quizzes.find((q) => q.id === studentQuiz.id);
+    if (!match) return;
+
+    setStudentQuiz((prev) => {
+      if (!prev || prev.id !== match.id) return prev;
+      const nextLock = match.enableSubmitLock !== false;
+      const nextMins = match.submitLockMinutesBeforeEnd ?? 5;
+      if (
+        prev.enableSubmitLock === nextLock &&
+        prev.submitLockMinutesBeforeEnd === nextMins &&
+        prev.durationMinutes === match.durationMinutes &&
+        prev.status === match.status
+      ) {
+        return prev;
+      }
+      return {
+        ...prev,
+        enableSubmitLock: nextLock,
+        submitLockMinutesBeforeEnd: nextMins,
+        durationMinutes: match.durationMinutes || prev.durationMinutes,
+        status: match.status || prev.status,
+      };
+    });
+  }, [quizzes, studentQuiz?.id]);
   const [students, setStudents] = useState<Student[]>(initialStudents);
   const [trashStudents, setTrashStudents] = useState<Student[]>([]);
   const [showTrashModal, setShowTrashModal] = useState(false);
@@ -1963,44 +2133,41 @@ export default function App() {
     return () => clearInterval(interval);
   }, [studentQuiz, studentQuizStarted, studentQuizFinished, studentSelectedId]);
 
-  // Student Score Submissions Handler
+  // Student Score Submissions Handler - 3 Seconds Smooth Grading & Progress
   const handleStudentSubmitQuiz = async (isAutoSubmit = false) => {
     if (!studentQuiz) return;
     setQuizSubmitting(true);
-    setGradingProgress(15);
-    setGradingStep(0);
+    setGradingProgress(0);
 
-    const pTimer1 = setTimeout(() => {
-      setGradingProgress(40);
-      setGradingStep(1);
-    }, 450);
+    const GRADING_DURATION_MS = 3000; // مدة 3 ثواني لعرض التصحيح والتقدم
+    const startTime = Date.now();
 
-    const pTimer2 = setTimeout(() => {
-      setGradingProgress(70);
-      setGradingStep(2);
-    }, 950);
-
-    const pTimer3 = setTimeout(() => {
-      setGradingProgress(90);
-      setGradingStep(3);
-    }, 1450);
+    const progressInterval = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      const pct = Math.min(100, Math.floor((elapsed / GRADING_DURATION_MS) * 100));
+      setGradingProgress(pct);
+      if (elapsed >= GRADING_DURATION_MS) {
+        clearInterval(progressInterval);
+      }
+    }, 40);
 
     const clearTimers = () => {
-      clearTimeout(pTimer1);
-      clearTimeout(pTimer2);
-      clearTimeout(pTimer3);
+      clearInterval(progressInterval);
     };
 
     const finalizeGradingPresentation = async () => {
-      clearTimers();
+      const elapsed = Date.now() - startTime;
+      const remainingTime = Math.max(0, GRADING_DURATION_MS - elapsed);
+      if (remainingTime > 0) {
+        await new Promise((resolve) => setTimeout(resolve, remainingTime));
+      }
+      clearInterval(progressInterval);
       setGradingProgress(100);
-      setGradingStep(4);
-      // Give the student a pleasant brief window to see that all steps completed 100%
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      // Brief smooth window to show 100% complete
+      await new Promise((resolve) => setTimeout(resolve, 350));
       setStudentQuizFinished(true);
       setQuizSubmitting(false);
       setGradingProgress(0);
-      setGradingStep(0);
     };
 
     let currentStudentName = "";
@@ -3150,6 +3317,8 @@ export default function App() {
     setBuilderRequireMoeEmail(quiz.requireMoeEmail ?? false);
     setBuilderRequireAcademicId(quiz.requireAcademicId ?? false);
     setBuilderRequireClassGroup(quiz.requireClassGroup ?? false);
+    setBuilderEnableSubmitLock(quiz.enableSubmitLock !== false);
+    setBuilderSubmitLockMinutes(quiz.submitLockMinutesBeforeEnd ?? 5);
 
     if (quiz.questions && quiz.questions.length > 0) {
       setBuilderQuestions(
@@ -3197,7 +3366,124 @@ export default function App() {
   const [builderRequireClassGroup, setBuilderRequireClassGroup] =
     useState(false);
   const [builderIsTimed, setBuilderIsTimed] = useState(true);
+  const [builderEnableSubmitLock, setBuilderEnableSubmitLock] = useState(true);
+  const [builderSubmitLockMinutes, setBuilderSubmitLockMinutes] = useState(5);
   const [builderHasAvailability, setBuilderHasAvailability] = useState(false);
+
+  // Immediate toggle and broadcast of submit button lock for in-progress & saved quizzes
+  const handleToggleQuizSubmitLock = async (quizId: string, newLockState: boolean) => {
+    if (!currentUser) return;
+    const quiz = quizzes.find((q) => q.id === quizId);
+    try {
+      await updateDoc(doc(db, "quizzes", quizId), {
+        enableSubmitLock: newLockState,
+      });
+      setQuizzes((prev) =>
+        prev.map((q) =>
+          q.id === quizId ? { ...q, enableSubmitLock: newLockState } : q,
+        ),
+      );
+      // Synchronize across open student tabs / windows
+      window.dispatchEvent(
+        new CustomEvent("seb_quiz_settings_updated", {
+          detail: {
+            quizId,
+            enableSubmitLock: newLockState,
+            submitLockMinutesBeforeEnd: quiz?.submitLockMinutesBeforeEnd ?? 5,
+          },
+        }),
+      );
+      triggerToast(
+        newLockState
+          ? `تم تفعيل قفل زر تسليم اختبار "${quiz?.title || ""}" وتطبيقه فوراً على الطلاب الجاري حلهم للاختبار!`
+          : `تم فتح وإتاحة زر تسليم اختبار "${quiz?.title || ""}" فوراً لجميع الطلاب! 🔓`,
+        "success",
+      );
+    } catch (error) {
+      console.error("Error toggling submit lock:", error);
+      triggerToast("فشل تحديث حالة زر التسليم في قاعدة البيانات", "error");
+    }
+  };
+
+  // Immediate toggle from within Quiz Builder
+  const handleToggleBuilderSubmitLock = async () => {
+    const nextLockState = !builderEnableSubmitLock;
+    setBuilderEnableSubmitLock(nextLockState);
+
+    if (editingQuizId) {
+      try {
+        await updateDoc(doc(db, "quizzes", editingQuizId), {
+          enableSubmitLock: nextLockState,
+          submitLockMinutesBeforeEnd: Number(builderSubmitLockMinutes || 5),
+        });
+        setQuizzes((prev) =>
+          prev.map((q) =>
+            q.id === editingQuizId
+              ? {
+                  ...q,
+                  enableSubmitLock: nextLockState,
+                  submitLockMinutesBeforeEnd: Number(builderSubmitLockMinutes || 5),
+                }
+              : q,
+          ),
+        );
+        window.dispatchEvent(
+          new CustomEvent("seb_quiz_settings_updated", {
+            detail: {
+              quizId: editingQuizId,
+              enableSubmitLock: nextLockState,
+              submitLockMinutesBeforeEnd: Number(builderSubmitLockMinutes || 5),
+            },
+          }),
+        );
+        triggerToast(
+          nextLockState
+            ? `تم تفعيل قفل زر التسليم وتطبيقه فوراً على الطلاب الجاري حلهم للاختبار (يتاح قبل ${builderSubmitLockMinutes} دقائق)`
+            : "تم فتح وإتاحة زر التسليم فوراً لجميع الطلاب الذين يؤدون الاختبار الآن! 🔓",
+          "success",
+        );
+      } catch (err) {
+        console.error("Error updating submit lock in builder:", err);
+        triggerToast("فشل تحديث إعداد زر التسليم", "error");
+      }
+    }
+  };
+
+  // Immediate minutes update from within Quiz Builder
+  const handleUpdateBuilderSubmitLockMinutes = async (mins: number) => {
+    const validatedMins = Math.max(1, Math.min(Math.max(1, builderDuration - 1), mins));
+    setBuilderSubmitLockMinutes(validatedMins);
+
+    if (editingQuizId) {
+      try {
+        await updateDoc(doc(db, "quizzes", editingQuizId), {
+          submitLockMinutesBeforeEnd: validatedMins,
+        });
+        setQuizzes((prev) =>
+          prev.map((q) =>
+            q.id === editingQuizId
+              ? { ...q, submitLockMinutesBeforeEnd: validatedMins }
+              : q,
+          ),
+        );
+        window.dispatchEvent(
+          new CustomEvent("seb_quiz_settings_updated", {
+            detail: {
+              quizId: editingQuizId,
+              enableSubmitLock: builderEnableSubmitLock,
+              submitLockMinutesBeforeEnd: validatedMins,
+            },
+          }),
+        );
+        triggerToast(
+          `تم تحديث توقيت زر التسليم ليتفعل قبل (${validatedMins}) دقيقة وتطبيقه فوراً على الطلاب! ⏱️`,
+          "info",
+        );
+      } catch (err) {
+        console.error("Error updating submit lock minutes in builder:", err);
+      }
+    }
+  };
 
   // Quiz Builder PDF Generation States
   const [showBuilderPdfModal, setShowBuilderPdfModal] = useState(false);
@@ -3269,6 +3555,8 @@ export default function App() {
     setBuilderRequireAcademicId(false);
     setBuilderRequireClassGroup(false);
     setBuilderIsTimed(true);
+    setBuilderEnableSubmitLock(true);
+    setBuilderSubmitLockMinutes(5);
     setBuilderHasAvailability(false);
     setBuilderQuestions([]);
 
@@ -3967,6 +4255,8 @@ export default function App() {
       requireMoeEmail: builderRequireMoeEmail,
       requireAcademicId: builderRequireAcademicId,
       requireClassGroup: builderRequireClassGroup,
+      enableSubmitLock: builderIsTimed ? builderEnableSubmitLock : false,
+      submitLockMinutesBeforeEnd: builderIsTimed ? Number(builderSubmitLockMinutes || 5) : 5,
       questions: finalQuestions.map((q, index) => ({
         ...q,
         points: Number(q.points || 1),
@@ -3996,6 +4286,8 @@ export default function App() {
       setBuilderRequireAcademicId(false);
       setBuilderRequireClassGroup(false);
       setBuilderIsTimed(true);
+      setBuilderEnableSubmitLock(true);
+      setBuilderSubmitLockMinutes(5);
       setBuilderHasAvailability(false);
       setBuilderQuestions([
         {
@@ -8266,14 +8558,165 @@ export default function App() {
 
     // B. Student Active Test Ongoing Screen
     if (!studentQuizFinished) {
+      const activeStudent = students.find((s) => s.id === studentSelectedId);
+      const studentName = activeStudent?.name || "طالب اختبار";
+      const studentClass = activeStudent?.gradeClass || studentSelectedGrade;
+
+      // نافذة تصحيح الاختبار والتقدم: تعرض فقط الدائرة والساعة الرملية لمدة 3 ثواني بدون عرض الأسئلة
+      if (quizSubmitting) {
+        return (
+          <div
+            id="grading-progress-screen"
+            className="fixed inset-0 z-[250] flex items-center justify-center p-4 sm:p-6 bg-slate-950/95 backdrop-blur-md select-none overflow-hidden"
+            dir="rtl"
+          >
+            {/* إضاءات خلفية هادئة */}
+            <div className="absolute top-1/4 -right-20 w-80 h-80 bg-indigo-500/20 rounded-full blur-3xl pointer-events-none" />
+            <div className="absolute bottom-1/4 -left-20 w-80 h-80 bg-emerald-500/15 rounded-full blur-3xl pointer-events-none" />
+
+            <motion.div
+              initial={{ opacity: 0, scale: 0.92, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden text-slate-800 text-center relative z-10"
+            >
+              {/* ترويسة النافذة */}
+              <div className="relative bg-gradient-to-br from-indigo-900 via-indigo-800 to-slate-900 p-6 sm:p-7 text-white overflow-hidden">
+                <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-white/10 border border-white/15 text-indigo-200 text-xs font-bold mb-2.5 shadow-xs">
+                  <GraduationCap className="w-3.5 h-3.5 text-indigo-300" />
+                  <span>نظام التصحيح الإلكتروني الذكي</span>
+                </div>
+                <h3 className="text-xl sm:text-2xl font-black tracking-tight text-white mb-1.5">
+                  {gradingProgress >= 100
+                    ? "اكتمل التصحيح بنجاح! 🌟"
+                    : "جاري تصحيح ورقة الإجابة ورصد النتيجة"}
+                </h3>
+                <p className="text-xs text-indigo-200/90 font-semibold truncate max-w-xs mx-auto">
+                  {studentQuiz.title} • {studentName}
+                </p>
+              </div>
+
+              {/* جسم النافذة: الدائرة والساعة الرملية لتقدم التصحيح بدون عرض الأسئلة */}
+              <div className="p-8 sm:p-10 flex flex-col items-center justify-center">
+                <div className="relative w-44 h-44 flex items-center justify-center">
+                  <svg
+                    className="w-full h-full transform -rotate-90"
+                    viewBox="0 0 144 144"
+                  >
+                    <defs>
+                      <linearGradient
+                        id="gradingCircleGradMain"
+                        x1="0%"
+                        y1="0%"
+                        x2="100%"
+                        y2="100%"
+                      >
+                        <stop offset="0%" stopColor="#6366f1" />
+                        <stop offset="50%" stopColor="#06b6d4" />
+                        <stop offset="100%" stopColor="#10b981" />
+                      </linearGradient>
+                    </defs>
+                    {/* Background Track Circle */}
+                    <circle
+                      cx="72"
+                      cy="72"
+                      r="58"
+                      className="stroke-slate-100"
+                      strokeWidth="10"
+                      fill="transparent"
+                    />
+                    {/* Dynamic Animated Progress Circle */}
+                    <circle
+                      cx="72"
+                      cy="72"
+                      r="58"
+                      stroke={
+                        gradingProgress >= 100
+                          ? "#10b981"
+                          : "url(#gradingCircleGradMain)"
+                      }
+                      strokeWidth="10"
+                      strokeDasharray={364.42}
+                      strokeDashoffset={
+                        364.42 - (364.42 * gradingProgress) / 100
+                      }
+                      strokeLinecap="round"
+                      fill="transparent"
+                      className="transition-all duration-100 ease-linear"
+                    />
+                  </svg>
+
+                  {/* داخل الدائرة: ساعة رملية متحركة ونسبة التقدم المئوية */}
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-center select-none">
+                    {gradingProgress >= 100 ? (
+                      <motion.div
+                        initial={{ scale: 0.8, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        className="flex flex-col items-center justify-center"
+                      >
+                        <div className="w-12 h-12 rounded-full bg-emerald-100 border border-emerald-200 flex items-center justify-center mb-1 text-emerald-600 shadow-xs">
+                          <CheckCircle2 className="w-7 h-7 stroke-[2.5]" />
+                        </div>
+                        <span className="text-2xl font-black font-mono text-emerald-700 tracking-tight leading-none">
+                          100%
+                        </span>
+                        <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full mt-1">
+                          تم الاعتماد ✓
+                        </span>
+                      </motion.div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center">
+                        {/* الساعة الرملية المتحركة */}
+                        <motion.div
+                          animate={{
+                            rotate: [0, 180, 180, 360],
+                            scale: [1, 1.08, 0.96, 1],
+                          }}
+                          transition={{
+                            repeat: Infinity,
+                            duration: 1.5,
+                            ease: "easeInOut",
+                          }}
+                          className="mb-1.5"
+                        >
+                          <div className="w-11 h-11 rounded-full bg-amber-50 border border-amber-200 flex items-center justify-center shadow-xs">
+                            <Hourglass className="w-6 h-6 text-amber-500" />
+                          </div>
+                        </motion.div>
+                        <span className="text-3xl font-black font-mono text-slate-800 tracking-tight leading-none">
+                          {gradingProgress}%
+                        </span>
+                        <span className="text-[11px] font-extrabold text-indigo-700 bg-indigo-50 border border-indigo-100 px-3 py-0.5 rounded-full mt-1.5 animate-pulse">
+                          جاري التصحيح...
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* نص التقدم */}
+                <div className="mt-6 space-y-1">
+                  <p className="text-sm font-black text-slate-800">
+                    {gradingProgress >= 100
+                      ? "تم اعتماد ورصد النتيجة بنجاح"
+                      : "مؤشر تقدم عملية التصحيح والرصد الإلكتروني"}
+                  </p>
+                  <p className="text-xs text-slate-500 font-bold flex items-center justify-center gap-1.5 pt-1">
+                    <Clock className="w-3.5 h-3.5 text-indigo-500 animate-pulse" />
+                    <span>الرجاء عدم إغلاق الصفحة، جاري تجهيز وثيقة النتيجة النهائية...</span>
+                  </p>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        );
+      }
+
       const answeredCount = Object.keys(quizAnswers).length;
       const totalCount = studentQuiz.questions.length;
       const progressPercent = Math.round((answeredCount / totalCount) * 100);
       const isTimeShort = quizTimer < 120; // less than 2 minutes
-
-      const activeStudent = students.find((s) => s.id === studentSelectedId);
-      const studentName = activeStudent?.name || "طالب اختبار";
-      const studentClass = activeStudent?.gradeClass || studentSelectedGrade;
 
       const totalDurationSeconds = (studentQuiz.durationMinutes || 15) * 60;
       const timeRemainingPercent = Math.max(
@@ -8285,6 +8728,32 @@ export default function App() {
       const mins = Math.floor(quizTimer / 60);
       const secs = quizTimer % 60;
       const displayTime = `${mins}:${secs < 10 ? "0" : ""}${secs}`;
+
+      // Submit Button Activation: Configured by Teacher (or defaults to 5 minutes before end)
+      const isUntimedQuiz = studentQuiz.durationMinutes === 9999;
+      const isSubmitLockConfigured = studentQuiz.enableSubmitLock !== false;
+      const submitUnlockMinutes = Math.min(
+        studentQuiz.durationMinutes || 15,
+        Math.max(1, studentQuiz.submitLockMinutesBeforeEnd ?? 5),
+      );
+      const submitUnlockThreshold = submitUnlockMinutes * 60; // in seconds
+
+      const isSubmitLocked =
+        !isUntimedQuiz &&
+        isSubmitLockConfigured &&
+        totalDurationSeconds > submitUnlockThreshold &&
+        quizTimer > submitUnlockThreshold;
+      const secondsUntilSubmitActivation = isSubmitLocked
+        ? Math.max(0, quizTimer - submitUnlockThreshold)
+        : 0;
+
+      const actHours = Math.floor(secondsUntilSubmitActivation / 3600);
+      const actMins = Math.floor((secondsUntilSubmitActivation % 3600) / 60);
+      const actSecs = secondsUntilSubmitActivation % 60;
+      const formattedSubmitActivationTimer =
+        actHours > 0
+          ? `${actHours}:${actMins < 10 ? "0" : ""}${actMins}:${actSecs < 10 ? "0" : ""}${actSecs}`
+          : `${actMins < 10 ? "0" : ""}${actMins}:${actSecs < 10 ? "0" : ""}${actSecs}`;
 
       return (
         <div
@@ -8593,12 +9062,29 @@ export default function App() {
             })()}
 
             {/* Bottom Submit Actions */}
-            <div className="pt-6">
+            <div 
+              className="pt-6"
+              onClick={() => {
+                if (isSubmitLocked) {
+                  triggerToast(
+                    `عفواً، لا يمكن تسليم الاختبار الآن! يتاح زر التسليم قبل ${submitUnlockMinutes} دقائق فقط من انتهاء وقت الاختبار (متبقي للتفعيل: ${formattedSubmitActivationTimer}). يرجى استغلال الوقت في مراجعة وتدقيق إجاباتك.`,
+                    "info",
+                  );
+                }
+              }}
+            >
               <button
                 type="button"
                 id="student-quiz-submit-btn"
-                disabled={quizSubmitting}
+                disabled={quizSubmitting || isSubmitLocked}
+                title={
+                  isSubmitLocked
+                    ? `زر التسليم مقفل حالياً - متبقي للتفعيل: ${formattedSubmitActivationTimer} (يتاح قبل ${submitUnlockMinutes} دقائق من نهاية الاختبار)`
+                    : "تصحيح وتسليم ورقة الإجابة"
+                }
                 onClick={() => {
+                  if (isSubmitLocked) return;
+
                   const unAnswered = totalCount - answeredCount;
                   if (unAnswered > 0) {
                     triggerConfirm(
@@ -8629,19 +9115,71 @@ export default function App() {
                     "الرجوع للمراجعة والتصحيح",
                   );
                 }}
-                className={`w-full flex items-center justify-center gap-3 px-8 py-5 rounded-2xl font-black text-base text-white shadow-lg transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] cursor-pointer bg-gradient-to-l from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-750 shadow-emerald-100 dark:shadow-none ${
+                className={`w-full flex items-center justify-center gap-3 px-8 py-5 rounded-2xl font-black text-base transition-all duration-300 select-none ${
                   quizSubmitting
-                    ? "opacity-70 cursor-not-allowed animate-pulse"
-                    : ""
+                    ? "bg-slate-700 text-white opacity-75 cursor-not-allowed animate-pulse"
+                    : isSubmitLocked
+                      ? "bg-gradient-to-l from-slate-800 via-slate-850 to-slate-900 text-white border-2 border-amber-500/40 shadow-md cursor-not-allowed opacity-95"
+                      : "bg-gradient-to-l from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-750 text-white shadow-lg shadow-emerald-100 hover:scale-[1.01] active:scale-[0.99] cursor-pointer"
                 }`}
               >
-                <CheckCircle2 className="w-5 h-5 shrink-0" />
-                <span className="font-sans font-black tracking-wide text-base leading-none">
-                  {quizSubmitting
-                    ? "جاري تصحيح وتسليم الاختبار..."
-                    : "تصحيح وتسليم الاختبار"}
-                </span>
+                {quizSubmitting ? (
+                  <>
+                    <RefreshCw className="w-5 h-5 shrink-0 animate-spin" />
+                    <span className="font-sans font-black tracking-wide text-base leading-none">
+                      جاري تصحيح وتسليم الاختبار...
+                    </span>
+                  </>
+                ) : isSubmitLocked ? (
+                  <div className="w-full flex flex-col sm:flex-row items-center justify-center gap-2.5 sm:gap-4 py-0.5">
+                    <div className="flex items-center gap-2 text-amber-300">
+                      <Lock className="w-5 h-5 shrink-0 animate-pulse text-amber-400" />
+                      <span className="font-sans font-black text-base text-white">
+                        تفعيل زر تسليم الاختبار بعد:
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2.5">
+                      <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-amber-500/20 border border-amber-400/50 text-amber-300 font-mono font-black text-base sm:text-lg shadow-inner">
+                        <Clock className="w-4 h-4 text-amber-400 shrink-0" />
+                        <span className="tracking-widest leading-none">
+                          {formattedSubmitActivationTimer}
+                        </span>
+                      </span>
+                      <span className="text-[11px] sm:text-xs text-slate-300 font-bold hidden sm:inline">
+                        (قبل {submitUnlockMinutes} دقائق من النهاية ⏳)
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-5 h-5 shrink-0 text-emerald-200" />
+                    <span className="font-sans font-black tracking-wide text-base leading-none">
+                      تصحيح وتسليم الاختبار
+                    </span>
+                    <span className="text-xs font-bold bg-emerald-700/80 px-2.5 py-1 rounded-lg border border-emerald-400/40 text-emerald-100 mr-2 shadow-xs hidden sm:inline-flex items-center gap-1">
+                      <span>متاح للتسليم الآن</span>
+                      <span>✓</span>
+                    </span>
+                  </>
+                )}
               </button>
+
+              {/* Status Notice under the button */}
+              {isSubmitLocked ? (
+                <div className="mt-3 flex items-center justify-center gap-2 text-center text-xs text-amber-800 font-bold bg-amber-50/90 border border-amber-200 rounded-xl py-2.5 px-4 select-none">
+                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>
+                    زر التسليم مقفل مؤقتاً لضمان التأني والمراجعة، وسيتفعل تلقائياً عند الدخول في آخر {submitUnlockMinutes} دقائق من زمن الاختبار (المتبقي للتفعيل: <strong className="font-mono text-amber-900 font-black">{formattedSubmitActivationTimer}</strong>).
+                  </span>
+                </div>
+              ) : !quizSubmitting && (
+                <div className="mt-3 flex items-center justify-center gap-2 text-center text-xs text-emerald-700 font-bold bg-emerald-50/90 border border-emerald-200 rounded-xl py-2.5 px-4 select-none">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>
+                    زر التسليم مفعل ومتاح الآن! تأكد من إجابة كافة الأسئلة ثم اضغط لتأكيد التسليم النهائي.
+                  </span>
+                </div>
+              )}
             </div>
           </main>
 
@@ -8699,169 +9237,6 @@ export default function App() {
                     >
                       {confirmDialog.cancelText || "إلغاء الإجراء"}
                     </button>
-                  </div>
-                </motion.div>
-              </div>
-            )}
-          </AnimatePresence>
-
-          {/* Animated Grading Progress Screen (شاشة تقدم التصحيح والرصد) */}
-          <AnimatePresence>
-            {quizSubmitting && (
-              <div
-                id="grading-progress-modal"
-                className="fixed inset-0 z-[200] flex items-center justify-center p-4 sm:p-6 bg-slate-950/85 backdrop-blur-md"
-                dir="rtl"
-              >
-                <motion.div
-                  initial={{ opacity: 0, scale: 0.92, y: 20 }}
-                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.95, y: -10 }}
-                  transition={{ type: "spring", damping: 26, stiffness: 320 }}
-                  className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden text-slate-800 select-none"
-                >
-                  {/* Top Decorative Header */}
-                  <div className="relative bg-gradient-to-br from-indigo-900 via-indigo-800 to-slate-900 p-6 sm:p-7 text-white text-center overflow-hidden">
-                    {/* Subtle Ambient Background glow */}
-                    <div className="absolute -top-12 -right-12 w-44 h-44 bg-indigo-500/25 rounded-full blur-3xl pointer-events-none" />
-                    <div className="absolute -bottom-12 -left-12 w-44 h-44 bg-emerald-500/20 rounded-full blur-3xl pointer-events-none" />
-
-                    {/* Animated Central Icon */}
-                    <div className="relative mx-auto w-16 h-16 mb-3 flex items-center justify-center">
-                      <div className="absolute inset-0 bg-indigo-400/20 rounded-2xl animate-ping opacity-40" />
-                      <div className="relative w-16 h-16 bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl flex items-center justify-center shadow-inner">
-                        {gradingProgress >= 100 ? (
-                          <CheckCircle2 className="w-9 h-9 text-emerald-400 animate-bounce" />
-                        ) : (
-                          <Sparkles className="w-8 h-8 text-amber-300 animate-pulse" />
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-white/10 border border-white/15 text-indigo-200 text-xs font-bold mb-2 shadow-xs">
-                      <GraduationCap className="w-3.5 h-3.5 text-indigo-300" />
-                      <span>نظام التصحيح الإلكتروني الذكي</span>
-                    </div>
-
-                    <h3 className="text-xl sm:text-2xl font-black tracking-tight text-white mb-1">
-                      {gradingProgress >= 100
-                        ? "اكتمل التصحيح بنجاح! 🌟"
-                        : "جاري تصحيح ورقة الإجابة ورصد النتيجة"}
-                    </h3>
-                    <p className="text-xs text-indigo-200/90 font-semibold truncate max-w-sm mx-auto">
-                      {studentQuiz?.title} • {studentName}
-                    </p>
-                  </div>
-
-                  {/* Progress Bar & Percentage Section */}
-                  <div className="p-6 sm:p-7">
-                    <div className="mb-6">
-                      <div className="flex items-center justify-between mb-2 select-none">
-                        <span className="text-xs font-black text-slate-700">
-                          {gradingProgress >= 100
-                            ? "تم اعتماد ورصد نتيجتك بنجاح"
-                            : "مؤشر تقدم عملية التصحيح والرصد"}
-                        </span>
-                        <span className="text-base font-black font-mono text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-0.5 rounded-lg shadow-xs">
-                          {gradingProgress}%
-                        </span>
-                      </div>
-                      {/* The animated progress bar */}
-                      <div className="w-full h-3.5 bg-slate-100 rounded-full overflow-hidden p-0.5 border border-slate-200 shadow-inner">
-                        <motion.div
-                          className={`h-full rounded-full transition-all duration-300 ${
-                            gradingProgress >= 100
-                              ? "bg-gradient-to-r from-emerald-500 to-teal-500 shadow-xs"
-                              : "bg-gradient-to-r from-indigo-600 via-indigo-500 to-emerald-500 shadow-xs"
-                          }`}
-                          style={{ width: `${gradingProgress}%` }}
-                          initial={{ width: "0%" }}
-                          animate={{ width: `${gradingProgress}%` }}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Detailed Stages Checklist */}
-                    <div className="space-y-2.5 mb-6">
-                      {GRADING_STAGES.map((stg) => {
-                        const isDone = gradingStep > stg.id || gradingProgress >= 100;
-                        const isCurrent = gradingStep === stg.id && gradingProgress < 100;
-
-                        return (
-                          <div
-                            key={stg.id}
-                            className={`flex items-start gap-3 p-3 rounded-2xl transition-all duration-200 border ${
-                              isDone
-                                ? "bg-emerald-50/70 border-emerald-200 text-emerald-950"
-                                : isCurrent
-                                ? "bg-indigo-50/90 border-indigo-200 text-indigo-950 ring-2 ring-indigo-400/20 shadow-xs"
-                                : "bg-slate-50/60 border-slate-100 text-slate-400"
-                            }`}
-                          >
-                            <div className="mt-0.5 shrink-0">
-                              {isDone ? (
-                                <div className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-xs">
-                                  <Check className="w-3.5 h-3.5 stroke-[3]" />
-                                </div>
-                              ) : isCurrent ? (
-                                <div className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center shadow-xs">
-                                  <RotateCcw className="w-3 h-3 animate-spin" />
-                                </div>
-                              ) : (
-                                <div className="w-5 h-5 rounded-full bg-slate-200 text-slate-500 flex items-center justify-center text-[10px] font-black">
-                                  {stg.id + 1}
-                                </div>
-                              )}
-                            </div>
-
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center justify-between gap-2">
-                                <p
-                                  className={`text-xs font-black leading-tight ${
-                                    isDone
-                                      ? "text-emerald-900"
-                                      : isCurrent
-                                      ? "text-indigo-900"
-                                      : "text-slate-500"
-                                  }`}
-                                >
-                                  {stg.title}
-                                </p>
-                                {isDone && (
-                                  <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-100/90 px-2 py-0.5 rounded-md shrink-0">
-                                    مكتمل ✓
-                                  </span>
-                                )}
-                                {isCurrent && (
-                                  <span className="text-[10px] font-extrabold text-indigo-700 bg-indigo-100/90 px-2 py-0.5 rounded-md shrink-0 animate-pulse">
-                                    قيد المعالجة...
-                                  </span>
-                                )}
-                              </div>
-                              <p
-                                className={`text-[11px] mt-0.5 font-medium ${
-                                  isDone
-                                    ? "text-emerald-700/80"
-                                    : isCurrent
-                                    ? "text-indigo-700/80"
-                                    : "text-slate-400"
-                                }`}
-                              >
-                                {stg.desc}
-                              </p>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {/* Footer note */}
-                    <div className="text-center bg-slate-50 border border-slate-100 rounded-2xl py-3 px-4">
-                      <p className="text-xs text-slate-500 font-bold flex items-center justify-center gap-2">
-                        <Clock className="w-3.5 h-3.5 text-indigo-500 shrink-0 animate-pulse" />
-                        <span>الرجاء عدم إغلاق الصفحة، جاري تجهيز وثيقة النتيجة النهائية...</span>
-                      </p>
-                    </div>
                   </div>
                 </motion.div>
               </div>
@@ -10166,6 +10541,31 @@ export default function App() {
                                       <span>تعديل الاختبار</span>
                                     </button>
 
+                                    {/* Instant Toggle Submit Lock */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setActiveMenuQuizId(null);
+                                        const nextLock = quiz.enableSubmitLock === false;
+                                        handleToggleQuizSubmitLock(quiz.id, nextLock);
+                                      }}
+                                      className="w-full text-right px-4 py-2 hover:bg-amber-50/70 text-slate-800 text-xs font-bold transition flex items-center gap-2 border-t border-slate-100"
+                                      title="تغيير فوري لزر تسليم الاختبار للطلاب"
+                                    >
+                                      {quiz.enableSubmitLock === false ? (
+                                        <>
+                                          <Lock className="w-3.5 h-3.5 text-amber-600" />
+                                          <span className="text-amber-800">قفل زر التسليم مؤقتاً</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Unlock className="w-3.5 h-3.5 text-emerald-600" />
+                                          <span className="text-emerald-700">إتاحة زر التسليم فوراً 🔓</span>
+                                        </>
+                                      )}
+                                    </button>
+
                                     {/* Preview / View details */}
                                     <button
                                       type="button"
@@ -10557,6 +10957,31 @@ export default function App() {
                                         >
                                           <Pencil className="w-3.5 h-3.5 text-amber-500" />
                                           <span>تعديل الاختبار</span>
+                                        </button>
+
+                                        {/* Instant Toggle Submit Lock */}
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setActiveMenuQuizId(null);
+                                            const nextLock = quiz.enableSubmitLock === false;
+                                            handleToggleQuizSubmitLock(quiz.id, nextLock);
+                                          }}
+                                          className="w-full text-right px-4 py-2 hover:bg-amber-50/70 text-slate-800 text-xs font-bold transition flex items-center gap-2 border-t border-slate-100"
+                                          title="تغيير فوري لزر تسليم الاختبار للطلاب"
+                                        >
+                                          {quiz.enableSubmitLock === false ? (
+                                            <>
+                                              <Lock className="w-3.5 h-3.5 text-amber-600" />
+                                              <span className="text-amber-800">قفل زر التسليم مؤقتاً</span>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <Unlock className="w-3.5 h-3.5 text-emerald-600" />
+                                              <span className="text-emerald-700">إتاحة زر التسليم فوراً 🔓</span>
+                                            </>
+                                          )}
                                         </button>
 
                                         <button
@@ -11546,27 +11971,148 @@ export default function App() {
                           </button>
                         </div>
 
-                        {/* Inline Duration Selector */}
+                        {/* Inline Duration & Submit Button Activation Controls */}
                         {builderIsTimed && (
-                          <div className="mt-4 mr-16 p-4 bg-violet-50/35 border border-violet-100 rounded-xl max-w-sm space-y-2 animate-fadeIn">
-                            <label className="text-xs font-extrabold text-violet-800 block">
-                              حدد زمن الاختبار المقترح (بالدقائق):
-                            </label>
-                            <div className="relative">
-                              <input
-                                type="number"
-                                min={5}
-                                max={180}
-                                required={builderIsTimed}
-                                value={builderDuration}
-                                onChange={(e) =>
-                                  setBuilderDuration(Number(e.target.value))
-                                }
-                                className="w-full bg-white border border-violet-200 focus:border-violet-400 focus:outline-none focus:ring-1 focus:ring-violet-400 rounded-xl pl-16 pr-4 py-2.5 text-xs text-slate-800 font-sans font-extrabold"
-                              />
-                              <span className="absolute left-4 top-2 text-[11px] font-bold text-violet-450 pt-0.5">
-                                دقيقة
-                              </span>
+                          <div className="mt-4 mr-0 sm:mr-16 space-y-3.5 animate-fadeIn">
+                            {/* 1. Quiz Duration Input */}
+                            <div className="p-4 bg-violet-50/40 border border-violet-100/90 rounded-2xl max-w-md space-y-2">
+                              <label className="text-xs font-black text-violet-900 flex items-center gap-1.5">
+                                <Clock className="w-3.5 h-3.5 text-violet-600" />
+                                <span>حدد زمن الاختبار المقترح (بالدقائق):</span>
+                              </label>
+                              <div className="relative">
+                                <input
+                                  type="number"
+                                  min={5}
+                                  max={180}
+                                  required={builderIsTimed}
+                                  value={builderDuration}
+                                  onChange={(e) =>
+                                    setBuilderDuration(Math.max(5, Number(e.target.value)))
+                                  }
+                                  className="w-full bg-white border border-violet-200 focus:border-violet-400 focus:outline-none focus:ring-1 focus:ring-violet-400 rounded-xl pl-16 pr-4 py-2.5 text-xs text-slate-800 font-sans font-extrabold"
+                                />
+                                <span className="absolute left-4 top-2 text-[11px] font-bold text-violet-500 pt-0.5">
+                                  دقيقة
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* 2. Submit Button Activation Setting */}
+                            <div className="p-4 bg-amber-50/60 border border-amber-200/80 rounded-2xl max-w-md space-y-3 transition-all">
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="flex items-start gap-3">
+                                  <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-amber-100 text-amber-700 border border-amber-200 shrink-0 mt-0.5">
+                                    <Lock className="w-4.5 h-4.5" />
+                                  </div>
+                                  <div>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span className="font-extrabold text-xs text-slate-900 block">
+                                        تفعيل توقيت زر تسليم الاختبار
+                                      </span>
+                                      {editingQuizId && (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 border border-emerald-300 text-emerald-800 text-[10px] font-black animate-pulse">
+                                          <Zap className="w-3 h-3 text-emerald-600" />
+                                          تزامن فوري مباشر
+                                        </span>
+                                      )}
+                                    </div>
+                                    <span className="text-[11px] text-slate-500 block mt-0.5 leading-relaxed">
+                                      التحكم في موعد إتاحة زر التسليم للطلاب (إقفاله مع عداد تنازلي حتى اقتراب نهاية الاختبار لمنع التسرع).
+                                    </span>
+                                  </div>
+                                </div>
+                                {/* Toggle Switch */}
+                                <button
+                                  type="button"
+                                  onClick={handleToggleBuilderSubmitLock}
+                                  className={`w-11 h-6 rounded-full p-0.5 transition-colors duration-200 cursor-pointer flex items-center shrink-0 ${
+                                    builderEnableSubmitLock
+                                      ? "bg-amber-500 justify-end"
+                                      : "bg-slate-300 justify-start"
+                                  }`}
+                                  title={
+                                    builderEnableSubmitLock
+                                      ? "إلغاء قفل زر التسليم (تفعيله فوراً للطلاب)"
+                                      : "تفعيل تأخير زر التسليم حتى نهاية الاختبار"
+                                  }
+                                >
+                                  <span className="w-5 h-5 rounded-full bg-white shadow-md block transition-transform"></span>
+                                </button>
+                              </div>
+
+                              {editingQuizId && (
+                                <div className="p-2.5 rounded-xl bg-amber-100/70 border border-amber-300/80 text-amber-900 text-[11px] font-bold flex items-center gap-2">
+                                  <Zap className="w-4 h-4 text-amber-600 shrink-0 animate-bounce" />
+                                  <span>
+                                    ⚡ <strong>التعديل فوري:</strong> عند تغيير طريقة أو تفعيل/تعطيل زر التسليم يتم التغيير مباشرة على شاشات الطلاب الجاري حلهم للاختبار الآن!
+                                  </span>
+                                </div>
+                              )}
+
+                              {builderEnableSubmitLock ? (
+                                <div className="pt-2.5 border-t border-amber-200/70 space-y-2 animate-fadeIn">
+                                  <label className="text-[11px] font-black text-amber-950 block">
+                                    موعد تفعيل زر التسليم (قبل نهاية الاختبار بـ):
+                                  </label>
+                                  <div className="flex items-center gap-2">
+                                    <div className="relative flex-1">
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        max={Math.max(1, builderDuration - 1)}
+                                        value={builderSubmitLockMinutes}
+                                        onChange={(e) =>
+                                          handleUpdateBuilderSubmitLockMinutes(
+                                            Number(e.target.value) || 1,
+                                          )
+                                        }
+                                        className="w-full bg-white border border-amber-300 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 rounded-xl pl-16 pr-3 py-2 text-xs text-slate-800 font-sans font-extrabold"
+                                      />
+                                      <span className="absolute left-3 top-2 text-[11px] font-bold text-amber-700">
+                                        دقائق
+                                      </span>
+                                    </div>
+                                    <div className="flex gap-1">
+                                      {[3, 5, 10]
+                                        .filter((m) => m < builderDuration)
+                                        .map((preset) => (
+                                          <button
+                                            key={preset}
+                                            type="button"
+                                            onClick={() =>
+                                              handleUpdateBuilderSubmitLockMinutes(preset)
+                                            }
+                                            className={`px-2.5 py-1.5 rounded-lg text-[10px] font-extrabold border transition-all ${
+                                              builderSubmitLockMinutes === preset
+                                                ? "bg-amber-600 text-white border-amber-600 shadow-xs"
+                                                : "bg-white text-amber-800 border-amber-200 hover:bg-amber-100/60"
+                                            }`}
+                                          >
+                                            {preset} د
+                                          </button>
+                                        ))}
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 text-[10px] text-amber-800 font-medium">
+                                    <span>⏳</span>
+                                    <span>
+                                      سيعرض زر التسليم في صفحة الطالب عداداً تنازلياً ويتفعل تلقائياً عند آخر{" "}
+                                      <strong className="font-bold text-amber-950">
+                                        {builderSubmitLockMinutes} دقائق
+                                      </strong>{" "}
+                                      من وقت الاختبار.
+                                    </span>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="pt-2 border-t border-slate-200/70 text-[10px] text-emerald-700 font-bold flex items-center gap-1.5">
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                  <span>
+                                    زر تسليم الاختبار مفعل ومتاح للطالب في أي وقت طوال فترة الاختبار دون قفل زمني.
+                                  </span>
+                                </div>
+                              )}
                             </div>
                           </div>
                         )}
@@ -15950,7 +16496,32 @@ export default function App() {
                   </div>
 
                   {/* Footer close */}
-                  <div className="p-4 border-t border-slate-100 gap-3 justify-end flex bg-slate-50/50">
+                  <div className="p-4 border-t border-slate-100 gap-3 justify-end flex flex-wrap bg-slate-50/50">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextLock = selectedQuiz.enableSubmitLock === false;
+                        handleToggleQuizSubmitLock(selectedQuiz.id, nextLock);
+                        setSelectedQuiz({ ...selectedQuiz, enableSubmitLock: nextLock });
+                      }}
+                      className={`px-4 py-2 border rounded-xl font-bold text-xs flex items-center gap-2 transition ${
+                        selectedQuiz.enableSubmitLock === false
+                          ? "bg-amber-50 hover:bg-amber-100 border-amber-300 text-amber-800"
+                          : "bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-800"
+                      }`}
+                    >
+                      {selectedQuiz.enableSubmitLock === false ? (
+                        <>
+                          <Lock className="w-4 h-4 text-amber-600" />
+                          <span>قفل زر التسليم مؤقتاً</span>
+                        </>
+                      ) : (
+                        <>
+                          <Unlock className="w-4 h-4 text-emerald-600" />
+                          <span>إتاحة زر التسليم فوراً للطلاب 🔓</span>
+                        </>
+                      )}
+                    </button>
 
                     <button
                       onClick={() => {

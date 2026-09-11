@@ -28,6 +28,8 @@ export interface Quiz {
   requireAcademicId?: boolean;
   requireClassGroup?: boolean;
   teacherId?: string;
+  enableSubmitLock?: boolean;
+  submitLockMinutesBeforeEnd?: number;
 }
 
 export interface StudentGrade {

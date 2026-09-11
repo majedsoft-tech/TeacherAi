@@ -779,6 +779,12 @@ export default function App() {
     useState<"idle" | "playing" | "finished">("idle");
   const [selectedCurriculumSubject, setSelectedCurriculumSubject] =
     useState<string | null>(null);
+  const [isCurriculumReviewGloballyEnabled, setIsCurriculumReviewGloballyEnabled] =
+    useState<boolean>(true);
+  const [curriculumLockedSubjects, setCurriculumLockedSubjects] = useState<string[]>([]);
+  const [curriculumVisibleSubjects, setCurriculumVisibleSubjects] = useState<string[]>([]);
+  const [studentReviewLockShaking, setStudentReviewLockShaking] = useState<boolean>(false);
+  const [curriculumSubjectTargets, setCurriculumSubjectTargets] = useState<Record<string, any>>({});
 
 
 
@@ -1033,6 +1039,39 @@ export default function App() {
       return true;
     });
   }, [reviewChallenges, studentPortalActive, students, studentSelectedId, studentSelectedGrade, studentPortalTeacherId, currentUser?.uid]);
+
+  // Active quizzes count and indicator for teacher
+  const activeQuizzesTeacherCount = useMemo(() => {
+    return quizzes.filter((q) => {
+      if (currentUser?.uid && (q as any).teacherId && (q as any).teacherId !== currentUser.uid) {
+        return false;
+      }
+      const avail = getQuizAvailability(q);
+      return q.status === "active" && avail.code !== "closed" && avail.code !== "expired";
+    }).length;
+  }, [quizzes, currentUser?.uid]);
+  const hasActiveQuizForTeacher = activeQuizzesTeacherCount > 0;
+
+  // Teacher view locked check for curriculum review
+  const isAllSubjectsLocked = useMemo(() => {
+    if (curriculumVisibleSubjects.length === 0) return false;
+    return curriculumVisibleSubjects.every(
+      (name) => curriculumLockedSubjects.includes(name) || Boolean(curriculumSubjectTargets[name]?.isLocked)
+    );
+  }, [curriculumVisibleSubjects, curriculumLockedSubjects, curriculumSubjectTargets]);
+
+  const curriculumLockedCount = useMemo(() => {
+    return curriculumVisibleSubjects.filter(
+      (name) => curriculumLockedSubjects.includes(name) || Boolean(curriculumSubjectTargets[name]?.isLocked)
+    ).length;
+  }, [curriculumVisibleSubjects, curriculumLockedSubjects, curriculumSubjectTargets]);
+
+  const isCurriculumReviewLockedForTeacher = useMemo(() => {
+    if (!isCurriculumReviewGloballyEnabled) return true;
+    if (curriculumLockedSubjects.length > 0) return true;
+    return false;
+  }, [isCurriculumReviewGloballyEnabled, curriculumLockedSubjects]);
+
   const [reviewScores, setReviewScores] = useState<ReviewScore[]>(initialReviewScores);
 
   // Question Bank Import States inside Quiz Builder
@@ -2635,6 +2674,49 @@ export default function App() {
       unsubs.forEach((u) => u());
     };
   }, [currentUser, studentPortalTeacherId, studentPortalActive]);
+
+  // Real-time listener for curriculum review global enabled status and per-subject locks
+  useEffect(() => {
+    const targetTeacherId = studentPortalActive ? studentPortalTeacherId : currentUser?.uid;
+    if (!targetTeacherId) {
+      setIsCurriculumReviewGloballyEnabled(true);
+      setCurriculumLockedSubjects([]);
+      setCurriculumVisibleSubjects([]);
+      setCurriculumSubjectTargets({});
+      return;
+    }
+
+    const ref = doc(db, "curriculum_settings", targetTeacherId);
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          setIsCurriculumReviewGloballyEnabled(data.isReviewEnabled !== undefined ? Boolean(data.isReviewEnabled) : true);
+          setCurriculumVisibleSubjects(Array.isArray(data.visibleSubjects) ? data.visibleSubjects : []);
+          const rawTargets = data.subjectTargets || {};
+          setCurriculumSubjectTargets(rawTargets);
+          const lockedList: string[] = Array.isArray(data.lockedSubjects) ? [...data.lockedSubjects] : [];
+          Object.keys(rawTargets).forEach((k) => {
+            if (rawTargets[k]?.isLocked && !lockedList.includes(k)) {
+              lockedList.push(k);
+            }
+          });
+          setCurriculumLockedSubjects(lockedList);
+        } else {
+          setIsCurriculumReviewGloballyEnabled(true);
+          setCurriculumLockedSubjects([]);
+          setCurriculumVisibleSubjects([]);
+          setCurriculumSubjectTargets({});
+        }
+      },
+      (err) => {
+        console.warn("Could not listen to curriculum_settings in App:", err);
+      }
+    );
+
+    return () => unsub();
+  }, [studentPortalActive, studentPortalTeacherId, currentUser]);
 
   useEffect(() => {
     // Dynamically calculate stats based on actual data
@@ -6486,6 +6568,29 @@ export default function App() {
         studentQuizStarted,
         studentQuizFinished
       );
+      const hasActiveQuizForStudent = activeQuizzes.length > 0 || ongoingQuizzesList.length > 0;
+
+      const studentMatchingSubjects = curriculumVisibleSubjects.filter((subName) => {
+        const target = curriculumSubjectTargets[subName];
+        if (!target) return true;
+        const targetGrade = target.targetGrade || "جميع الصفوف (عام)";
+        const targetClass = target.targetClass || "جميع الفصول (عام)";
+        const studentGradeVal = activeStudent?.grade || studentSelectedGrade;
+        const studentClassVal = activeStudent?.gradeClass || "";
+        return isGradeMatching(targetGrade, studentGradeVal, studentClassVal);
+      });
+
+      const isStudentMatchingSubjectsAllLocked =
+        studentMatchingSubjects.length > 0 &&
+        studentMatchingSubjects.every(
+          (name) => curriculumLockedSubjects.includes(name) || Boolean(curriculumSubjectTargets[name]?.isLocked)
+        );
+
+      const isStudentReviewLocked =
+        !isCurriculumReviewGloballyEnabled ||
+        ongoingQuizzesList.length > 0 ||
+        (curriculumVisibleSubjects.length > 0 && isAllSubjectsLocked) ||
+        isStudentMatchingSubjectsAllLocked;
 
       const handleResumeOngoingQuiz = (quizToResume: any) => {
         const qKey = quizToResume.id || quizToResume.title;
@@ -6660,18 +6765,64 @@ export default function App() {
                     </div>
 
                     <div
-                      onClick={() => setStudentActiveNav("curriculum_review")}
-                      className="bg-white p-5 rounded-2xl border border-slate-200 hover:border-amber-300 shadow-xs hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between space-y-4"
+                      onClick={() => {
+                        if (isStudentReviewLocked) {
+                          setStudentReviewLockShaking(true);
+                          setTimeout(() => setStudentReviewLockShaking(false), 650);
+                        }
+                        setStudentActiveNav("curriculum_review");
+                      }}
+                      className={`bg-white p-5 rounded-2xl border transition-all cursor-pointer group flex flex-col justify-between space-y-4 ${
+                        isStudentReviewLocked 
+                          ? "border-rose-200 hover:border-rose-300 shadow-xs hover:shadow-md bg-rose-50/10" 
+                          : "border-slate-200 hover:border-amber-300 shadow-xs hover:shadow-md"
+                      }`}
                     >
                       <div className="flex items-center justify-between">
-                        <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center font-bold">
-                          <Sparkles className="w-5 h-5" />
-                        </div>
-                        <span className="text-xs font-black text-amber-600 group-hover:translate-x-[-2px] transition-transform">دخول &larr;</span>
+                        <motion.div 
+                          animate={
+                            isStudentReviewLocked && studentReviewLockShaking
+                              ? {
+                                  x: [-6, 6, -5, 5, -3, 3, 0],
+                                  rotate: [-14, 14, -8, 8, 0],
+                                  scale: [1, 1.25, 0.95, 1.1, 1],
+                                }
+                              : {}
+                          }
+                          transition={{ duration: 0.55 }}
+                          className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold ${
+                            isStudentReviewLocked 
+                              ? "bg-rose-50 text-rose-600" 
+                              : "bg-amber-50 text-amber-600"
+                          }`}
+                        >
+                          {isStudentReviewLocked ? (
+                            <Lock className="w-5 h-5" />
+                          ) : (
+                            <Sparkles className="w-5 h-5" />
+                          )}
+                        </motion.div>
+                        {isStudentReviewLocked ? (
+                          <span className="text-[10.5px] font-black text-rose-600 bg-rose-100/80 px-2 py-0.5 rounded-md border border-rose-200">
+                            مُغلقة حالياً 🔒
+                          </span>
+                        ) : (
+                          <span className="text-xs font-black text-amber-600 group-hover:translate-x-[-2px] transition-transform">دخول &larr;</span>
+                        )}
                       </div>
                       <div>
-                        <h3 className="font-extrabold text-slate-900 text-sm">المراجعة الشاملة للمناهج</h3>
-                        <p className="text-xs text-slate-500 mt-1">استعرض وحل تدريبات المنهج التفاعلية مع دعم الحلول الإرشادي الذكي.</p>
+                        <div className="flex items-center gap-1.5">
+                          <h3 className="font-extrabold text-slate-900 text-sm">المراجعة الشاملة للمناهج</h3>
+                        </div>
+                        <p className="text-xs text-slate-500 mt-1">
+                          {isStudentReviewLocked 
+                            ? (!isCurriculumReviewGloballyEnabled 
+                                ? "المراجعة مقفلة ومغلقة حالياً من قبل المعلم."
+                                : ongoingQuizzesList.length > 0
+                                ? "المراجعة مقفلة لحين إكمال الاختبار المدرسي النشط."
+                                : "المراجعة مقفلة ومغلقة حالياً من قبل المعلم.")
+                            : "استعرض وحل تدريبات المنهج التفاعلية مع دعم الحلول الإرشادي الذكي."}
+                        </p>
                       </div>
                     </div>
 
@@ -6981,6 +7132,10 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
+                      if (isStudentReviewLocked) {
+                        setStudentReviewLockShaking(true);
+                        setTimeout(() => setStudentReviewLockShaking(false), 650);
+                      }
                       setStudentActiveNav("curriculum_review");
                     }}
                     className={`w-full flex items-center justify-between gap-3.5 px-4 py-3 rounded-xl text-xs font-black transition-all duration-200 cursor-pointer ${
@@ -6993,10 +7148,29 @@ export default function App() {
                       <Sparkles className="w-4 h-4 shrink-0 text-[#f4be1c]" />
                       <span>المراجعة الشاملة 📖</span>
                     </div>
-                    {ongoingQuizzesList.length > 0 && (
-                      <span className="p-1 bg-amber-500/20 border border-amber-500/40 text-amber-400 rounded-lg flex items-center justify-center shadow-xs" title="توجد مواد مقفلة لاختبار نشط">
+                    {isStudentReviewLocked && (
+                      <motion.span
+                        animate={
+                          studentReviewLockShaking
+                            ? {
+                                x: [-5, 5, -4, 4, -2, 2, 0],
+                                rotate: [-14, 14, -8, 8, 0],
+                                scale: [1, 1.25, 0.95, 1.1, 1],
+                              }
+                            : {}
+                        }
+                        transition={{ duration: 0.55 }}
+                        className="p-1.5 bg-rose-500/20 border border-rose-500/40 text-rose-400 rounded-lg flex items-center justify-center shadow-xs shrink-0"
+                        title={
+                          !isCurriculumReviewGloballyEnabled
+                            ? "المراجعة مقفلة من المعلم"
+                            : ongoingQuizzesList.length > 0
+                            ? "المراجعة مقفلة لوجود اختبار نشط"
+                            : "المراجعة مقفلة من المعلم"
+                        }
+                      >
                         <Lock className="w-3.5 h-3.5" />
-                      </span>
+                      </motion.span>
                     )}
                   </button>
                 </div>
@@ -7041,14 +7215,32 @@ export default function App() {
                     }`}
                   >
                     <div className="flex items-center gap-3.5">
-                      <BookOpen className="w-4 h-4 shrink-0" />
+                      <div className="relative">
+                        <BookOpen className="w-4 h-4 shrink-0" />
+                        {hasActiveQuizForStudent && (
+                          <span className="absolute -top-1 -right-1 flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-80"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500 border border-slate-900"></span>
+                          </span>
+                        )}
+                      </div>
                       <span>اختباراتي المدرسية 📝</span>
+                      {hasActiveQuizForStudent && (
+                        <span className="relative flex h-2.5 w-2.5 shrink-0" title="يوجد اختبار مدرسي نشط">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
+                        </span>
+                      )}
                     </div>
-                    {ongoingQuizzesList.length > 0 && (
+                    {ongoingQuizzesList.length > 0 ? (
                       <span className="px-2 py-0.5 bg-rose-500 text-white rounded-full text-[10px] font-black animate-pulse shadow-xs">
                         نشط ({ongoingQuizzesList.length})
                       </span>
-                    )}
+                    ) : activeQuizzes.length > 0 ? (
+                      <span className="px-2 py-0.5 bg-rose-500/90 text-white rounded-full text-[10px] font-black shadow-xs">
+                        نشط ({activeQuizzes.length})
+                      </span>
+                    ) : null}
                   </button>
                 </div>
               </nav>
@@ -7343,7 +7535,15 @@ export default function App() {
                             </div>
                             
                             <div className="space-y-1">
-                              <h4 className="font-extrabold text-base text-slate-900">اختباراتي المدرسية 📝</h4>
+                              <div className="flex items-center gap-2">
+                                <h4 className="font-extrabold text-base text-slate-900">اختباراتي المدرسية 📝</h4>
+                                {hasActiveQuizForStudent && (
+                                  <span className="relative flex h-2.5 w-2.5 shrink-0" title="يوجد اختبار مدرسي نشط">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
+                                  </span>
+                                )}
+                              </div>
                               <p className="text-xs text-slate-500 leading-relaxed">
                                 خض اختباراتك المدرسية والواجبات المخصصة لك، واستعرض الدرجات والتقارير المفصلة لإجاباتك النموذجية.
                               </p>
@@ -8001,9 +8201,11 @@ export default function App() {
               >
                 <div className="relative">
                   <Sparkles className="w-5 h-5 text-[#f4be1c]" />
-                  {ongoingQuizzesList.length > 0 && (
+                  {!isCurriculumReviewGloballyEnabled ? (
+                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-rose-500 rounded-full border-2 border-slate-900 shadow-xs" title="مقفلة" />
+                  ) : ongoingQuizzesList.length > 0 ? (
                     <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-amber-500 rounded-full border-2 border-slate-900 shadow-xs" />
-                  )}
+                  ) : null}
                 </div>
                 <span className="text-[10px]">المراجعة</span>
               </button>
@@ -8046,7 +8248,7 @@ export default function App() {
               >
                 <div className="relative">
                   <BookOpen className="w-5 h-5" />
-                  {ongoingQuizzesList.length > 0 && (
+                  {hasActiveQuizForStudent && (
                     <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
                       <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500 border border-slate-900"></span>
@@ -9217,14 +9419,34 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setActiveTab("curriculum_review_admin")}
-                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-black transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer ${
+                className={`w-full flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl text-xs font-black transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer ${
                   activeTab === "curriculum_review_admin"
                     ? "bg-gradient-to-r from-blue-600 to-[#1e3a8a] text-white shadow-lg"
                     : "text-slate-650 hover:bg-slate-100 hover:text-[#1e3a8a] font-bold"
                 }`}
               >
-                <Sparkles className="w-4 h-4 shrink-0 text-[#f4be1c]" />
-                <span>المراجعة الشاملة 📖</span>
+                <div className="flex items-center gap-3">
+                  <Sparkles className="w-4 h-4 shrink-0 text-[#f4be1c]" />
+                  <span>المراجعة الشاملة 📖</span>
+                </div>
+                {isCurriculumReviewLockedForTeacher && (
+                  <span
+                    className={`p-1.5 rounded-lg flex items-center justify-center shadow-2xs shrink-0 ${
+                      activeTab === "curriculum_review_admin"
+                        ? "bg-rose-500/30 text-rose-100 border border-rose-400/40"
+                        : "bg-rose-100 text-rose-600 border border-rose-200"
+                    }`}
+                    title={
+                      !isCurriculumReviewGloballyEnabled
+                        ? "المراجعة مقفلة بالكامل عن الطلاب"
+                        : isAllSubjectsLocked
+                        ? "جميع المواد مقفلة عن الطلاب"
+                        : `يوجد ${curriculumLockedCount} مواد مقفلة عن الطلاب`
+                    }
+                  >
+                    <Lock className="w-3.5 h-3.5" />
+                  </span>
+                )}
               </button>
 
               <button
@@ -9254,14 +9476,37 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setActiveTab("dashboard")}
-                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-black transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer ${
+                className={`w-full flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl text-xs font-black transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer ${
                   activeTab === "dashboard"
                     ? "bg-gradient-to-r from-blue-600 to-[#1e3a8a] text-white shadow-lg"
                     : "text-slate-650 hover:bg-slate-100 hover:text-[#1e3a8a] font-bold"
                 }`}
               >
-                <Layers className="w-4 h-4 shrink-0" />
-                <span>الاختبارات</span>
+                <div className="flex items-center gap-3">
+                  <div className="relative">
+                    <Layers className="w-4 h-4 shrink-0" />
+                    {hasActiveQuizForTeacher && (
+                      <span className="absolute -top-1 -right-1 flex h-2 w-2">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-80"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500 border border-white"></span>
+                      </span>
+                    )}
+                  </div>
+                  <span>الاختبارات المدرسية 📝</span>
+                  {hasActiveQuizForTeacher && (
+                    <span className="relative flex h-2.5 w-2.5 shrink-0" title="يوجد اختبار مدرسي نشط">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
+                    </span>
+                  )}
+                </div>
+                {hasActiveQuizForTeacher && (
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                    activeTab === "dashboard" ? "bg-white/20 text-white" : "bg-rose-100 text-rose-700 border border-rose-200"
+                  }`}>
+                    نشط ({activeQuizzesTeacherCount})
+                  </span>
+                )}
               </button>
 
               <button
@@ -9401,15 +9646,6 @@ export default function App() {
                 <span className="text-[9px] text-slate-500 block font-bold font-sans">
                   {currentUser?.email || ""}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => reconcileUserData(currentUser, true)}
-                  className="w-full mt-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-[10px] font-black bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200/80 transition-all cursor-pointer shadow-3xs hover:scale-[1.02] active:scale-95"
-                  title="مزامنة واسترجاع كافة الاختبارات والصفوف المرتبطة بالبريد الإلكتروني"
-                >
-                  <RefreshCw className="w-3 h-3 shrink-0 text-blue-600 animate-spin" style={{ animationDuration: '6s' }} />
-                  <span>مزامنة واسترجاع بيانات الحساب</span>
-                </button>
               </div>
 
               <button
@@ -16512,7 +16748,15 @@ export default function App() {
                 : "text-slate-500 font-bold hover:text-slate-800"
             }`}
           >
-            <Layers className="w-5 h-5" />
+            <div className="relative">
+              <Layers className="w-5 h-5" />
+              {hasActiveQuizForTeacher && (
+                <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-80"></span>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-600 border border-white"></span>
+                </span>
+              )}
+            </div>
             <span className="text-[10px]">الاختبارات</span>
           </button>
 
@@ -16560,7 +16804,12 @@ export default function App() {
                 : "text-slate-500 font-bold hover:text-slate-800"
             }`}
           >
-            <Sparkles className="w-5 h-5 text-[#f4be1c]" />
+            <div className="relative">
+              <Sparkles className="w-5 h-5 text-[#f4be1c]" />
+              {isCurriculumReviewLockedForTeacher && (
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-rose-500 rounded-full border border-white shadow-xs" title="المراجعة مقفلة" />
+              )}
+            </div>
             <span className="text-[10px]">المراجعة</span>
           </button>
 
@@ -16711,18 +16960,6 @@ export default function App() {
                 >
                   <Copy className="w-4 h-4 text-emerald-600" />
                   <span>نسخ رابط صفحة الطلاب</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    reconcileUserData(currentUser, true);
-                    setMobileMoreDrawerOpen(false);
-                  }}
-                  className="w-full flex items-center gap-3 p-3 rounded-2xl text-xs font-black bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 cursor-pointer"
-                >
-                  <RefreshCw className="w-4 h-4 text-blue-600" />
-                  <span>مزامنة واسترجاع بيانات الحساب</span>
                 </button>
 
                 {/* Profile card & logout */}

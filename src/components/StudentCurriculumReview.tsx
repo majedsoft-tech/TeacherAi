@@ -555,11 +555,26 @@ export default function StudentCurriculumReview({
   // Sounds
   const synth = useMemo(() => new ReviewSoundSynth(), []);
 
+  // Global toggle state set by teacher for Comprehensive Review
+  const [isReviewEnabled, setIsReviewEnabled] = useState<boolean>(true);
+  const [isSettingsLoaded, setIsSettingsLoaded] = useState<boolean>(false);
   const [visibleSubjects, setVisibleSubjects] = useState<string[]>([]);
-  const [subjectTargets, setSubjectTargets] = useState<Record<string, { targetGrade?: string; targetClass?: string; questionsPerLesson?: string | number }>>({});
+  const [lockedSubjects, setLockedSubjects] = useState<string[]>([]);
+  const [subjectTargets, setSubjectTargets] = useState<Record<string, { targetGrade?: string; targetClass?: string; questionsPerLesson?: string | number; isLocked?: boolean }>>({});
 
   // Ongoing quizzes state to strictly enforce subject locking during active exams
   const [ongoingQuizzesState, setOngoingQuizzesState] = useState<OngoingQuizInfo[]>([]);
+
+  // Animation state for rattling/shaking lock on interaction
+  const [shakingSubjectKey, setShakingSubjectKey] = useState<string | null>(null);
+  const [shakingGlobalLock, setShakingGlobalLock] = useState<boolean>(false);
+
+  const triggerLockShake = (subKey: string) => {
+    setShakingSubjectKey(subKey);
+    setTimeout(() => {
+      setShakingSubjectKey((current) => (current === subKey ? null : current));
+    }, 650);
+  };
 
   useEffect(() => {
     const updateOngoingQuizzes = () => {
@@ -619,18 +634,42 @@ export default function StudentCurriculumReview({
     const unsub = onSnapshot(ref, (snap) => {
       if (snap.exists()) {
         const data = snap.data();
+        setIsReviewEnabled(data.isReviewEnabled !== undefined ? Boolean(data.isReviewEnabled) : true);
         setVisibleSubjects(data.visibleSubjects || []);
-        setSubjectTargets(data.subjectTargets || {});
+        const rawTargets = data.subjectTargets || {};
+        setSubjectTargets(rawTargets);
+
+        // Collect locked subjects from array and/or target flags
+        const lockedList: string[] = Array.isArray(data.lockedSubjects) ? [...data.lockedSubjects] : [];
+        Object.keys(rawTargets).forEach((k) => {
+          if (rawTargets[k]?.isLocked && !lockedList.includes(k)) {
+            lockedList.push(k);
+          }
+        });
+        setLockedSubjects(lockedList);
+        setIsSettingsLoaded(true);
       } else {
+        setIsReviewEnabled(true);
         setVisibleSubjects([]); // Default is empty, meaning all subjects are hidden
         setSubjectTargets({});
+        setLockedSubjects([]);
+        setIsSettingsLoaded(true);
       }
     }, (error) => {
       console.warn("Could not load curriculum settings in student view:", error);
+      setIsSettingsLoaded(true);
     });
 
     return unsub;
   }, [teacherId, activeStudent?.teacherId]);
+
+  // Helper to check if a subject is locked by teacher individually
+  const isSubjectTeacherLocked = (subName?: string | null): boolean => {
+    if (!subName) return false;
+    if (lockedSubjects.includes(subName)) return true;
+    if (subjectTargets[subName]?.isLocked) return true;
+    return false;
+  };
 
   // Helper to check if subject targeting matches current student's grade and class
   const isSubjectTargetingStudent = (subName: string, studentGrade?: string | null, studentGradeClass?: string | null) => {
@@ -653,15 +692,28 @@ export default function StudentCurriculumReview({
     return gradeMatches && classMatches;
   };
 
-  // If currently viewing a subject that becomes hidden, not targeted, or locked by an active quiz, redirect student
+  // If currently viewing a subject that becomes hidden, not targeted, locked by an active quiz, locked by teacher, or review feature closed, redirect student
   useEffect(() => {
     if (selectedSubject) {
+      // 0. Check if entire review is disabled by teacher
+      if (!isReviewEnabled) {
+        onSelectedSubjectChange(null);
+        setIsPlaying(false);
+        triggerToast("قام المعلم بإغلاق المراجعة الشاملة حالياً.", "warning");
+        return;
+      }
+      // 0.5. Check if this specific subject is locked by teacher
+      if (isSubjectTeacherLocked(selectedSubject)) {
+        onSelectedSubjectChange(null);
+        setIsPlaying(false);
+        triggerToast(`قام المعلم بإغلاق وقفل مراجعة مادة (${selectedSubject}) حالياً.`, "warning");
+        return;
+      }
       // 1. Check if locked by ongoing quiz
       const lockingQuiz = getLockingQuizForSubject(selectedSubject, selectedSubject, ongoingQuizzesState);
       if (lockingQuiz) {
         onSelectedSubjectChange(null);
         setIsPlaying(false);
-        synth.playIncorrect();
         triggerToast(
           `تم إقفال مراجعة مادة (${selectedSubject}) لوجود اختبار مدرسي نشط قيد التقديم (${lockingQuiz.title}).`,
           "warning"
@@ -678,7 +730,7 @@ export default function StudentCurriculumReview({
         triggerToast("عذراً، هذه المادة غير متاحة لصفك الدراسي أو تم إخفاؤها مؤخراً.", "warning");
       }
     }
-  }, [selectedSubject, visibleSubjects, subjectTargets, activeStudent?.grade, activeStudent?.gradeClass, ongoingQuizzesState, onSelectedSubjectChange, triggerToast]);
+  }, [selectedSubject, isReviewEnabled, lockedSubjects, visibleSubjects, subjectTargets, activeStudent?.grade, activeStudent?.gradeClass, ongoingQuizzesState, onSelectedSubjectChange, triggerToast]);
 
   // Dynamic Syllabus constructed ONLY from custom bankQuestions loaded from Firestore matching student's grade
   const syllabus = useMemo(() => {
@@ -1494,8 +1546,62 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
         </div>
       )}
 
-      {/* --- LEVEL 1: Subject Selection Screen --- */}
-      {!selectedSubject ? (
+      {/* --- TEACHER LOCKED SCREEN: If review is closed by the teacher --- */}
+      {!isReviewEnabled ? (
+        <div className="max-w-2xl mx-auto py-12 px-4 animate-fade-in text-center">
+          <div 
+            onClick={() => {
+              setShakingGlobalLock(true);
+              setTimeout(() => setShakingGlobalLock(false), 650);
+            }}
+            className="bg-white border-2 border-slate-200/90 rounded-3xl p-8 sm:p-12 shadow-sm space-y-6 cursor-pointer select-none"
+          >
+            <div className="relative inline-flex items-center justify-center">
+              <motion.div 
+                animate={
+                  shakingGlobalLock
+                    ? {
+                        x: [-10, 10, -8, 8, -5, 5, -2, 2, 0],
+                        rotate: [-10, 10, -7, 7, -3, 3, 0],
+                        scale: [1, 1.18, 0.95, 1.1, 1],
+                      }
+                    : {}
+                }
+                whileTap={{ scale: 0.92 }}
+                transition={{ duration: 0.55, ease: "easeInOut" }}
+                className="w-20 h-20 bg-rose-50 border-2 border-rose-300 rounded-3xl flex items-center justify-center text-rose-600 shadow-inner hover:scale-105 transition-transform"
+              >
+                <Lock className="w-10 h-10" />
+              </motion.div>
+            </div>
+
+            <div className="space-y-2">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-100 text-rose-800 text-xs font-black">
+                <span>تم إغلاق المراجعة مؤقتاً</span>
+              </span>
+              <h2 className="text-2xl sm:text-3xl font-black text-slate-900">
+                المراجعة الشاملة مقفلة حالياً
+              </h2>
+              <p className="text-sm sm:text-base text-slate-600 font-semibold max-w-md mx-auto leading-relaxed">
+                قام معلم المادة بإغلاق قسم المراجعة الشاملة للطلاب في الوقت الحالي. سيتم فتح المراجعة وإتاحة الأسئلة مجدداً فور تفعيلها من قبل المعلم.
+              </p>
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-center gap-3">
+              {onGoBackToQuizzes && (
+                <button
+                  type="button"
+                  onClick={onGoBackToQuizzes}
+                  className="w-full sm:w-auto px-6 py-3 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 text-white text-xs font-black rounded-xl shadow-md shadow-indigo-200 transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95"
+                >
+                  <BookOpen className="w-4 h-4" />
+                  <span>الذهاب إلى قائمة الاختبارات المدرسية</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : !selectedSubject ? (
         <div className="max-w-4xl mx-auto py-4 animate-fade-in">
           <div className="text-center mb-10">
             <motion.div
@@ -1612,9 +1718,11 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
 
                       const isCompleted = totalLessons > 0 && solvedLessons === totalLessons;
 
-                      // Check if this subject is locked by an ongoing school quiz
+                      // Check if this subject is locked by an ongoing school quiz or by teacher
                       const lockingQuiz = getLockingQuizForSubject(subjectKey, sub.name, ongoingQuizzesState);
-                      const isLocked = Boolean(lockingQuiz);
+                      const isQuizLocked = Boolean(lockingQuiz);
+                      const isTeacherLocked = isSubjectTeacherLocked(subjectKey) || isSubjectTeacherLocked(sub.name);
+                      const isLocked = isQuizLocked || isTeacherLocked;
 
                       return (
                         <motion.div
@@ -1622,8 +1730,16 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
                           whileHover={!isLocked ? { y: -5, scale: 1.02 } : {}}
                           whileTap={!isLocked ? { scale: 0.98 } : {}}
                           onClick={() => {
-                            if (isLocked) {
-                              synth.playIncorrect();
+                            if (isTeacherLocked) {
+                              triggerLockShake(subjectKey);
+                              triggerToast(
+                                `عذراً! مادة (${sub.name}) مقفلة حالياً من قِبل المعلم 🔒. يرجى اختيار مادة أخرى مفتوحة للمراجعة.`,
+                                "warning"
+                              );
+                              return;
+                            }
+                            if (isQuizLocked) {
+                              triggerLockShake(subjectKey);
                               triggerToast(
                                 `عذراً! مادة (${sub.name}) مقفلة حالياً لوجود اختبار مدرسي نشط (${lockingQuiz?.title}). يرجى إنهاء الاختبار أولاً لتتمكن من مراجعة المنهج.`,
                                 "warning"
@@ -1634,22 +1750,120 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
                             onSelectedSubjectChange(subjectKey);
                           }}
                           className={`bg-white border rounded-3xl p-6 transition-all duration-200 relative overflow-hidden group shadow-md ${
-                            isLocked
-                              ? "border-amber-400 bg-slate-900/5 shadow-amber-500/10 cursor-not-allowed select-none"
-                              : isCompleted 
-                                ? "border-emerald-300 bg-emerald-50/40 shadow-emerald-500/5 hover:shadow-lg cursor-pointer" 
-                                : "border-slate-200 hover:border-indigo-300 hover:shadow-lg cursor-pointer"
+                            isTeacherLocked
+                              ? "border-rose-400 bg-rose-950/10 shadow-rose-500/10 cursor-not-allowed select-none"
+                              : isQuizLocked
+                                ? "border-amber-400 bg-slate-900/5 shadow-amber-500/10 cursor-not-allowed select-none"
+                                : isCompleted 
+                                  ? "border-emerald-300 bg-emerald-50/40 shadow-emerald-500/5 hover:shadow-lg cursor-pointer" 
+                                  : "border-slate-200 hover:border-indigo-300 hover:shadow-lg cursor-pointer"
                           }`}
                         >
-                          {/* Large Prominent Lock Overlay for Locked Subject */}
-                          {isLocked && (
-                            <div className="absolute inset-0 z-20 bg-gradient-to-b from-slate-950/92 via-slate-900/95 to-slate-950/95 backdrop-blur-[2px] p-5 flex flex-col items-center justify-between text-center rounded-3xl border-2 border-amber-500 shadow-2xl animate-fade-in">
+                          {/* Large Prominent Lock Overlay for Teacher-Locked Subject */}
+                          {isTeacherLocked && (
+                            <div 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                triggerLockShake(subjectKey);
+                                triggerToast(
+                                  `عذراً! مادة (${sub.name}) مقفلة حالياً من قِبل المعلم 🔒. يرجى اختيار مادة أخرى مفتوحة للمراجعة.`,
+                                  "warning"
+                                );
+                              }}
+                              className="absolute inset-0 z-20 bg-gradient-to-b from-slate-950/92 via-slate-900/95 to-slate-950/95 backdrop-blur-[2px] p-5 flex flex-col items-center justify-between text-center rounded-3xl border-2 border-rose-500 shadow-2xl animate-fade-in cursor-pointer select-none"
+                            >
+                              {/* Top Lock Badge */}
+                              <div className="w-full flex items-center justify-between gap-2">
+                                <motion.span 
+                                  animate={
+                                    shakingSubjectKey === subjectKey
+                                      ? {
+                                          x: [-6, 6, -5, 5, -3, 3, 0],
+                                          rotate: [-14, 14, -8, 8, 0],
+                                          scale: [1, 1.25, 0.95, 1.1, 1],
+                                        }
+                                      : {}
+                                  }
+                                  transition={{ duration: 0.55 }}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-black bg-rose-500/25 text-rose-300 border border-rose-500/50 shadow-xs"
+                                >
+                                  <Lock className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                                  <span>مقفلة من المعلم 🔒</span>
+                                </motion.span>
+                                <span className="text-[10px] text-slate-400 font-bold bg-slate-800/80 px-2 py-0.5 rounded-full border border-slate-700">
+                                  مغلقة مؤقتاً
+                                </span>
+                              </div>
+
+                              {/* Center: Large Padlock Graphic */}
+                              <motion.div 
+                                animate={
+                                  shakingSubjectKey === subjectKey
+                                    ? {
+                                        x: [-10, 10, -8, 8, -5, 5, -2, 2, 0],
+                                        rotate: [-8, 8, -6, 6, -3, 3, 0],
+                                        scale: [1, 1.12, 0.96, 1.06, 1],
+                                      }
+                                    : {}
+                                }
+                                transition={{ duration: 0.55, ease: "easeInOut" }}
+                                className="my-auto py-2 flex flex-col items-center cursor-pointer"
+                              >
+                                <BigRealisticPadlock 
+                                  size={96} 
+                                  glow={true} 
+                                  isShaking={shakingSubjectKey === subjectKey}
+                                  className="drop-shadow-2xl hover:scale-105 transition-transform" 
+                                />
+                                <h4 className="mt-3 text-base md:text-lg font-black text-white leading-tight">
+                                  المراجعة مقفلة من المعلم
+                                </h4>
+                                <p className="mt-1 text-[11px] md:text-xs text-slate-300 font-bold max-w-[240px] leading-relaxed">
+                                  قام المعلم بإغلاق مراجعة مادة <span className="text-amber-300 font-black">({sub.name})</span> حالياً للطلاب
+                                </p>
+                              </motion.div>
+
+                              {/* Bottom notice */}
+                              <div className="w-full pt-2">
+                                <div className="w-full py-2.5 px-3 bg-slate-900/90 border border-rose-500/30 text-rose-200 font-black text-xs rounded-xl flex items-center justify-center gap-2 shadow-inner">
+                                  <Lock className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                                  <span>يرجى اختيار مادة أخرى مفتوحة 📚</span>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Large Prominent Lock Overlay for Quiz-Locked Subject */}
+                          {isQuizLocked && !isTeacherLocked && (
+                            <div 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                triggerLockShake(subjectKey);
+                                triggerToast(
+                                  `عذراً! مادة (${sub.name}) مقفلة حالياً لوجود اختبار مدرسي نشط (${lockingQuiz?.title}). يرجى إنهاء الاختبار أولاً لتتمكن من مراجعة المنهج.`,
+                                  "warning"
+                                );
+                              }}
+                              className="absolute inset-0 z-20 bg-gradient-to-b from-slate-950/92 via-slate-900/95 to-slate-950/95 backdrop-blur-[2px] p-5 flex flex-col items-center justify-between text-center rounded-3xl border-2 border-amber-500 shadow-2xl animate-fade-in cursor-pointer select-none"
+                            >
                               {/* Top Lock Badge and Timer */}
                               <div className="w-full flex items-center justify-between gap-2">
-                                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-black bg-rose-500/25 text-rose-300 border border-rose-500/50 shadow-xs">
+                                <motion.span 
+                                  animate={
+                                    shakingSubjectKey === subjectKey
+                                      ? {
+                                          x: [-6, 6, -5, 5, -3, 3, 0],
+                                          rotate: [-14, 14, -8, 8, 0],
+                                          scale: [1, 1.25, 0.95, 1.1, 1],
+                                        }
+                                      : {}
+                                  }
+                                  transition={{ duration: 0.55 }}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-black bg-rose-500/25 text-rose-300 border border-rose-500/50 shadow-xs"
+                                >
                                   <Lock className="w-3.5 h-3.5 text-rose-400 shrink-0" />
                                   <span>مادة مقفلة 🔒</span>
-                                </span>
+                                </motion.span>
 
                                 {lockingQuiz && !lockingQuiz.isUntimed && lockingQuiz.remainingSeconds > 0 && (
                                   <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-amber-500/20 text-amber-300 border border-amber-500/40">
@@ -1660,8 +1874,25 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
                               </div>
 
                               {/* Center: Large, Clear 3D Realistic Padlock Graphic */}
-                              <div className="my-auto py-2 flex flex-col items-center">
-                                <BigRealisticPadlock size={96} glow={true} className="drop-shadow-2xl hover:scale-105 transition-transform" />
+                              <motion.div 
+                                animate={
+                                  shakingSubjectKey === subjectKey
+                                    ? {
+                                        x: [-10, 10, -8, 8, -5, 5, -2, 2, 0],
+                                        rotate: [-8, 8, -6, 6, -3, 3, 0],
+                                        scale: [1, 1.12, 0.96, 1.06, 1],
+                                      }
+                                    : {}
+                                }
+                                transition={{ duration: 0.55, ease: "easeInOut" }}
+                                className="my-auto py-2 flex flex-col items-center cursor-pointer"
+                              >
+                                <BigRealisticPadlock 
+                                  size={96} 
+                                  glow={true} 
+                                  isShaking={shakingSubjectKey === subjectKey}
+                                  className="drop-shadow-2xl hover:scale-105 transition-transform" 
+                                />
                                 <h4 className="mt-3 text-base md:text-lg font-black text-white leading-tight">
                                   المراجعة مقفلة لاختبار نشط
                                 </h4>
@@ -1669,7 +1900,7 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
                                   اختبار قيد التقديم حالياً:
                                   <span className="text-amber-300 block font-black mt-0.5">{lockingQuiz?.title}</span>
                                 </p>
-                              </div>
+                              </motion.div>
 
                               {/* Bottom Button to Resume/Jump to Quiz */}
                               <div className="w-full pt-2">

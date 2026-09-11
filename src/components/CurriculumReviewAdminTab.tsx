@@ -32,7 +32,10 @@ import {
   Trash2,
   BookPlus,
   AlertTriangle,
-  Calendar
+  Calendar,
+  Power,
+  Lock,
+  Unlock
 } from "lucide-react";
 import { doc, onSnapshot, setDoc, collection, query, where } from "firebase/firestore";
 import { db, handleFirestoreError, OperationType } from "../firebase";
@@ -120,8 +123,14 @@ export default function CurriculumReviewAdminTab({
   const [activeSubTab, setActiveSubTab] = useState<"settings" | "results">("settings");
 
   // State for Subject Visibility Settings
+  // Global toggle for Comprehensive Review feature (true = active/open, false = closed/locked for students)
+  const [isReviewEnabled, setIsReviewEnabled] = useState<boolean>(true);
+  const [isTogglingReview, setIsTogglingReview] = useState<boolean>(false);
   const [visibleSubjects, setVisibleSubjects] = useState<string[]>([]);
-  const [subjectTargets, setSubjectTargets] = useState<Record<string, { targetGrade?: string; targetClass?: string; questionsPerLesson?: string | number; updatedAt?: string; isCustomized?: boolean }>>({});
+  // Per-subject lock list: subjects that the teacher closed/locked individually
+  const [lockedSubjects, setLockedSubjects] = useState<string[]>([]);
+  const [lockingSubjectId, setLockingSubjectId] = useState<string | null>(null);
+  const [subjectTargets, setSubjectTargets] = useState<Record<string, { targetGrade?: string; targetClass?: string; questionsPerLesson?: string | number; updatedAt?: string; isCustomized?: boolean; isLocked?: boolean }>>({});
   const [configuredGradeSubjects, setConfiguredGradeSubjects] = useState<Record<string, boolean>>({});
   const [configuredQLimitSubjects, setConfiguredQLimitSubjects] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState<boolean>(true);
@@ -179,8 +188,19 @@ export default function CurriculumReviewAdminTab({
     const unsubUid = onSnapshot(uidRef, (snap) => {
       if (snap.exists()) {
         const data = snap.data();
+        setIsReviewEnabled(data.isReviewEnabled !== undefined ? Boolean(data.isReviewEnabled) : true);
         setVisibleSubjects(data.visibleSubjects || []);
-        setSubjectTargets(data.subjectTargets || {});
+        const rawTargets = data.subjectTargets || {};
+        setSubjectTargets(rawTargets);
+
+        // Collect locked subjects from array and/or target flags
+        const lockedList: string[] = Array.isArray(data.lockedSubjects) ? [...data.lockedSubjects] : [];
+        Object.keys(rawTargets).forEach((k) => {
+          if (rawTargets[k]?.isLocked && !lockedList.includes(k)) {
+            lockedList.push(k);
+          }
+        });
+        setLockedSubjects(lockedList);
         setLoading(false);
       } else if (userEmail) {
         // If not found under UID, check under email or by teacherEmail
@@ -188,8 +208,17 @@ export default function CurriculumReviewAdminTab({
         unsubEmail = onSnapshot(emailRef, (emailSnap) => {
           if (emailSnap.exists()) {
             const data = emailSnap.data();
+            setIsReviewEnabled(data.isReviewEnabled !== undefined ? Boolean(data.isReviewEnabled) : true);
             setVisibleSubjects(data.visibleSubjects || []);
-            setSubjectTargets(data.subjectTargets || {});
+            const rawTargets = data.subjectTargets || {};
+            setSubjectTargets(rawTargets);
+            const lockedList: string[] = Array.isArray(data.lockedSubjects) ? [...data.lockedSubjects] : [];
+            Object.keys(rawTargets).forEach((k) => {
+              if (rawTargets[k]?.isLocked && !lockedList.includes(k)) {
+                lockedList.push(k);
+              }
+            });
+            setLockedSubjects(lockedList);
             // Migrate to UID doc
             setDoc(uidRef, {
               ...data,
@@ -199,6 +228,7 @@ export default function CurriculumReviewAdminTab({
           } else {
             setVisibleSubjects([]);
             setSubjectTargets({});
+            setLockedSubjects([]);
           }
           setLoading(false);
         }, () => {
@@ -207,6 +237,7 @@ export default function CurriculumReviewAdminTab({
       } else {
         setVisibleSubjects([]);
         setSubjectTargets({});
+        setLockedSubjects([]);
         setLoading(false);
       }
     }, (error) => {
@@ -399,12 +430,60 @@ export default function CurriculumReviewAdminTab({
     return teacherAddedSubjects.filter((sub) => visibleSubjects.includes(sub.name));
   }, [teacherAddedSubjects, visibleSubjects]);
 
+  // Toggle per-subject lock status (locked/closed vs open/available for students)
+  const toggleSubjectLock = async (subjectName: string) => {
+    if (!currentUser?.uid || lockingSubjectId) return;
+    setLockingSubjectId(subjectName);
+
+    const isCurrentlyLocked = lockedSubjects.includes(subjectName) || Boolean(subjectTargets[subjectName]?.isLocked);
+    const newLockedList = isCurrentlyLocked
+      ? lockedSubjects.filter((name) => name !== subjectName)
+      : Array.from(new Set([...lockedSubjects, subjectName]));
+
+    const currentTarget = subjectTargets[subjectName] || {};
+    const updatedTargets = {
+      ...subjectTargets,
+      [subjectName]: {
+        ...currentTarget,
+        isLocked: !isCurrentlyLocked,
+        updatedAt: new Date().toISOString()
+      }
+    };
+
+    try {
+      const ref = doc(db, "curriculum_settings", currentUser.uid);
+      await setDoc(ref, {
+        teacherId: currentUser.uid,
+        teacherEmail: currentUser.email?.toLowerCase().trim() || "",
+        lockedSubjects: newLockedList,
+        subjectTargets: updatedTargets,
+        lastUpdated: new Date().toISOString()
+      }, { merge: true });
+
+      setLockedSubjects(newLockedList);
+      setSubjectTargets(updatedTargets);
+      triggerToast(
+        isCurrentlyLocked
+          ? `تم فتح وإتاحة مادة "${subjectName}" للطلاب بنجاح 🟢`
+          : `تم قفل وإغلاق مادة "${subjectName}" عن الطلاب بنجاح 🔒`,
+        isCurrentlyLocked ? "success" : "warning"
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `curriculum_settings/${currentUser.uid}`);
+      triggerToast("فشل تحديث حالة قفل المادة", "error");
+    } finally {
+      setLockingSubjectId(null);
+    }
+  };
+
   // Add subject from Question Bank to teacher's review list (automatically sets it as visible for students)
   const addSubjectFromBank = async (subjectName: string) => {
     if (!currentUser?.uid) return;
     setSavingId(subjectName);
 
     const updatedVisible = Array.from(new Set([...visibleSubjects, subjectName]));
+    // If it was previously in lockedSubjects, unlock it on new addition
+    const updatedLocked = lockedSubjects.filter((name) => name !== subjectName);
     
     // Always reset targeting configuration on add/re-add so the visual pulse is active
     const updatedTargets = {
@@ -414,6 +493,7 @@ export default function CurriculumReviewAdminTab({
         targetClass: "جميع الفصول (عام)",
         questionsPerLesson: "15",
         isCustomized: false,
+        isLocked: false,
         updatedAt: new Date().toISOString()
       }
     };
@@ -425,11 +505,13 @@ export default function CurriculumReviewAdminTab({
       await setDoc(ref, {
         teacherId: currentUser.uid,
         visibleSubjects: updatedVisible,
+        lockedSubjects: updatedLocked,
         subjectTargets: updatedTargets,
         lastUpdated: new Date().toISOString()
       }, { merge: true });
 
       setVisibleSubjects(updatedVisible);
+      setLockedSubjects(updatedLocked);
       setSubjectTargets(updatedTargets);
       triggerToast(`تم إضافة مادة "${subjectName}" وتفعيل عرضها للطلاب تلقائياً 🎯`, "success");
       // Keep modal open so teacher can add more subjects sequentially if desired
@@ -448,6 +530,7 @@ export default function CurriculumReviewAdminTab({
     setSavingId(subjectName);
 
     const updatedVisible = visibleSubjects.filter((name) => name !== subjectName);
+    const updatedLocked = lockedSubjects.filter((name) => name !== subjectName);
 
     // Reset configured state so if re-added later, the pulse activates
     setConfiguredGradeSubjects((prev) => {
@@ -468,6 +551,7 @@ export default function CurriculumReviewAdminTab({
         targetClass: "جميع الفصول (عام)",
         questionsPerLesson: "15",
         isCustomized: false,
+        isLocked: false,
         updatedAt: new Date().toISOString()
       }
     };
@@ -477,11 +561,13 @@ export default function CurriculumReviewAdminTab({
       await setDoc(ref, {
         teacherId: currentUser.uid,
         visibleSubjects: updatedVisible,
+        lockedSubjects: updatedLocked,
         subjectTargets: updatedTargets,
         lastUpdated: new Date().toISOString()
       }, { merge: true });
 
       setVisibleSubjects(updatedVisible);
+      setLockedSubjects(updatedLocked);
       setSubjectTargets(updatedTargets);
       triggerToast(`تم إزالة مادة "${subjectName}" من المراجعة الشاملة`, "info");
     } catch (error) {
@@ -1044,6 +1130,36 @@ export default function CurriculumReviewAdminTab({
     "bg-purple-600 text-white"
   ];
 
+  // Toggle master switch for Comprehensive Review (Open vs Closed for students)
+  const toggleReviewFeatureEnabled = async () => {
+    if (!currentUser?.uid || isTogglingReview) return;
+    setIsTogglingReview(true);
+    const newStatus = !isReviewEnabled;
+
+    try {
+      const ref = doc(db, "curriculum_settings", currentUser.uid);
+      await setDoc(ref, {
+        teacherId: currentUser.uid,
+        teacherEmail: currentUser.email?.toLowerCase().trim() || "",
+        isReviewEnabled: newStatus,
+        lastUpdated: new Date().toISOString()
+      }, { merge: true });
+
+      setIsReviewEnabled(newStatus);
+      triggerToast(
+        newStatus 
+          ? "تم تشغيل وإتاحة المراجعة الشاملة لجميع الطلاب بنجاح 🟢" 
+          : "تم إغلاق وقفل المراجعة الشاملة عن الطلاب بنجاح 🔴",
+        newStatus ? "success" : "warning"
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `curriculum_settings/${currentUser.uid}`);
+      triggerToast("فشل تحديث حالة تشغيل المراجعة الشاملة", "error");
+    } finally {
+      setIsTogglingReview(false);
+    }
+  };
+
   // Toggle subject visibility (adding/removing from visibleSubjects)
   const toggleSubjectVisibility = async (subjectName: string) => {
     if (!currentUser?.uid) return;
@@ -1108,6 +1224,57 @@ export default function CurriculumReviewAdminTab({
               </p>
             </div>
           </div>
+
+          {/* Master Review Toggle Button (Enable / Disable Comprehensive Review for students) */}
+          <div className="flex items-center gap-3 bg-slate-50 border border-slate-200/80 px-4 py-2.5 rounded-2xl shrink-0">
+            <div className="text-right">
+              <div className="flex items-center gap-1.5 justify-end">
+                <span className={`w-2 h-2 rounded-full ${isReviewEnabled ? "bg-emerald-500 animate-pulse" : "bg-rose-500"}`} />
+                <span className="text-xs font-black text-slate-800">
+                  حالة المراجعة عند الطلاب:
+                </span>
+                <span className={`text-xs font-black px-2 py-0.5 rounded-md ${
+                  isReviewEnabled 
+                    ? "bg-emerald-100 text-emerald-800 border border-emerald-200" 
+                    : "bg-rose-100 text-rose-800 border border-rose-200"
+                }`}>
+                  {isReviewEnabled ? "مُتاحة ومفتوحة 🟢" : "مُغلقة ومقفلة 🔒"}
+                </span>
+              </div>
+              <span className="text-[10px] text-slate-500 font-bold block mt-0.5">
+                {isReviewEnabled 
+                  ? "يمكن للطلاب الدخول واستعراض وحل المراجعة" 
+                  : "تم حجب وإقفال شاشة المراجعة في بوابة الطالب"}
+              </span>
+            </div>
+
+            <button
+              type="button"
+              disabled={isTogglingReview}
+              onClick={toggleReviewFeatureEnabled}
+              className={`relative inline-flex h-8 w-16 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+                isReviewEnabled 
+                  ? "bg-emerald-600 focus:ring-emerald-500 shadow-md shadow-emerald-200" 
+                  : "bg-slate-300 focus:ring-slate-400"
+              } ${isTogglingReview ? "opacity-60 cursor-not-allowed" : "hover:opacity-95 active:scale-95"}`}
+              title={isReviewEnabled ? "انقر لإغلاق المراجعة الشاملة عن الطلاب" : "انقر لتشغيل وإتاحة المراجعة الشاملة للطلاب"}
+            >
+              <span className="sr-only">تبديل حالة المراجعة الشاملة</span>
+              <span
+                className={`pointer-events-none flex items-center justify-center h-7 w-7 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                  isReviewEnabled ? "-translate-x-8 text-emerald-600" : "translate-x-0 text-slate-400"
+                }`}
+              >
+                {isTogglingReview ? (
+                  <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                ) : isReviewEnabled ? (
+                  <Unlock className="w-3.5 h-3.5" />
+                ) : (
+                  <Lock className="w-3.5 h-3.5 text-rose-500" />
+                )}
+              </span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -1153,6 +1320,37 @@ export default function CurriculumReviewAdminTab({
           >
 
 
+            {/* Global Closed Status Alert Notice if disabled */}
+            {!isReviewEnabled && (
+              <motion.div
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-gradient-to-r from-rose-50 via-amber-50 to-rose-50 border border-rose-200 rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-rose-100 border border-rose-200 text-rose-700 flex items-center justify-center shrink-0">
+                    <Lock className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-black text-rose-900">المراجعة الشاملة مُغلقة حالياً عن الطلاب 🔒</h4>
+                    <p className="text-[11px] text-rose-700 font-bold mt-0.5">
+                      تم قفل العرض، ولن يتمكن الطلاب من فتح شاشة المراجعة أو تصفح المواد والأسئلة حتى تعيد تشغيلها من الزر أعلاه.
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={isTogglingReview}
+                  onClick={toggleReviewFeatureEnabled}
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-black rounded-xl shadow-xs flex items-center gap-1.5 transition-all cursor-pointer shrink-0 active:scale-95"
+                >
+                  <Power className="w-3.5 h-3.5" />
+                  <span>تشغيل وإتاحة المراجعة الآن</span>
+                </button>
+              </motion.div>
+            )}
+
             {/* Main Content Area */}
             <div className="bg-white border-2 border-slate-300/90 rounded-3xl shadow-md overflow-hidden ring-1 ring-slate-900/5">
               {/* Controls Bar */}
@@ -1180,10 +1378,26 @@ export default function CurriculumReviewAdminTab({
                     <span>إضافة مادة للمراجعة</span>
                   </button>
 
-                  <div className="text-xs text-slate-500 font-bold flex items-center gap-1.5 bg-blue-50/50 text-blue-800 px-3 py-2 rounded-xl border border-blue-100/80">
-                    <Info className="w-4 h-4 text-blue-600 shrink-0" />
-                    <span>المادة المضافة تُفعل تلقائياً للطلاب ويمكن تخصيص الصف والفصل لها</span>
-                  </div>
+                  {/* Summary badges */}
+                  {teacherAddedSubjects.length > 0 && (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[11px] bg-white text-slate-700 px-3 py-1.5 rounded-xl font-bold border border-slate-200 shadow-2xs">
+                        إجمالي المواد: <strong>{teacherAddedSubjects.length}</strong>
+                      </span>
+                      <span className="text-[11px] bg-emerald-50 text-emerald-800 px-3 py-1.5 rounded-xl font-black border border-emerald-200 flex items-center gap-1.5 shadow-2xs">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                        <span>مفتوحة للطلاب:</span>
+                        <strong>{teacherAddedSubjects.length - teacherAddedSubjects.filter((s) => lockedSubjects.includes(s.name) || Boolean(subjectTargets[s.name]?.isLocked)).length}</strong>
+                      </span>
+                      {teacherAddedSubjects.filter((s) => lockedSubjects.includes(s.name) || Boolean(subjectTargets[s.name]?.isLocked)).length > 0 && (
+                        <span className="text-[11px] bg-rose-50 text-rose-800 px-3 py-1.5 rounded-xl font-black border border-rose-300 flex items-center gap-1.5 shadow-2xs animate-pulse">
+                          <Lock className="w-3 h-3 text-rose-600 shrink-0" />
+                          <span>مقفلة عن الطلاب:</span>
+                          <strong>{teacherAddedSubjects.filter((s) => lockedSubjects.includes(s.name) || Boolean(subjectTargets[s.name]?.isLocked)).length}</strong>
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1403,6 +1617,8 @@ export default function CurriculumReviewAdminTab({
                     const isVisible = visibleSubjects.includes(subject.name);
                     const isSaving = savingId === subject.name;
                     const targetInfo = subjectTargets[subject.name] || {};
+                    const isLocked = lockedSubjects.includes(subject.name) || Boolean(targetInfo.isLocked);
+                    const isLockingThis = lockingSubjectId === subject.name;
                     const currentGradeTarget = targetInfo.targetGrade || "جميع الصفوف (عام)";
                     const rawClassTarget = targetInfo.targetClass || "جميع الفصول (عام)";
                     const currentQLimit = targetInfo.questionsPerLesson || "15";
@@ -1428,23 +1644,47 @@ export default function CurriculumReviewAdminTab({
                     return (
                       <div 
                         key={`admin-sub-${subject.name}-${sIdx}`}
-                        className="p-5 flex flex-col gap-4 bg-white rounded-2xl border-2 border-slate-300 hover:border-indigo-500 shadow-sm transition-all"
+                        className={`p-5 flex flex-col gap-4 rounded-2xl border-2 shadow-sm transition-all ${
+                          isLocked
+                            ? "bg-rose-50/20 border-rose-300 hover:border-rose-400 shadow-rose-100/60"
+                            : "bg-white border-slate-300 hover:border-indigo-500 shadow-slate-100"
+                        }`}
                       >
                         {/* Top Details & Action Row */}
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                           {/* Subject Details */}
                           <div className="flex items-start gap-4">
-                            <div className={`w-11 h-11 rounded-xl flex items-center justify-center border shrink-0 shadow-xs ${
-                              !isVisible 
-                                ? "bg-slate-100 border-slate-200 text-slate-400" 
-                                : "bg-blue-50/50 border-blue-100 text-blue-600"
+                            <div className={`w-11 h-11 rounded-xl flex items-center justify-center border shrink-0 shadow-xs transition-colors ${
+                              isLocked
+                                ? "bg-rose-100 border-rose-200 text-rose-700"
+                                : !isVisible 
+                                  ? "bg-slate-100 border-slate-200 text-slate-400" 
+                                  : "bg-blue-50/70 border-blue-100 text-blue-600"
                             }`}>
-                              <BookOpen className="w-5.5 h-5.5" />
+                              {isLocked ? (
+                                <Lock className="w-5.5 h-5.5 text-rose-600" />
+                              ) : (
+                                <BookOpen className="w-5.5 h-5.5" />
+                              )}
                             </div>
                             
-                            <div className="space-y-1">
+                            <div className="space-y-1.5">
                               <div className="flex items-center gap-2 flex-wrap">
                                 <h3 className="text-sm font-black text-slate-900">{subject.name}</h3>
+
+                                {/* Per-Subject Status Badge */}
+                                {isLocked ? (
+                                  <span className="text-[10.5px] font-black bg-rose-100 border border-rose-300 text-rose-800 px-2.5 py-0.5 rounded-full flex items-center gap-1 select-none shadow-2xs">
+                                    <Lock className="w-3 h-3 text-rose-600 shrink-0" />
+                                    <span>مقفلة عن الطلاب 🔒</span>
+                                  </span>
+                                ) : (
+                                  <span className="text-[10.5px] font-extrabold bg-emerald-100/90 border border-emerald-300 text-emerald-800 px-2.5 py-0.5 rounded-full flex items-center gap-1 select-none shadow-2xs">
+                                    <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
+                                    <span>مفتوحة ومتاحة للطلاب 🟢</span>
+                                  </span>
+                                )}
+
                                 <span className="text-[9px] font-bold bg-purple-50 border border-purple-200/50 text-purple-700 px-1.5 py-0.5 rounded-md flex items-center gap-0.5 select-none">
                                   <Database className="w-2.5 h-2.5 text-purple-500 shrink-0" />
                                   بنك الأسئلة
@@ -1463,29 +1703,78 @@ export default function CurriculumReviewAdminTab({
                                 </span>
                               </div>
 
-                              <p className="text-xs text-slate-400 font-semibold font-sans">
-                                تحتوي على: {subject.unitCount} وحدات مراجعة • {subject.lessonCount} دروس فرعية مجهزة بالأسئلة
+                              <p className="text-xs text-slate-500 font-semibold font-sans flex items-center gap-2 flex-wrap">
+                                <span>تحتوي على: {subject.unitCount} وحدات مراجعة • {subject.lessonCount} دروس فرعية مجهزة بالأسئلة</span>
+                                {isLocked && (
+                                  <span className="text-rose-600 font-black text-[11px] bg-rose-50 px-2 py-0.5 rounded-md border border-rose-200">
+                                    ⚠️ لا يستطيع الطلاب الدخول إلى هذه المادة حالياً حتى تقوم بفتحها
+                                  </span>
+                                )}
                               </p>
                             </div>
                           </div>
 
-                          {/* Status Badge & Delete Button */}
-                          <div className="flex items-center gap-3 self-end sm:self-auto">
-                            {/* Status Badge */}
-                            <div className="font-sans">
-                              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200/80 text-emerald-800 text-xs font-extrabold shadow-2xs select-none">
-                                <Eye className="w-3.5 h-3.5" />
-                                <span>نشطة ومرئية للطلاب</span>
-                              </span>
-                            </div>
+                          {/* Status Badge, Lock/Unlock Button & Delete Button */}
+                          <div className="flex items-center gap-2.5 self-end sm:self-auto flex-wrap">
+                            {/* Interactive Per-Subject Lock Toggle Switch Button */}
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={isLocked}
+                              disabled={isSaving || isLockingThis}
+                              onClick={() => toggleSubjectLock(subject.name)}
+                              title={isLocked ? "انقر لفتح المادة للطلاب 🔓" : "انقر لقفل المادة عن الطلاب 🔒"}
+                              className={`group relative inline-flex items-center gap-2.5 px-3 py-1.5 rounded-2xl border-2 transition-all cursor-pointer select-none active:scale-95 disabled:opacity-50 shadow-2xs ${
+                                isLocked
+                                  ? "bg-rose-50/90 border-rose-300 hover:border-rose-400 text-rose-900 shadow-rose-100"
+                                  : "bg-slate-50 hover:bg-emerald-50/80 border-slate-300 hover:border-emerald-300 text-slate-700 hover:text-emerald-900 shadow-slate-100"
+                              }`}
+                            >
+                              {/* Lock Switch Track */}
+                              <div
+                                className={`relative inline-flex h-6 w-12 shrink-0 items-center rounded-full p-0.5 border transition-colors duration-200 ease-in-out ${
+                                  isLocked
+                                    ? "bg-rose-600 border-rose-600 shadow-inner"
+                                    : "bg-emerald-500 border-emerald-500 shadow-inner"
+                                }`}
+                              >
+                                <span
+                                  className={`pointer-events-none flex items-center justify-center h-4.5 w-4.5 rounded-full bg-white shadow-md transform transition-transform duration-200 ease-in-out ${
+                                    isLocked
+                                      ? "-translate-x-6 text-rose-600"
+                                      : "translate-x-0 text-emerald-600"
+                                  }`}
+                                >
+                                  {isLockingThis ? (
+                                    <span className="w-2.5 h-2.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                                  ) : isLocked ? (
+                                    <Lock className="w-2.5 h-2.5 stroke-[2.5]" />
+                                  ) : (
+                                    <Unlock className="w-2.5 h-2.5 stroke-[2.5]" />
+                                  )}
+                                </span>
+                              </div>
+
+                              {/* Button Label & State */}
+                              <div className="flex flex-col text-right leading-tight">
+                                <span className="text-[10px] font-extrabold text-slate-500 group-hover:text-slate-700">
+                                  قفل المادة
+                                </span>
+                                <span className={`text-xs font-black flex items-center gap-1 ${
+                                  isLocked ? "text-rose-700" : "text-emerald-700"
+                                }`}>
+                                  {isLocked ? "مقفلة 🔒" : "مفتوحة 🔓"}
+                                </span>
+                              </div>
+                            </button>
 
                             {/* Remove Subject Button */}
                             <button
                               type="button"
-                              disabled={isSaving}
+                              disabled={isSaving || isLockingThis}
                               onClick={() => setSubjectToDelete(subject.name)}
                               title="حذف المادة من قائمة المراجعة"
-                              className="px-3 py-1.5 rounded-xl text-rose-600 hover:bg-rose-50 border border-rose-200/80 hover:border-rose-300 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs active:scale-95"
+                              className="px-3 py-1.5 rounded-xl text-slate-600 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 hover:border-rose-200 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs active:scale-95"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                               <span>حذف المادة</span>

@@ -1,9 +1,12 @@
 import React from "react";
+import { motion } from "motion/react";
 
 interface BigRealisticPadlockProps {
   className?: string;
   size?: number;
   glow?: boolean;
+  isShaking?: boolean;
+  onClick?: (e: React.MouseEvent) => void;
 }
 
 /**
@@ -14,17 +17,34 @@ export const BigRealisticPadlock: React.FC<BigRealisticPadlockProps> = ({
   className = "",
   size = 96,
   glow = true,
+  isShaking = false,
+  onClick,
 }) => {
   return (
-    <div
-      className={`relative inline-flex items-center justify-center select-none ${className}`}
+    <motion.div
+      onClick={onClick}
+      animate={
+        isShaking
+          ? {
+              x: [-8, 8, -7, 7, -4, 4, -2, 2, 0],
+              y: [-2, 2, -1, 1, 0],
+              rotate: [-7, 7, -5, 5, -2, 2, 0],
+              scale: [1, 1.14, 0.95, 1.08, 0.98, 1.02, 1],
+            }
+          : {}
+      }
+      transition={{ duration: 0.55, ease: "easeInOut" }}
+      className={`relative inline-flex items-center justify-center select-none ${onClick ? "cursor-pointer" : ""} ${className}`}
       style={{ width: size, height: size }}
     >
       {/* Background Soft Pulsing Glow */}
       {glow && (
         <div
-          className="absolute inset-0 rounded-full bg-gradient-to-br from-amber-500/30 via-rose-500/25 to-indigo-600/30 blur-xl animate-pulse pointer-events-none"
-          style={{ transform: "scale(1.25)" }}
+          className={`absolute inset-0 rounded-full blur-xl pointer-events-none transition-all duration-300 ${
+            isShaking
+              ? "bg-gradient-to-br from-rose-500/60 via-amber-500/50 to-red-600/60 scale-150 animate-pulse"
+              : "bg-gradient-to-br from-amber-500/30 via-rose-500/25 to-indigo-600/30 animate-pulse scale-125"
+          }`}
         />
       )}
 
@@ -152,7 +172,7 @@ export const BigRealisticPadlock: React.FC<BigRealisticPadlockProps> = ({
           <circle cx="0" cy="0" r="2" fill="#fee2e2" />
         </g>
       </svg>
-    </div>
+    </motion.div>
   );
 };
 

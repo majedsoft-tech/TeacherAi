@@ -953,6 +953,10 @@ export default function StudentReviewsTab({
     left: false,
     right: false,
   });
+  const arenaRectCacheRef = useRef<{ top: number; left: number; width: number; height: number } | null>(null);
+  const isTouchDraggingRef = useRef(false);
+  const touchTargetYRef = useRef<number | null>(null);
+  const touchTargetXRef = useRef<number | null>(null);
 
   // --- MAZE CHASE GAME STATES ---
   const [mazePlayerPos, setMazePlayerPos] = useState<{ r: number; c: number }>({ r: 3, c: 4 });
@@ -980,8 +984,11 @@ export default function StudentReviewsTab({
   
   const keysPressedRef = useRef<{ [key: string]: boolean }>({});
   const shipXRef = useRef(50);
+  const shipVelocityRef = useRef(0);
+  const shipArrowHoldRef = useRef<{ left: boolean; right: boolean }>({ left: false, right: false });
   const carVelocityRef = useRef(0);
   const carAngleRef = useRef(0);
+  const carArrowHoldRef = useRef<{ left: boolean; right: boolean; boost: boolean }>({ left: false, right: false, boost: false });
   const playerShipRef = useRef<HTMLDivElement | null>(null);
   const playerCarRef = useRef<HTMLDivElement | null>(null);
   const meteorDomRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
@@ -1623,14 +1630,8 @@ export default function StudentReviewsTab({
       if (!challenge || isAnswerRevealedRef.current) return;
 
       if (challenge.gameType === "space_invaders") {
-        if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") {
-          const val = Math.max(5, shipXRef.current - 6);
-          shipXRef.current = val;
-          if (playerShipRef.current) playerShipRef.current.style.left = `${val}%`;
-        } else if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") {
-          const val = Math.min(95, shipXRef.current + 6);
-          shipXRef.current = val;
-          if (playerShipRef.current) playerShipRef.current.style.left = `${val}%`;
+        if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A" || e.key === "ArrowRight" || e.key === "d" || e.key === "D") {
+          // Handled smoothly with velocity & damping in animation loop
         } else if (e.key === " " || e.key === "Enter") {
           if (e.repeat) return;
           const currentMeteors = fallingMeteorsRef.current;
@@ -2156,6 +2157,8 @@ export default function StudentReviewsTab({
     isAnswerRevealedRef.current = false;
     setIsAnswerRevealed(false);
     meteorDomRefs.current = {};
+    shipVelocityRef.current = 0;
+    shipArrowHoldRef.current = { left: false, right: false };
 
     const numOpts = targetQ.options.length;
     const spacing = 80 / Math.max(1, numOpts);
@@ -2184,40 +2187,53 @@ export default function StudentReviewsTab({
       const dt = Math.min((now - lastTime) / 16.66, 2.0);
       lastTime = now;
 
-      // Smooth keyboard steering directly in animation loop
-      const leftPressed = keysPressedRef.current["ArrowLeft"] || keysPressedRef.current["a"] || keysPressedRef.current["A"];
-      const rightPressed = keysPressedRef.current["ArrowRight"] || keysPressedRef.current["d"] || keysPressedRef.current["D"];
-      if (leftPressed) {
-        shipXRef.current = Math.max(5, shipXRef.current - 1.2 * dt);
-        if (playerShipRef.current) {
-          playerShipRef.current.style.left = `${shipXRef.current}%`;
-        }
-      } else if (rightPressed) {
-        shipXRef.current = Math.min(95, shipXRef.current + 1.2 * dt);
-        if (playerShipRef.current) {
-          playerShipRef.current.style.left = `${shipXRef.current}%`;
-        }
+      // Smooth keyboard & on-screen button steering directly in animation loop
+      const keys = keysPressedRef.current;
+      const hold = shipArrowHoldRef.current;
+      const left = keys["ArrowLeft"] || keys["a"] || keys["A"] || hold.left;
+      const right = keys["ArrowRight"] || keys["d"] || keys["D"] || hold.right;
+
+      const maxVx = 1.35;
+      let targetVx = 0;
+      if (left) targetVx -= maxVx;
+      if (right) targetVx += maxVx;
+
+      if (targetVx !== 0) {
+        shipVelocityRef.current += (targetVx - shipVelocityRef.current) * Math.min(1, 0.22 * dt);
+      } else {
+        // Smooth aerodynamic glide damping
+        shipVelocityRef.current *= Math.pow(0.86, dt);
       }
 
+      let nextX = shipXRef.current + shipVelocityRef.current * dt;
+      if (nextX < 6) {
+        nextX = 6;
+        shipVelocityRef.current = 0;
+      } else if (nextX > 94) {
+        nextX = 94;
+        shipVelocityRef.current = 0;
+      }
+      shipXRef.current = nextX;
+
+      if (playerShipRef.current) {
+        playerShipRef.current.style.left = `${nextX}%`;
+      }
+
+      // Smooth downward descent of target meteors with zero GC allocation
       const list = fallingMeteorsRef.current || items;
-      const updated = list.map(m => {
+      for (let i = 0; i < list.length; i++) {
+        const m = list[i];
         let newY = m.y + (m.speed || 0.22) * dt;
         if (newY > 78) {
           newY = -12; // Continuous smooth wrap-around descent from top
         }
-        return { ...m, y: newY };
-      });
-
-      fallingMeteorsRef.current = updated;
-
-      // Ultra-performant direct DOM update: ZERO React re-render!
-      updated.forEach((m) => {
+        m.y = newY;
         const el = meteorDomRefs.current[m.idx];
         if (el) {
-          el.style.top = `${m.y}%`;
+          el.style.top = `${newY}%`;
           el.style.left = `${m.x}%`;
         }
-      });
+      }
 
       gameLoopRef.current = requestAnimationFrame(animate);
     };
@@ -2232,6 +2248,9 @@ export default function StudentReviewsTab({
     isAnswerRevealedRef.current = false;
     setIsAnswerRevealed(false);
     roadCarDomRefs.current = {};
+    carVelocityRef.current = 0;
+    carAngleRef.current = 0;
+    carArrowHoldRef.current = { left: false, right: false, boost: false };
 
     // Position options horizontally based on number of choices, distributed as lanes
     const count = q.options.length;
@@ -2267,22 +2286,26 @@ export default function StudentReviewsTab({
       const dt = Math.min((now - lastTime) / 16.66, 2.0);
       lastTime = now;
 
-      // 1. Process Drift Physics: Acceleration, Inertia, Friction
-      let accel = 0;
-      const leftPressed = keysPressedRef.current["ArrowLeft"] || keysPressedRef.current["a"] || keysPressedRef.current["A"];
-      const rightPressed = keysPressedRef.current["ArrowRight"] || keysPressedRef.current["d"] || keysPressedRef.current["D"];
+      // 1. Process Drift Physics: Velocity, Natural Inertia, Exponential Damping
+      const keys = keysPressedRef.current;
+      const hold = carArrowHoldRef.current;
+      const left = keys["ArrowLeft"] || keys["a"] || keys["A"] || hold.left;
+      const right = keys["ArrowRight"] || keys["d"] || keys["D"] || hold.right;
+      const isBoosting = keys[" "] || keys["Spacebar"] || hold.boost;
 
-      if (leftPressed) {
-        accel = -0.75 * dt;
-        carVelocityRef.current = (carVelocityRef.current + accel) * 0.85;
-      } else if (rightPressed) {
-        accel = 0.75 * dt;
-        carVelocityRef.current = (carVelocityRef.current + accel) * 0.85;
+      const maxVx = isBoosting ? 1.75 : 1.35;
+      let targetVx = 0;
+      if (left) targetVx -= maxVx;
+      if (right) targetVx += maxVx;
+
+      if (targetVx !== 0) {
+        carVelocityRef.current += (targetVx - carVelocityRef.current) * Math.min(1, 0.24 * dt);
       } else {
-        carVelocityRef.current = 0;
+        // Natural drift friction damping
+        carVelocityRef.current *= Math.pow(0.86, dt);
       }
       
-      let nextX = shipXRef.current + carVelocityRef.current;
+      let nextX = shipXRef.current + carVelocityRef.current * dt;
       if (nextX < 6) {
         nextX = 6;
         carVelocityRef.current = 0;
@@ -2292,49 +2315,45 @@ export default function StudentReviewsTab({
       }
       shipXRef.current = nextX;
 
-      const targetAngle = carVelocityRef.current * 4.5;
-      carAngleRef.current = carAngleRef.current * 0.75 + targetAngle * 0.25;
+      const targetAngle = Math.max(-18, Math.min(18, carVelocityRef.current * 7.5));
+      carAngleRef.current = carAngleRef.current * 0.72 + targetAngle * 0.28;
 
       // Direct player car DOM update - 60 FPS hardware accelerated without React re-render
       if (playerCarRef.current) {
         playerCarRef.current.style.left = `${nextX}%`;
-        playerCarRef.current.style.transform = `translateX(-50%) rotate(${carAngleRef.current}deg)`;
+        playerCarRef.current.style.transform = `translateX(-50%) rotate(${carAngleRef.current.toFixed(1)}deg)`;
       }
 
-      // Check booster speed modifier (Space key)
-      const isBoosting = !!keysPressedRef.current[" "] || !!keysPressedRef.current["Spacebar"];
-      const boosterMultiplier = isBoosting ? 2.5 : 1.0;
+      // Check booster speed modifier (Space key or on-screen button)
+      const boosterMultiplier = isBoosting ? 2.3 : 1.0;
 
       let collisionDetected = false;
       let collidingMeteor: any = null;
 
       const list = fallingMeteorsRef.current || items;
-      const updated = list.map(m => {
+      for (let i = 0; i < list.length; i++) {
+        const m = list[i];
         let newY = m.y + (m.speed || 0.18) * boosterMultiplier * dt;
         if (newY > 95) {
           // Respawn at top if it passed the bottom
           newY = -20;
         }
-        if (!isColliding && newY >= 72 && newY <= 85) {
-          // Proximity collision check
+        m.y = newY;
+
+        // Proximity collision check
+        if (!isColliding && newY >= 72 && newY <= 86) {
           if (Math.abs(m.x - nextX) < 11) {
             collisionDetected = true;
             collidingMeteor = { ...m, y: newY };
           }
         }
-        return { ...m, y: newY };
-      });
 
-      fallingMeteorsRef.current = updated;
-
-      // Direct road cars DOM update - ZERO React re-render!
-      updated.forEach((m) => {
         const el = roadCarDomRefs.current[m.idx];
         if (el) {
-          el.style.top = `${m.y}%`;
+          el.style.top = `${newY}%`;
           el.style.left = `${m.x}%`;
         }
-      });
+      }
 
       if (collisionDetected && collidingMeteor && !isColliding) {
         isColliding = true;
@@ -2657,7 +2676,7 @@ export default function StudentReviewsTab({
         x: startX,
         y: baseY,
         baseY,
-        speed: 0.18 + (i % 2) * 0.04,
+        speed: 0.30 + (i % 2) * 0.05, // Upgraded from 0.18 for engaging, brisk game pacing
         waveOffset: i * 1.5
       };
     });
@@ -2704,26 +2723,32 @@ export default function StudentReviewsTab({
       if (keys["ArrowLeft"] || keys["a"] || keys["A"] || hold.left) inputX -= 1;
       if (keys["ArrowRight"] || keys["d"] || keys["D"] || hold.right) inputX += 1;
 
-      // Aerodynamic Physics Parameters
-      const maxVy = 0.95; // % per frame
-      const maxVx = 0.75; // % per frame
+      // Aerodynamic Physics Parameters - Upgraded for mobile agility & high performance
+      const maxVy = 1.45; // % per frame (responsive vertical climb/dive)
+      const maxVx = 1.15; // % per frame
 
-      const targetVy = inputY * maxVy;
-      const targetVx = inputX * maxVx;
+      let targetVy = inputY * maxVy;
+      let targetVx = inputX * maxVx;
 
-      if (inputY !== 0) {
-        // Accelerate smoothly into climb or dive
-        airplaneVelocityRef.current.vy += (targetVy - airplaneVelocityRef.current.vy) * Math.min(1, 0.18 * dt);
-      } else {
-        // Natural aerodynamic glide friction
-        airplaneVelocityRef.current.vy *= Math.pow(0.87, dt);
+      // Direct touch dragging tracking (overrides key steer smoothly when dragging finger)
+      if (touchTargetYRef.current !== null) {
+        const diffY = touchTargetYRef.current - airplanePosRef.current.y;
+        targetVy = Math.max(-1.5, Math.min(1.5, diffY * 0.18));
       }
 
-      if (inputX !== 0) {
-        // Accelerate smoothly forward/backward
-        airplaneVelocityRef.current.vx += (targetVx - airplaneVelocityRef.current.vx) * Math.min(1, 0.18 * dt);
+      if (targetVy !== 0) {
+        // Accelerate smoothly into climb or dive
+        airplaneVelocityRef.current.vy += (targetVy - airplaneVelocityRef.current.vy) * Math.min(1, 0.26 * dt);
       } else {
-        airplaneVelocityRef.current.vx *= Math.pow(0.87, dt);
+        // Natural aerodynamic glide friction
+        airplaneVelocityRef.current.vy *= Math.pow(0.85, dt);
+      }
+
+      if (targetVx !== 0) {
+        // Accelerate smoothly forward/backward
+        airplaneVelocityRef.current.vx += (targetVx - airplaneVelocityRef.current.vx) * Math.min(1, 0.26 * dt);
+      } else {
+        airplaneVelocityRef.current.vx *= Math.pow(0.85, dt);
       }
 
       // Integrate positions
@@ -2750,9 +2775,8 @@ export default function StudentReviewsTab({
       airplanePosRef.current = { x: nextX, y: nextY };
 
       // Realistic Aerodynamic Banking & Pitch Angle
-      // Nose tilts up during climb, down during dive
-      const targetPitch = Math.max(-20, Math.min(20, airplaneVelocityRef.current.vy * 22));
-      airplaneAngleRef.current += (targetPitch - airplaneAngleRef.current) * Math.min(1, 0.16 * dt);
+      const targetPitch = Math.max(-20, Math.min(20, airplaneVelocityRef.current.vy * 16));
+      airplaneAngleRef.current += (targetPitch - airplaneAngleRef.current) * Math.min(1, 0.18 * dt);
 
       // Gentle cruising oscillation
       const airFloat = Math.sin(timeElapsed * 1.8) * 0.45;
@@ -2774,17 +2798,19 @@ export default function StudentReviewsTab({
       const planePos = airplanePosRef.current;
       let collidingCloud: (typeof currentClouds)[0] | null = null;
 
-      const updatedClouds = currentClouds.map(c => {
-        // Move cloud horizontally towards the airplane (from right to left)
-        let cloudNextX = c.x - (c.speed || 0.18) * dt;
+      // Direct in-place mutation of clouds - zero GC allocation
+      for (let i = 0; i < currentClouds.length; i++) {
+        const c = currentClouds[i];
+        let cloudNextX = c.x - (c.speed || 0.30) * dt;
 
-        // If cloud flew past the screen to the far left (-25%), wrap around to the right
+        // If cloud flew past screen to far left (-25%), wrap around to the right
         if (cloudNextX < -25) {
-          cloudNextX = 112 + (c.idx * 16);
+          cloudNextX = 110 + (c.idx * 16);
         }
 
-        // Gentle floating wave
-        const waveY = c.baseY + Math.sin(timeElapsed + c.waveOffset) * 2.2;
+        const waveY = c.baseY + Math.sin(timeElapsed + c.waveOffset) * 2.0;
+        c.x = cloudNextX;
+        c.y = waveY;
 
         // Collision detection between airplane and cloud
         if (!collidingCloud && !isAnswerRevealedRef.current) {
@@ -2795,25 +2821,19 @@ export default function StudentReviewsTab({
           }
         }
 
-        return { ...c, x: cloudNextX, y: waveY };
-      });
-
-      airplaneCloudsRef.current = updatedClouds;
-
-      // Ultra-performant direct DOM update for clouds
-      updatedClouds.forEach(c => {
         const el = cloudDomRefs.current[c.idx];
         if (el) {
-          el.style.left = `${c.x}%`;
-          el.style.top = `${c.y}%`;
+          el.style.left = `${cloudNextX}%`;
+          el.style.top = `${waveY}%`;
         }
-      });
+      }
 
       // Collision triggered!
       if (collidingCloud) {
         if (airplaneLoopRef.current) cancelAnimationFrame(airplaneLoopRef.current);
         airplaneLoopRef.current = null;
         airplaneVelocityRef.current = { vx: 0, vy: 0 };
+        touchTargetYRef.current = null;
         handleAirplaneCollision(collidingCloud);
         return;
       }
@@ -2826,27 +2846,42 @@ export default function StudentReviewsTab({
 
   const steerAirplaneVertical = (deltaY: number) => {
     if (isAnswerRevealedRef.current || isQuestionIntroRef.current) return;
-    // Apply smooth acceleration impulse
-    airplaneVelocityRef.current.vy = Math.max(-0.95, Math.min(0.95, airplaneVelocityRef.current.vy + (deltaY < 0 ? -0.45 : 0.45)));
+    airplaneVelocityRef.current.vy = Math.max(-1.45, Math.min(1.45, airplaneVelocityRef.current.vy + (deltaY < 0 ? -0.75 : 0.75)));
   };
 
   const steerAirplaneHorizontal = (deltaX: number) => {
     if (isAnswerRevealedRef.current || isQuestionIntroRef.current) return;
-    airplaneVelocityRef.current.vx = Math.max(-0.75, Math.min(0.75, airplaneVelocityRef.current.vx + (deltaX < 0 ? -0.35 : 0.35)));
+    airplaneVelocityRef.current.vx = Math.max(-1.15, Math.min(1.15, airplaneVelocityRef.current.vx + (deltaX < 0 ? -0.55 : 0.55)));
+  };
+
+  const handleArenaPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (isAnswerRevealedRef.current || isQuestionIntroRef.current) return;
+    if (!airplaneArenaRef.current) return;
+    const rect = airplaneArenaRef.current.getBoundingClientRect();
+    arenaRectCacheRef.current = rect;
+    isTouchDraggingRef.current = true;
+    if (rect.height > 0) {
+      const relY = ((e.clientY - rect.top) / rect.height) * 100;
+      touchTargetYRef.current = Math.max(14, Math.min(82, relY));
+    }
   };
 
   const handleArenaPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (isAnswerRevealedRef.current || isQuestionIntroRef.current) return;
-    if (!airplaneArenaRef.current) return;
-    const rect = airplaneArenaRef.current.getBoundingClientRect();
-    if (rect.height <= 0) return;
+    if (!isTouchDraggingRef.current) return;
+    let rect = arenaRectCacheRef.current;
+    if (!rect && airplaneArenaRef.current) {
+      rect = airplaneArenaRef.current.getBoundingClientRect();
+      arenaRectCacheRef.current = rect;
+    }
+    if (!rect || rect.height <= 0) return;
     const relY = ((e.clientY - rect.top) / rect.height) * 100;
-    const targetY = Math.max(14, Math.min(82, relY));
+    touchTargetYRef.current = Math.max(14, Math.min(82, relY));
+  };
 
-    // Smooth proportional steering towards finger/cursor position
-    const diffY = targetY - airplanePosRef.current.y;
-    const desiredVy = Math.max(-0.95, Math.min(0.95, diffY * 0.08));
-    airplaneVelocityRef.current.vy += (desiredVy - airplaneVelocityRef.current.vy) * 0.25;
+  const handleArenaPointerUp = () => {
+    isTouchDraggingRef.current = false;
+    touchTargetYRef.current = null;
   };
 
   const handleAirplaneCollision = (cloudItem: { idx: number; text: string; x: number; y: number }) => {
@@ -5050,10 +5085,10 @@ export default function StudentReviewsTab({
                       >
                         {/* Deep Space Background: Starfield, Nebulae & Cosmic Objects */}
                         <div className="absolute inset-0 bg-gradient-to-b from-slate-950 via-[#070b1a] to-[#0c0826] overflow-hidden pointer-events-none">
-                          {/* Cosmic Nebula Glows */}
-                          <div className="absolute top-1/4 -left-10 w-72 h-72 bg-cyan-500/10 rounded-full blur-3xl" />
-                          <div className="absolute bottom-1/3 -right-10 w-80 h-80 bg-purple-600/15 rounded-full blur-3xl" />
-                          <div className="absolute top-2/3 left-1/3 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl" />
+                          {/* Lightweight Cosmic Nebula Atmosphere without heavy CPU/GPU blur filters */}
+                          <div className="absolute -top-10 -left-10 w-80 h-80 bg-[radial-gradient(circle,rgba(6,182,212,0.12)_0%,transparent_70%)] pointer-events-none" />
+                          <div className="absolute bottom-0 -right-10 w-80 h-80 bg-[radial-gradient(circle,rgba(147,51,234,0.14)_0%,transparent_70%)] pointer-events-none" />
+                          <div className="absolute top-1/2 left-1/3 w-64 h-64 bg-[radial-gradient(circle,rgba(99,102,241,0.10)_0%,transparent_70%)] pointer-events-none" />
 
                           {/* Twinkling Space Stars - lightweight rendering */}
                           {Array.from({ length: 24 }).map((_, i) => (
@@ -5457,15 +5492,67 @@ export default function StudentReviewsTab({
                             }}
                             className="absolute -bottom-1.5 w-16 h-20 flex flex-col items-center justify-end -translate-x-1/2 select-none pointer-events-none z-20"
                           >
-                            <RetroRocketGraphic className="w-12 h-20 filter drop-shadow-[0_0_16px_#f59e0b]" />
+                            <RetroRocketGraphic className="w-12 h-20" />
                           </div>
                         </div>
                       </div>
 
-                      {/* Mobile / Direct Touch Instructions */}
-                      <p className="text-[11px] text-center text-slate-400 font-bold leading-relaxed">
-                        💡 <span className="text-indigo-400">طريقة اللعب:</span> حرك الماوس أو اسحب إصبعك على الشاشة لتحريك الصاروخ، أو اضغط مباشرة على خيار الإجابة في الفضاء لضربه وإطلاقه! يمكنك أيضاً استخدام أسهم الكيبورد ◀ ▶ والمسافة ⌴.
-                      </p>
+                      {/* Ergonomic Touch/Mouse Steering & Shoot Controls */}
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-3 gap-2 sm:gap-3 bg-slate-900/60 p-2 sm:p-2.5 rounded-2xl border border-slate-800/90 shadow-md">
+                          <button
+                            type="button"
+                            onPointerDown={(e) => { e.preventDefault(); shipArrowHoldRef.current.left = true; }}
+                            onPointerUp={() => { shipArrowHoldRef.current.left = false; }}
+                            onPointerLeave={() => { shipArrowHoldRef.current.left = false; }}
+                            onPointerCancel={() => { shipArrowHoldRef.current.left = false; }}
+                            className="py-3 sm:py-3.5 bg-slate-800 hover:bg-slate-750 active:bg-indigo-600 active:scale-95 text-slate-100 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer select-none flex items-center justify-center gap-1.5 border border-slate-700 shadow-sm"
+                            title="تحريك لليسار (◄)"
+                          >
+                            <span>🚀 ◄ يسار</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const currentMeteors = fallingMeteorsRef.current;
+                              const currentShipX = shipXRef.current;
+                              if (currentMeteors && currentMeteors.length > 0) {
+                                let closestMeteor = currentMeteors[0];
+                                let minDiff = Math.abs(currentMeteors[0].x - currentShipX);
+                                for (let i = 1; i < currentMeteors.length; i++) {
+                                  const diff = Math.abs(currentMeteors[i].x - currentShipX);
+                                  if (diff < minDiff) {
+                                    minDiff = diff;
+                                    closestMeteor = currentMeteors[i];
+                                  }
+                                }
+                                handleShootMeteor(closestMeteor);
+                              }
+                            }}
+                            className="py-3 sm:py-3.5 bg-gradient-to-r from-amber-500 to-red-600 hover:from-amber-400 hover:to-red-500 active:scale-95 text-white rounded-xl text-xs sm:text-sm font-black transition cursor-pointer select-none flex items-center justify-center gap-1.5 border border-amber-400/40 shadow-lg shadow-amber-950/40"
+                            title="إطلاق الصاروخ نحو أقرب هدف (مسافة ⌴)"
+                          >
+                            <span>🎯 إطلاق!</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onPointerDown={(e) => { e.preventDefault(); shipArrowHoldRef.current.right = true; }}
+                            onPointerUp={() => { shipArrowHoldRef.current.right = false; }}
+                            onPointerLeave={() => { shipArrowHoldRef.current.right = false; }}
+                            onPointerCancel={() => { shipArrowHoldRef.current.right = false; }}
+                            className="py-3 sm:py-3.5 bg-slate-800 hover:bg-slate-750 active:bg-indigo-600 active:scale-95 text-slate-100 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer select-none flex items-center justify-center gap-1.5 border border-slate-700 shadow-sm"
+                            title="تحريك لليمين (►)"
+                          >
+                            <span>يمين ► 🚀</span>
+                          </button>
+                        </div>
+
+                        <p className="text-[11px] text-center text-slate-400 font-bold leading-relaxed">
+                          💡 <span className="text-indigo-400">طريقة اللعب:</span> حرك الصاروخ بالأسهم أو الأزرار ثم اضغط 🎯 إطلاق لإصابة الإجابة الصحيحة، أو انقر مباشرة على الخيار في الفضاء!
+                        </p>
+                      </div>
                       </>
                       )}
                     </div>
@@ -5852,29 +5939,23 @@ export default function StudentReviewsTab({
                           </div>
                         )}
 
-                        {/* Dynamic White Lane Lines dividing options */}
-                        {(() => {
-                          const count = activeChallenge.questions[currentQuestionIdx]?.options.length || 3;
-                          return Array.from({ length: count - 1 }).map((_, i) => {
-                            const leftPos = ((i + 1) * 100) / count;
-                            return (
-                              <div
-                                key={`highway-lane-${i}`}
-                                style={{ left: `${leftPos}%` }}
-                                className={`absolute top-0 bottom-0 w-[2px] pointer-events-none z-0 ${
-                                  isBoostingState ? "lane-line-fast" : "lane-line"
-                                }`}
-                              />
-                            );
-                          });
-                        })()}
-
-                        {/* Rolling Asphalt Effect lines */}
-                        <div className="absolute inset-0 pointer-events-none overflow-hidden z-0">
-                          <div className={`w-full h-1 bg-white/5 absolute ${isBoostingState ? "animate-[moveDown_0.5s_linear_infinite]" : "animate-[moveDown_2s_linear_infinite]"}`} style={{ animationDelay: "0s" }} />
-                          <div className={`w-full h-1 bg-white/5 absolute ${isBoostingState ? "animate-[moveDown_0.5s_linear_infinite]" : "animate-[moveDown_2s_linear_infinite]"}`} style={{ animationDelay: "0.5s" }} />
-                          <div className={`w-full h-1 bg-white/5 absolute ${isBoostingState ? "animate-[moveDown_0.5s_linear_infinite]" : "animate-[moveDown_2s_linear_infinite]"}`} style={{ animationDelay: "1s" }} />
-                          <div className={`w-full h-1 bg-white/5 absolute ${isBoostingState ? "animate-[moveDown_0.5s_linear_infinite]" : "animate-[moveDown_2s_linear_infinite]"}`} style={{ animationDelay: "1.5s" }} />
+                        {/* Dynamic White Lane Lines dividing options - GPU Accelerated */}
+                        <div className="absolute -top-14 bottom-0 inset-x-0 overflow-hidden pointer-events-none z-0">
+                          {(() => {
+                            const count = activeChallenge.questions[currentQuestionIdx]?.options.length || 3;
+                            return Array.from({ length: count - 1 }).map((_, i) => {
+                              const leftPos = ((i + 1) * 100) / count;
+                              return (
+                                <div
+                                  key={`highway-lane-${i}`}
+                                  style={{ left: `${leftPos}%` }}
+                                  className={`absolute top-0 bottom-0 w-[2px] ${
+                                    isBoostingState ? "lane-line-fast" : "lane-line"
+                                  }`}
+                                />
+                              );
+                            });
+                          })()}
                         </div>
 
                         {/* Falling Answers / Vehicles on Highway */}
@@ -6016,33 +6097,41 @@ export default function StudentReviewsTab({
                           💡 <span className="text-indigo-400">طريقة اللعب:</span> وجه سيارتك واصطدم بالمسار الذي يحتوي على الإجابة الصحيحة للتقدم! يمكنك **الضغط مع الاستمرار على زر المسافة (Space) لزيادة سرعة الطريق والخيارات بشكل خارق 🚀**
                         </p>
 
-                        <div className="grid grid-cols-2 gap-3 bg-slate-900/40 p-2.5 rounded-2xl border border-slate-800/80">
+                        <div className="grid grid-cols-3 gap-2 sm:gap-3 bg-slate-900/60 p-2 sm:p-2.5 rounded-2xl border border-slate-800/90 shadow-md">
                           <button
                             type="button"
-                            onClick={() => {
-                              const nextVal = Math.max(5, shipXRef.current - 12);
-                              shipXRef.current = nextVal;
-                              if (playerCarRef.current) {
-                                playerCarRef.current.style.left = `${nextVal}%`;
-                              }
-                            }}
-                            className="py-3.5 bg-slate-850 hover:bg-slate-800 active:scale-95 text-slate-200 rounded-xl text-xs font-black transition cursor-pointer select-none flex items-center justify-center gap-2 border border-slate-800"
+                            onPointerDown={(e) => { e.preventDefault(); carArrowHoldRef.current.left = true; }}
+                            onPointerUp={() => { carArrowHoldRef.current.left = false; }}
+                            onPointerLeave={() => { carArrowHoldRef.current.left = false; }}
+                            onPointerCancel={() => { carArrowHoldRef.current.left = false; }}
+                            className="py-3 sm:py-3.5 bg-slate-800 hover:bg-slate-750 active:bg-cyan-600 active:scale-95 text-slate-100 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer select-none flex items-center justify-center gap-1.5 border border-slate-700 shadow-sm"
+                            title="انعطاف لليسار (◄)"
                           >
-                            <span>🏎️ انعطف يساراً ◀</span>
+                            <span>🏎️ ◀ يسار</span>
                           </button>
 
                           <button
                             type="button"
-                            onClick={() => {
-                              const nextVal = Math.min(95, shipXRef.current + 12);
-                              shipXRef.current = nextVal;
-                              if (playerCarRef.current) {
-                                playerCarRef.current.style.left = `${nextVal}%`;
-                              }
-                            }}
-                            className="py-3.5 bg-slate-850 hover:bg-slate-800 active:scale-95 text-slate-200 rounded-xl text-xs font-black transition cursor-pointer select-none flex items-center justify-center gap-2 border border-slate-800"
+                            onPointerDown={(e) => { e.preventDefault(); carArrowHoldRef.current.boost = true; setIsBoostingState(true); }}
+                            onPointerUp={() => { carArrowHoldRef.current.boost = false; setIsBoostingState(false); }}
+                            onPointerLeave={() => { carArrowHoldRef.current.boost = false; setIsBoostingState(false); }}
+                            onPointerCancel={() => { carArrowHoldRef.current.boost = false; setIsBoostingState(false); }}
+                            className="py-3 sm:py-3.5 bg-gradient-to-r from-amber-500 to-red-600 hover:from-amber-400 hover:to-red-500 active:scale-95 text-white rounded-xl text-xs sm:text-sm font-black transition cursor-pointer select-none flex items-center justify-center gap-1.5 border border-amber-400/40 shadow-lg shadow-amber-950/40"
+                            title="ضغط مستمر للتسريع الخارق نيترو 🚀"
                           >
-                            <span>▶ انعطف يميناً 🏎️</span>
+                            <span>🚀 نيترو!</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onPointerDown={(e) => { e.preventDefault(); carArrowHoldRef.current.right = true; }}
+                            onPointerUp={() => { carArrowHoldRef.current.right = false; }}
+                            onPointerLeave={() => { carArrowHoldRef.current.right = false; }}
+                            onPointerCancel={() => { carArrowHoldRef.current.right = false; }}
+                            className="py-3 sm:py-3.5 bg-slate-800 hover:bg-slate-750 active:bg-cyan-600 active:scale-95 text-slate-100 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer select-none flex items-center justify-center gap-1.5 border border-slate-700 shadow-sm"
+                            title="انعطاف لليمين (►)"
+                          >
+                            <span>يمين ► 🏎️</span>
                           </button>
                         </div>
                       </div>
@@ -6244,17 +6333,8 @@ export default function StudentReviewsTab({
                             <div className="absolute inset-0 top-10 bg-gradient-to-b from-slate-950 via-emerald-950 to-emerald-900 overflow-hidden pointer-events-none">
                               {/* Stadium Grandstands Silhouette & Crowds */}
                               <div className="absolute top-0 inset-x-0 h-24 bg-gradient-to-b from-slate-950 via-slate-900 to-transparent flex flex-col justify-between opacity-80 pointer-events-none">
-                                {/* Spectator silhouette dots in tiers */}
-                                <div className="w-full h-12 flex flex-wrap gap-1 px-4 opacity-40 overflow-hidden">
-                                  {Array.from({ length: 90 }).map((_, i) => (
-                                    <div
-                                      key={`crowd-${i}`}
-                                      className={`w-1.5 h-2 rounded-t-sm ${
-                                        i % 5 === 0 ? "bg-emerald-400" : i % 3 === 0 ? "bg-yellow-300" : "bg-slate-400"
-                                      }`}
-                                    />
-                                  ))}
-                                </div>
+                                {/* Spectator silhouette grandstand tiers - lightweight CSS pattern */}
+                                <div className="w-full h-12 opacity-35 overflow-hidden bg-[radial-gradient(#34d399_1px,transparent_1px),radial-gradient(#fde047_1px,transparent_1px)] bg-[size:12px_8px,16px_10px] bg-[position:0_0,6px_4px]" />
                                 {/* Random Camera Flashes in Stands */}
                                 <div className="absolute top-2 left-1/4 w-3 h-3 bg-white rounded-full blur-[2px] animate-ping" style={{ animationDuration: "2.4s" }} />
                                 <div className="absolute top-4 right-1/3 w-3 h-3 bg-white rounded-full blur-[2px] animate-ping" style={{ animationDuration: "1.8s", animationDelay: "0.9s" }} />
@@ -6899,10 +6979,10 @@ export default function StudentReviewsTab({
                     >
                       {/* Background Floating Atmosphere Clouds */}
                       <div className="absolute inset-0 pointer-events-none overflow-hidden">
-                        {/* Distant soft background clouds */}
-                        <div className="absolute -top-6 -left-10 w-72 h-36 bg-white/30 rounded-full blur-xl" />
-                        <div className="absolute top-20 -right-12 w-96 h-44 bg-white/25 rounded-full blur-2xl" />
-                        <div className="absolute top-48 left-1/3 w-80 h-32 bg-white/20 rounded-full blur-xl" />
+                        {/* Distant soft background clouds - lightweight gradient shapes */}
+                        <div className="absolute -top-6 -left-10 w-72 h-36 bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.35)_0%,transparent_75%)] rounded-full" />
+                        <div className="absolute top-20 -right-12 w-96 h-44 bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.30)_0%,transparent_75%)] rounded-full" />
+                        <div className="absolute top-48 left-1/3 w-80 h-32 bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.25)_0%,transparent_75%)] rounded-full" />
 
                         {/* City Skyline Silhouette at bottom (matching screenshot) */}
                         <div className="absolute bottom-0 left-0 right-0 h-36 sm:h-44 pointer-events-none z-5 opacity-40">
@@ -6986,8 +7066,10 @@ export default function StudentReviewsTab({
                       {/* FLIGHT SKY & CLOUDS INTERACTIVE STAGE */}
                       <div 
                         ref={airplaneArenaRef}
+                        onPointerDown={handleArenaPointerDown}
                         onPointerMove={handleArenaPointerMove}
-                        onPointerDown={handleArenaPointerMove}
+                        onPointerUp={handleArenaPointerUp}
+                        onPointerCancel={handleArenaPointerUp}
                         className="relative flex-1 w-full overflow-hidden select-none cursor-crosshair touch-none"
                       >
                         {/* Render Floating & Moving Answer Clouds */}
@@ -6999,7 +7081,7 @@ export default function StudentReviewsTab({
                               x: 20 + i * 25,
                               y: 30 + (i % 2) * 30,
                               baseY: 30 + (i % 2) * 30,
-                              speed: 0.16,
+                              speed: 0.30,
                               waveOffset: 0
                             }))
                         ).map((cloud) => {
@@ -7024,24 +7106,27 @@ export default function StudentReviewsTab({
                                 left: `${cloud.x}%`,
                                 top: `${cloud.y}%`,
                                 transform: 'translate(-50%, -50%)',
+                                willChange: 'left, top',
                               }}
                               className="absolute z-15 pointer-events-none select-none"
                             >
-                              {/* 3D Realistic Cloud Graphic */}
-                              <div className="relative filter drop-shadow-[0_12px_16px_rgba(0,0,0,0.18)]">
+                              {/* Lightweight Cloud Graphic without GPU-killing SVG drop-shadow filter */}
+                              <div className="relative">
                                 <svg
-                                  className={`w-44 sm:w-56 md:w-64 h-24 sm:h-28 transition-colors duration-300 ${
+                                  className={`w-44 sm:w-56 md:w-64 h-24 sm:h-28 transition-colors duration-200 ${
                                     cloudSkin === "correct"
-                                      ? "text-emerald-100 drop-shadow-[0_0_25px_rgba(16,185,129,0.7)]"
+                                      ? "text-emerald-100"
                                       : cloudSkin === "wrong"
-                                      ? "text-slate-700 drop-shadow-[0_0_25px_rgba(239,68,68,0.7)]"
+                                      ? "text-slate-700"
                                       : isHovered
-                                      ? "text-sky-50 drop-shadow-[0_0_20px_rgba(255,255,255,0.9)]"
+                                      ? "text-sky-50"
                                       : "text-white"
                                   }`}
                                   viewBox="0 0 240 120"
                                   fill="currentColor"
                                 >
+                                  {/* Soft native SVG cloud shadow - 0ms raster overhead on mobile GPU */}
+                                  <ellipse cx="120" cy="96" rx="84" ry="12" fill="rgba(15,23,42,0.12)" />
                                   {/* Puffy multi-lobed cloud path */}
                                   <path d="M 45,95 Q 15,95 15,70 Q 15,50 35,45 Q 40,20 70,20 Q 90,20 100,32 Q 115,10 145,10 Q 180,10 190,38 Q 215,35 225,58 Q 235,80 215,95 Q 200,95 185,95 Z" />
                                   <ellipse cx="65" cy="72" rx="42" ry="26" />
@@ -7092,48 +7177,28 @@ export default function StudentReviewsTab({
                           );
                         })}
 
-                        {/* On-screen Vertical Steering Controls (Touch & Keyboard Helper) */}
-                        <div className="absolute bottom-3 left-3 sm:bottom-4 sm:left-4 z-30 flex flex-col gap-2 pointer-events-auto">
-                          <button
-                            type="button"
-                            onPointerDown={(e) => { e.stopPropagation(); steerAirplaneVertical(-12); }}
-                            className="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl bg-white/85 hover:bg-white active:bg-sky-200 text-sky-900 shadow-xl flex items-center justify-center text-lg sm:text-xl font-black border-2 border-sky-300/80 transition transform active:scale-95 cursor-pointer backdrop-blur-xs"
-                            title="توجيه الطائرة للأعلى ⬆️"
-                          >
-                            ▲
-                          </button>
-                          <button
-                            type="button"
-                            onPointerDown={(e) => { e.stopPropagation(); steerAirplaneVertical(12); }}
-                            className="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl bg-white/85 hover:bg-white active:bg-sky-200 text-sky-900 shadow-xl flex items-center justify-center text-lg sm:text-xl font-black border-2 border-sky-300/80 transition transform active:scale-95 cursor-pointer backdrop-blur-xs"
-                            title="توجيه الطائرة للأسفل ⬇️"
-                          >
-                            ▼
-                          </button>
-                        </div>
-
-                        {/* RED PROPELLER AIRPLANE (Identical to user's uploaded image!) */}
+                        {/* RED PROPELLER AIRPLANE */}
                         <div
                           ref={airplaneSpriteRef}
                           style={{
                             left: `${airplanePos.x}%`,
                             top: `${airplanePos.y}%`,
                             transform: `translate(-50%, -50%) rotate(${airplaneAngle}deg)`,
-                            transition: airplaneState === "zooming" ? "left 0.28s cubic-bezier(0.4, 0, 0.2, 1), top 0.28s cubic-bezier(0.4, 0, 0.2, 1)" : "none",
                             width: "110px",
                             height: "70px",
+                            willChange: "left, top, transform",
                           }}
                           className="absolute z-25 pointer-events-none"
                         >
                           {/* Propeller Vapor Trail */}
-                          <div className="absolute -left-6 top-1/2 -translate-y-1/2 flex items-center space-x-1 opacity-60">
+                          <div className="absolute -left-5 top-1/2 -translate-y-1/2 flex items-center space-x-1 opacity-60">
                             <span className="w-2 h-2 rounded-full bg-white animate-ping" />
-                            <span className="w-3 h-1.5 rounded-full bg-white/70 blur-[1px]" />
+                            <span className="w-3 h-1.5 rounded-full bg-white/70" />
                           </div>
 
                           {/* High Quality Red Passenger Propeller Airplane SVG */}
                           <svg
-                            className="w-full h-full filter drop-shadow-[0_8px_12px_rgba(0,0,0,0.35)]"
+                            className="w-full h-full"
                             viewBox="0 0 160 100"
                             fill="none"
                           >

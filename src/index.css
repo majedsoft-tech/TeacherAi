@@ -4,12 +4,12 @@
   --font-sans: "Cairo", sans-serif;
 }
 
-@keyframes laneScroll {
+@keyframes laneScrollGPU {
   from {
-    background-position-y: 0px;
+    transform: translateY(-50px);
   }
   to {
-    background-position-y: 50px;
+    transform: translateY(0px);
   }
 }
 
@@ -18,11 +18,11 @@
     to bottom,
     transparent,
     transparent 15px,
-    rgba(255, 255, 255, 0.5) 15px,
-    rgba(255, 255, 255, 0.5) 35px
+    rgba(255, 255, 255, 0.45) 15px,
+    rgba(255, 255, 255, 0.45) 35px
   );
-  animation: laneScroll 0.8s linear infinite;
-  will-change: background-position;
+  animation: laneScrollGPU 0.65s linear infinite;
+  will-change: transform;
 }
 
 .lane-line-fast {
@@ -33,8 +33,8 @@
     rgba(255, 255, 255, 0.8) 15px,
     rgba(255, 255, 255, 0.8) 35px
   );
-  animation: laneScroll 0.25s linear infinite;
-  will-change: background-position;
+  animation: laneScrollGPU 0.22s linear infinite;
+  will-change: transform;
 }
 
 @keyframes digitalPulse {

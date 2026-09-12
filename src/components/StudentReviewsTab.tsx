@@ -59,7 +59,9 @@ import {
   Send,
   Car,
   Users,
-  LogOut
+  LogOut,
+  Maximize2,
+  Minimize2
 } from "lucide-react";
 import { ReviewChallenge, ReviewScore, Question } from "../types";
 import { isTrueFalseQuestion, normalizeQuestion, isGradeMatching } from "../utils/questionUtils";
@@ -426,6 +428,167 @@ class GameSoundSynth {
       osc.stop(now + i * 0.08 + 1.3);
     });
   }
+
+  playWhistle() {
+    if (!this.enabled) return;
+    this.init();
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    // Dual high-pitch modulated whistle
+    const osc = this.ctx.createOscillator();
+    const lfo = this.ctx.createOscillator();
+    const lfoGain = this.ctx.createGain();
+    const gain = this.ctx.createGain();
+
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(2600, now);
+
+    lfo.type = "sawtooth";
+    lfo.frequency.setValueAtTime(28, now);
+    lfoGain.gain.setValueAtTime(140, now);
+
+    lfo.connect(lfoGain);
+    lfoGain.connect(osc.frequency);
+
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.18, now + 0.04);
+    gain.gain.setValueAtTime(0.18, now + 0.28);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+
+    lfo.start(now);
+    osc.start(now);
+    lfo.stop(now + 0.46);
+    osc.stop(now + 0.46);
+  }
+
+  playBallKick() {
+    if (!this.enabled) return;
+    this.init();
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    // Deep punchy ball thud
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(160, now);
+    osc.frequency.exponentialRampToValueAtTime(35, now + 0.16);
+
+    gain.gain.setValueAtTime(0.35, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.23);
+  }
+
+  playNetGoal() {
+    if (!this.enabled) return;
+    this.init();
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    // Triumphant crowd burst + chord
+    const freqs = [392, 523.25, 659.25, 783.99]; // G4, C5, E5, G5
+    freqs.forEach((freq, idx) => {
+      const osc = this.ctx!.createOscillator();
+      const gain = this.ctx!.createGain();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(freq, now + idx * 0.05);
+      gain.gain.setValueAtTime(0.08, now + idx * 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.05 + 0.8);
+      osc.connect(gain);
+      gain.connect(this.ctx!.destination);
+      osc.start(now + idx * 0.05);
+      osc.stop(now + idx * 0.05 + 0.85);
+    });
+  }
+
+  playKeeperSave() {
+    if (!this.enabled) return;
+    this.init();
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    // Glove slap deflection
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(280, now);
+    osc.frequency.exponentialRampToValueAtTime(60, now + 0.14);
+
+    gain.gain.setValueAtTime(0.25, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.19);
+  }
+
+  playAirplaneSwoop() {
+    if (!this.enabled) return;
+    this.init();
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(240, now);
+    osc.frequency.exponentialRampToValueAtTime(520, now + 0.35);
+
+    gain.gain.setValueAtTime(0.01, now);
+    gain.gain.linearRampToValueAtTime(0.18, now + 0.08);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.36);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.37);
+  }
+
+  playCloudBurst() {
+    if (!this.enabled) return;
+    this.init();
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    // Sparkling chord
+    const notes = [523.25, 659.25, 783.99, 1046.5]; // C5, E5, G5, C6
+    notes.forEach((freq, idx) => {
+      const osc = this.ctx!.createOscillator();
+      const gain = this.ctx!.createGain();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(freq, now + idx * 0.04);
+      gain.gain.setValueAtTime(0.12, now + idx * 0.04);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.04 + 0.65);
+      osc.connect(gain);
+      gain.connect(this.ctx!.destination);
+      osc.start(now + idx * 0.04);
+      osc.stop(now + idx * 0.04 + 0.7);
+    });
+  }
+
+  playLightningBuzz() {
+    if (!this.enabled) return;
+    this.init();
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    // Storm lightning zap
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(120, now);
+    osc.frequency.exponentialRampToValueAtTime(30, now + 0.32);
+
+    gain.gain.setValueAtTime(0.25, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.36);
+  }
 }
 
 const sfx = new GameSoundSynth();
@@ -718,6 +881,78 @@ export default function StudentReviewsTab({
   const [shipX, setShipX] = useState(50);
   const [carAngle, setCarAngle] = useState(0);
   const [isBoostingState, setIsBoostingState] = useState(false);
+
+  // --- PENALTY SHOOTOUT STATES ---
+  const [penaltyBallState, setPenaltyBallState] = useState<{
+    isShooting: boolean;
+    targetIdx: number | null;
+    startX?: number;
+    startY?: number;
+    x: number;
+    y: number;
+    isGoal?: boolean;
+    scale?: number;
+    rotation?: number;
+    deflectedX?: number;
+    deflectedY?: number;
+  }>({ isShooting: false, targetIdx: null, startX: 50, startY: 82, x: 50, y: 82, scale: 1, rotation: 0 });
+  const [penaltyHoverIdx, setPenaltyHoverIdx] = useState<number | null>(null);
+  const [penaltyKeeperState, setPenaltyKeeperState] = useState<{
+    diveDirection: "left" | "right" | "top_left" | "top_right" | "bottom_left" | "bottom_right" | "center" | "none";
+    isDiving: boolean;
+    hasDeflected?: boolean;
+  }>({ diveDirection: "none", isDiving: false, hasDeflected: false });
+  const [penaltyStrikerState, setPenaltyStrikerState] = useState<{
+    phase: "idle" | "runup" | "kick" | "celebrate" | "disappointed";
+  }>({ phase: "idle" });
+  const [penaltyKicksHistory, setPenaltyKicksHistory] = useState<("goal" | "miss")[]>([]);
+  const [penaltyShotSpeed, setPenaltyShotSpeed] = useState<number | null>(null);
+  const [keeperGloveSpark, setKeeperGloveSpark] = useState<{ x: number; y: number } | null>(null);
+  const [penaltyGoalBanner, setPenaltyGoalBanner] = useState<string | null>(null);
+  const [netShaking, setNetShaking] = useState(false);
+
+  // --- CLOUD AIRPLANE STATES ✈️☁️ ---
+  const [airplanePos, setAirplanePos] = useState<{ x: number; y: number }>({ x: 18, y: 48 });
+  const [airplaneAngle, setAirplaneAngle] = useState(0);
+  const [airplaneTargetCloud, setAirplaneTargetCloud] = useState<number | null>(null);
+  const [airplaneLives, setAirplaneLives] = useState(3);
+  const [airplaneBanner, setAirplaneBanner] = useState<string | null>(null);
+  const [airplaneBannerType, setAirplaneBannerType] = useState<"correct" | "wrong" | "info">("info");
+  const [airplaneState, setAirplaneState] = useState<"flying" | "zooming" | "celebrating" | "hit_wrong">("flying");
+  const [cloudBurstEffect, setCloudBurstEffect] = useState<{ cloudIdx: number; type: "correct" | "wrong" } | null>(null);
+  const [airplaneHoverIdx, setAirplaneHoverIdx] = useState<number | null>(null);
+  const [isAirplaneFullscreen, setIsAirplaneFullscreen] = useState(false);
+  const [airplaneClouds, setAirplaneClouds] = useState<{
+    idx: number;
+    text: string;
+    x: number;
+    y: number;
+    baseY: number;
+    speed: number;
+    waveOffset: number;
+  }[]>([]);
+  const airplaneCloudsRef = useRef<{
+    idx: number;
+    text: string;
+    x: number;
+    y: number;
+    baseY: number;
+    speed: number;
+    waveOffset: number;
+  }[]>([]);
+  const airplaneLoopRef = useRef<number | null>(null);
+  const airplanePosRef = useRef<{ x: number; y: number }>({ x: 18, y: 48 });
+  const airplaneAngleRef = useRef(0);
+  const airplaneArenaRef = useRef<HTMLDivElement | null>(null);
+  const cloudDomRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const airplaneSpriteRef = useRef<HTMLDivElement | null>(null);
+  const airplaneVelocityRef = useRef<{ vx: number; vy: number }>({ vx: 0, vy: 0 });
+  const airplaneArrowHoldRef = useRef<{ up: boolean; down: boolean; left: boolean; right: boolean }>({
+    up: false,
+    down: false,
+    left: false,
+    right: false,
+  });
 
   // --- MAZE CHASE GAME STATES ---
   const [mazePlayerPos, setMazePlayerPos] = useState<{ r: number; c: number }>({ r: 3, c: 4 });
@@ -1413,6 +1648,15 @@ export default function StudentReviewsTab({
             handleShootMeteor(closestMeteor);
           }
         }
+      } else if (challenge.gameType === "penalty_shootout" && !isAnswerRevealedRef.current && !isQuestionIntroRef.current) {
+        if (e.key === "1") handlePenaltyShot(0);
+        else if (e.key === "2") handlePenaltyShot(1);
+        else if (e.key === "3") handlePenaltyShot(2);
+        else if (e.key === "4") handlePenaltyShot(3);
+      } else if (challenge.gameType === "cloud_airplane" && !isAnswerRevealedRef.current && !isQuestionIntroRef.current) {
+        if (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "ArrowLeft" || e.key === "ArrowRight") {
+          e.preventDefault();
+        }
       }
     };
 
@@ -1694,6 +1938,16 @@ export default function StudentReviewsTab({
     } else if (randomizedChallenge.gameType === "car_racing") {
       // Setup road items with 3-second center-of-arena presentation
       startQuestionWithIntro(0, "car_racing", randomizedChallenge);
+    } else if (randomizedChallenge.gameType === "penalty_shootout") {
+      // Setup penalty shootout first question with presentation
+      setPenaltyKicksHistory([]);
+      startQuestionWithIntro(0, "penalty_shootout", randomizedChallenge);
+    } else if (randomizedChallenge.gameType === "cloud_airplane") {
+      // Setup cloud airplane first question with presentation
+      setAirplaneLives(3);
+      setAirplaneBanner(null);
+      setupCloudAirplane(randomizedChallenge.questions[0]);
+      startQuestionWithIntro(0, "cloud_airplane", randomizedChallenge);
     } else if (randomizedChallenge.gameType === "wayground_arena") {
       setTimeLeft(15);
       setHasFinishedWaygroundQuestions(false);
@@ -1749,6 +2003,12 @@ export default function StudentReviewsTab({
           } else if (gameType === "car_racing") {
             setupRoadItems(q);
             startInteractiveGameTimer("car_racing");
+          } else if (gameType === "penalty_shootout") {
+            setupPenaltyShootout(q);
+            startInteractiveGameTimer("penalty_shootout");
+          } else if (gameType === "cloud_airplane") {
+            setupCloudAirplane(q);
+            startInteractiveGameTimer("cloud_airplane");
           }
         }, 600);
       }
@@ -1786,6 +2046,12 @@ export default function StudentReviewsTab({
           } else if (gameType === "car_racing") {
             setupRoadItems(q);
             startInteractiveGameTimer("car_racing");
+          } else if (gameType === "penalty_shootout") {
+            setupPenaltyShootout(q);
+            startInteractiveGameTimer("penalty_shootout");
+          } else if (gameType === "cloud_airplane") {
+            setupCloudAirplane(q);
+            startInteractiveGameTimer("cloud_airplane");
           }
         }, 800);
       }
@@ -1815,8 +2081,8 @@ export default function StudentReviewsTab({
     isQuestionIntroRef.current = true;
     setIsTransitioning(false);
 
-    // 3. If launching Game (qIdx === 0) for Space Invaders or Car Racing, show Game Intro Preview first!
-    if (qIdx === 0 && (gameType === "space_invaders" || gameType === "car_racing")) {
+    // 3. If launching Game (qIdx === 0) for Space Invaders, Car Racing, Penalty Shootout, or Cloud Airplane, show Game Intro Preview first!
+    if (qIdx === 0 && (gameType === "space_invaders" || gameType === "car_racing" || gameType === "penalty_shootout" || gameType === "cloud_airplane")) {
       setGameIntroStage("preview");
       setIntroCountdown(3);
       sfx.playLaser();
@@ -1847,10 +2113,10 @@ export default function StudentReviewsTab({
     }, 1000);
   };
 
-  // Interactive Games (Space Invaders & Car Racing) Question Timer
-  const startInteractiveGameTimer = (gameType: "space_invaders" | "car_racing") => {
+  // Interactive Games (Space Invaders, Car Racing, Penalty Shootout & Cloud Airplane) Question Timer
+  const startInteractiveGameTimer = (gameType: "space_invaders" | "car_racing" | "penalty_shootout" | "cloud_airplane") => {
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-    setTimeLeft(25); // 25 seconds per question for interactive games
+    setTimeLeft(gameType === "cloud_airplane" ? 40 : gameType === "penalty_shootout" ? 20 : 25);
     timerIntervalRef.current = setInterval(() => {
       setTimeLeft(prev => {
         if (prev <= 1) {
@@ -1869,6 +2135,10 @@ export default function StudentReviewsTab({
               y: 80,
               idx: -1
             });
+          } else if (gameType === "penalty_shootout") {
+            handlePenaltyShot(-1);
+          } else if (gameType === "cloud_airplane") {
+            handleAirplaneHitCloud(-1);
           }
           return 0;
         }
@@ -2142,6 +2412,574 @@ export default function StudentReviewsTab({
         handleFinishGame();
       }
     }, 2500);
+  };
+
+  // --- PENALTY SHOOTOUT GAME ENGINE ⚽ ---
+  const getPenaltyOptionX = (idx: number, total: number) => {
+    if (total === 2) {
+      return idx === 0 ? 30 : 70;
+    }
+    if (total === 3) {
+      return idx === 0 ? 22 : idx === 1 ? 50 : 78;
+    }
+    // 4 options distributed across the stadium width
+    if (idx === 0) return 16;
+    if (idx === 1) return 38;
+    if (idx === 2) return 62;
+    return 84;
+  };
+
+  const setupPenaltyShootout = (_q?: Question) => {
+    isAnswerRevealedRef.current = false;
+    setIsAnswerRevealed(false);
+    setPenaltyHoverIdx(null);
+    setPenaltyBallState({ isShooting: false, targetIdx: null, startX: 50, startY: 82, x: 50, y: 82, scale: 1, rotation: 0 });
+    setPenaltyKeeperState({ diveDirection: "none", isDiving: false, hasDeflected: false });
+    setPenaltyStrikerState({ phase: "idle" });
+    setPenaltyShotSpeed(null);
+    setKeeperGloveSpark(null);
+    setPenaltyGoalBanner(null);
+    setNetShaking(false);
+    // Referee whistle signal for kickoff
+    sfx.playWhistle();
+  };
+
+  const handlePenaltyShot = (targetIdx: number) => {
+    const challenge = activeChallengeRef.current;
+    if (!challenge || isAnswerRevealedRef.current) return;
+
+    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+
+    setIsAnswerRevealed(true);
+    isAnswerRevealedRef.current = true;
+    setPenaltyHoverIdx(null);
+
+    const currentIdx = currentQuestionIdxRef.current;
+    const currentQ = challenge.questions[currentIdx];
+    if (!currentQ) return;
+
+    const isTimeout = targetIdx < 0;
+    const isCorrect = !isTimeout && checkIsCorrect(currentQ, targetIdx);
+    const numOpts = currentQ.options.length;
+
+    // The ball begins at the chosen ball's exact spot at the bottom (y = 82%)
+    // and launches straight into the target answer card in the upper area (y = 20%)
+    const ballStartX = !isTimeout ? getPenaltyOptionX(targetIdx, numOpts) : 50;
+    const ballStartY = 82;
+    const ballTargetX = !isTimeout ? getPenaltyOptionX(targetIdx, numOpts) : 50;
+    const ballTargetY = !isTimeout ? 20 : 65;
+
+    let keeperDive: "left" | "right" | "top_left" | "top_right" | "bottom_left" | "bottom_right" | "center" = "center";
+
+    if (isTimeout) {
+      keeperDive = "center";
+    } else if (isCorrect) {
+      // Goalkeeper dives in the wrong direction or reacts late!
+      if (ballTargetX < 50) {
+        keeperDive = "top_right";
+      } else {
+        keeperDive = "top_left";
+      }
+    } else {
+      // Goalkeeper dives directly to deflect the shot!
+      if (ballTargetX <= 25) {
+        keeperDive = "top_left";
+      } else if (ballTargetX < 50) {
+        keeperDive = "left";
+      } else if (ballTargetX <= 75) {
+        keeperDive = "right";
+      } else {
+        keeperDive = "top_right";
+      }
+    }
+
+    // 1. Striker run-up animation starts towards that specific ball
+    setPenaltyStrikerState({ phase: "runup" });
+
+    // Realistic TV broadcast shot speed radar
+    const speed = isCorrect 
+      ? Math.floor(104 + Math.random() * 22) 
+      : Math.floor(84 + Math.random() * 16);
+    setPenaltyShotSpeed(speed);
+
+    // 2. Striker kicks ball after run-up (150ms)
+    setTimeout(() => {
+      setPenaltyStrikerState({ phase: "kick" });
+      sfx.playBallKick();
+
+      // Ball takes off with 3D spin and perspective shrinking towards the target at the top!
+      setPenaltyBallState({
+        isShooting: true,
+        targetIdx,
+        startX: ballStartX,
+        startY: ballStartY,
+        x: ballTargetX,
+        y: ballTargetY,
+        isGoal: isCorrect,
+        scale: isTimeout ? 0.85 : 0.52,
+        rotation: ballTargetX < 50 ? -720 : 720,
+      });
+    }, 150);
+
+    // 3. Goalkeeper reacts and dives (250ms)
+    setTimeout(() => {
+      setPenaltyKeeperState({
+        diveDirection: keeperDive,
+        isDiving: true,
+        hasDeflected: !isCorrect && !isTimeout,
+      });
+    }, 250);
+
+    // 4. Ball reaches destination & impact result (550ms)
+    setTimeout(() => {
+      if (isCorrect) {
+        setNetShaking(true);
+        sfx.playNetGoal();
+        sfx.playCorrect();
+        setPenaltyStrikerState({ phase: "celebrate" });
+        setPenaltyKicksHistory(prev => [...prev, "goal"]);
+        setCorrectCount(prev => prev + 1);
+        setStreak(prev => prev + 1);
+        const streakBonus = streak >= 2 ? 50 : 0;
+        setScore(prev => prev + 150 + streakBonus);
+
+        const cornerTag = `صاروخ في شباك الهدف [${targetIdx + 1}] 🎯🔥`;
+
+        setPenaltyGoalBanner(
+          streak >= 2 
+            ? `هاتريك أسطوري! ⚽🎩🔥 (+200 نقطة) • ${cornerTag}` 
+            : `هـــــــــدف عـــــالمي! ⚽🔥🥅 (+150 نقطة) • ${cornerTag}`
+        );
+
+        // Confetti / goal particles around target
+        const colors = ["#fbbf24", "#34d399", "#10b981", "#60a5fa", "#f43f5e"];
+        const newParticles = Array.from({ length: 24 }).map(() => ({
+          id: Math.random(),
+          x: ballTargetX + (Math.random() - 0.5) * 16,
+          y: ballTargetY + (Math.random() - 0.5) * 12,
+          color: colors[Math.floor(Math.random() * colors.length)]
+        }));
+        setParticles(newParticles);
+        setTimeout(() => setParticles([]), 900);
+      } else {
+        sfx.playKeeperSave();
+        sfx.playIncorrect();
+        setPenaltyStrikerState({ phase: "disappointed" });
+        setPenaltyKicksHistory(prev => [...prev, "miss"]);
+        setKeeperGloveSpark({ x: ballTargetX, y: ballTargetY + 6 });
+        setStreak(0);
+        setScore(prev => Math.max(0, prev - 40));
+
+        // Ball bounces off goalkeeper's gloves
+        setPenaltyBallState(prev => ({
+          ...prev,
+          x: ballTargetX + (ballTargetX < 50 ? -12 : 12),
+          y: ballTargetY + 16,
+          scale: 0.58,
+        }));
+
+        setPenaltyGoalBanner(
+          isTimeout 
+            ? "انتهى الوقت! ضاعت الركلة خارج المرمى ⌛❌ (-40)" 
+            : `تصدي بطولي من قفاز الحارس للكرة [${targetIdx + 1}]! 🧤🚫 (-40)`
+        );
+      }
+      setLastAnswerCorrect(isCorrect);
+    }, 550);
+
+    // Proceed to next question after 3.2 seconds
+    setTimeout(() => {
+      setIsAnswerRevealed(false);
+      isAnswerRevealedRef.current = false;
+      setLastAnswerCorrect(null);
+      setPenaltyGoalBanner(null);
+      setNetShaking(false);
+      setKeeperGloveSpark(null);
+      setPenaltyShotSpeed(null);
+      setPenaltyStrikerState({ phase: "idle" });
+      setPenaltyKeeperState({ diveDirection: "none", isDiving: false, hasDeflected: false });
+      setPenaltyBallState({ isShooting: false, targetIdx: null, startX: 50, startY: 82, x: 50, y: 82, scale: 1, rotation: 0 });
+
+      const latestChallenge = activeChallengeRef.current;
+      const latestIdx = currentQuestionIdxRef.current;
+      if (latestChallenge && latestIdx + 1 < latestChallenge.questions.length) {
+        const nextIdx = latestIdx + 1;
+        setCurrentQuestionIdx(nextIdx);
+        currentQuestionIdxRef.current = nextIdx;
+        startQuestionWithIntro(nextIdx, "penalty_shootout");
+      } else {
+        handleFinishGame();
+      }
+    }, 3200);
+  };
+
+  // --- CLOUD AIRPLANE GAME ENGINE ✈️☁️ ---
+  const setupCloudAirplane = (q?: Question) => {
+    const targetQ = q || activeChallengeRef.current?.questions[currentQuestionIdxRef.current];
+    if (!targetQ || !targetQ.options || targetQ.options.length === 0) return;
+
+    if (airplaneLoopRef.current) {
+      cancelAnimationFrame(airplaneLoopRef.current);
+      airplaneLoopRef.current = null;
+    }
+
+    cloudDomRefs.current = {};
+    setAirplanePos({ x: 18, y: 48 });
+    airplanePosRef.current = { x: 18, y: 48 };
+    setAirplaneAngle(0);
+    airplaneAngleRef.current = 0;
+    airplaneVelocityRef.current = { vx: 0, vy: 0 };
+    airplaneArrowHoldRef.current = { up: false, down: false, left: false, right: false };
+    setAirplaneTargetCloud(null);
+    setAirplaneState("flying");
+    setCloudBurstEffect(null);
+    setAirplaneBanner(null);
+
+    // Staggered vertical flight altitudes
+    const numOpts = targetQ.options.length;
+    const lanes = 
+      numOpts === 2 ? [30, 64] :
+      numOpts === 3 ? [24, 48, 72] :
+      [18, 38, 58, 78];
+
+    // Starting X positions: clouds drift smoothly into view
+    const startXOffsets = 
+      numOpts === 2 ? [65, 105] :
+      numOpts === 3 ? [55, 85, 115] :
+      [50, 75, 100, 125];
+
+    const initialClouds = targetQ.options.map((opt, i) => {
+      const baseY = lanes[i % lanes.length];
+      const startX = startXOffsets[i % startXOffsets.length];
+      return {
+        idx: i,
+        text: opt,
+        x: startX,
+        y: baseY,
+        baseY,
+        speed: 0.18 + (i % 2) * 0.04,
+        waveOffset: i * 1.5
+      };
+    });
+
+    airplaneCloudsRef.current = initialClouds;
+    setAirplaneClouds(initialClouds);
+
+    startCloudAirplaneLoop();
+  };
+
+  const startCloudAirplaneLoop = () => {
+    if (airplaneLoopRef.current) cancelAnimationFrame(airplaneLoopRef.current);
+
+    let lastTime = performance.now();
+    let timeElapsed = 0;
+
+    const animate = (now: number) => {
+      // If answer is revealed or challenge ended, pause loop
+      if (isAnswerRevealedRef.current) {
+        if (airplaneLoopRef.current) cancelAnimationFrame(airplaneLoopRef.current);
+        airplaneLoopRef.current = null;
+        return;
+      }
+
+      // If in intro preview or countdown, keep animation frame scheduled so it begins seamlessly when intro ends!
+      if (isQuestionIntroRef.current) {
+        lastTime = now;
+        airplaneLoopRef.current = requestAnimationFrame(animate);
+        return;
+      }
+
+      const dt = Math.min((now - lastTime) / 16.66, 2.0);
+      lastTime = now;
+      timeElapsed += dt * 0.035;
+
+      // Smooth keyboard & on-screen arrow steering inputs
+      const keys = keysPressedRef.current;
+      const hold = airplaneArrowHoldRef.current;
+      let inputY = 0;
+      let inputX = 0;
+
+      if (keys["ArrowUp"] || keys["w"] || keys["W"] || hold.up) inputY -= 1;
+      if (keys["ArrowDown"] || keys["s"] || keys["S"] || hold.down) inputY += 1;
+      if (keys["ArrowLeft"] || keys["a"] || keys["A"] || hold.left) inputX -= 1;
+      if (keys["ArrowRight"] || keys["d"] || keys["D"] || hold.right) inputX += 1;
+
+      // Aerodynamic Physics Parameters
+      const maxVy = 0.95; // % per frame
+      const maxVx = 0.75; // % per frame
+
+      const targetVy = inputY * maxVy;
+      const targetVx = inputX * maxVx;
+
+      if (inputY !== 0) {
+        // Accelerate smoothly into climb or dive
+        airplaneVelocityRef.current.vy += (targetVy - airplaneVelocityRef.current.vy) * Math.min(1, 0.18 * dt);
+      } else {
+        // Natural aerodynamic glide friction
+        airplaneVelocityRef.current.vy *= Math.pow(0.87, dt);
+      }
+
+      if (inputX !== 0) {
+        // Accelerate smoothly forward/backward
+        airplaneVelocityRef.current.vx += (targetVx - airplaneVelocityRef.current.vx) * Math.min(1, 0.18 * dt);
+      } else {
+        airplaneVelocityRef.current.vx *= Math.pow(0.87, dt);
+      }
+
+      // Integrate positions
+      let nextX = airplanePosRef.current.x + airplaneVelocityRef.current.vx * dt;
+      let nextY = airplanePosRef.current.y + airplaneVelocityRef.current.vy * dt;
+
+      // Soft borders clamping
+      if (nextY < 14) {
+        nextY = 14;
+        airplaneVelocityRef.current.vy = 0;
+      } else if (nextY > 82) {
+        nextY = 82;
+        airplaneVelocityRef.current.vy = 0;
+      }
+
+      if (nextX < 8) {
+        nextX = 8;
+        airplaneVelocityRef.current.vx = 0;
+      } else if (nextX > 78) {
+        nextX = 78;
+        airplaneVelocityRef.current.vx = 0;
+      }
+
+      airplanePosRef.current = { x: nextX, y: nextY };
+
+      // Realistic Aerodynamic Banking & Pitch Angle
+      // Nose tilts up during climb, down during dive
+      const targetPitch = Math.max(-20, Math.min(20, airplaneVelocityRef.current.vy * 22));
+      airplaneAngleRef.current += (targetPitch - airplaneAngleRef.current) * Math.min(1, 0.16 * dt);
+
+      // Gentle cruising oscillation
+      const airFloat = Math.sin(timeElapsed * 1.8) * 0.45;
+      const renderY = nextY + airFloat;
+
+      // High-performance Direct DOM transformation (zero React reconciliation lag)
+      if (airplaneSpriteRef.current) {
+        airplaneSpriteRef.current.style.left = `${nextX}%`;
+        airplaneSpriteRef.current.style.top = `${renderY}%`;
+        airplaneSpriteRef.current.style.transform = `translate(-50%, -50%) rotate(${airplaneAngleRef.current.toFixed(1)}deg)`;
+      }
+
+      const currentClouds = airplaneCloudsRef.current;
+      if (!currentClouds || currentClouds.length === 0) {
+        airplaneLoopRef.current = requestAnimationFrame(animate);
+        return;
+      }
+
+      const planePos = airplanePosRef.current;
+      let collidingCloud: (typeof currentClouds)[0] | null = null;
+
+      const updatedClouds = currentClouds.map(c => {
+        // Move cloud horizontally towards the airplane (from right to left)
+        let cloudNextX = c.x - (c.speed || 0.18) * dt;
+
+        // If cloud flew past the screen to the far left (-25%), wrap around to the right
+        if (cloudNextX < -25) {
+          cloudNextX = 112 + (c.idx * 16);
+        }
+
+        // Gentle floating wave
+        const waveY = c.baseY + Math.sin(timeElapsed + c.waveOffset) * 2.2;
+
+        // Collision detection between airplane and cloud
+        if (!collidingCloud && !isAnswerRevealedRef.current) {
+          const distDx = Math.abs(cloudNextX - planePos.x);
+          const distDy = Math.abs(waveY - planePos.y);
+          if (distDx < 13.0 && distDy < 11.5) {
+            collidingCloud = { ...c, x: cloudNextX, y: waveY };
+          }
+        }
+
+        return { ...c, x: cloudNextX, y: waveY };
+      });
+
+      airplaneCloudsRef.current = updatedClouds;
+
+      // Ultra-performant direct DOM update for clouds
+      updatedClouds.forEach(c => {
+        const el = cloudDomRefs.current[c.idx];
+        if (el) {
+          el.style.left = `${c.x}%`;
+          el.style.top = `${c.y}%`;
+        }
+      });
+
+      // Collision triggered!
+      if (collidingCloud) {
+        if (airplaneLoopRef.current) cancelAnimationFrame(airplaneLoopRef.current);
+        airplaneLoopRef.current = null;
+        airplaneVelocityRef.current = { vx: 0, vy: 0 };
+        handleAirplaneCollision(collidingCloud);
+        return;
+      }
+
+      airplaneLoopRef.current = requestAnimationFrame(animate);
+    };
+
+    airplaneLoopRef.current = requestAnimationFrame(animate);
+  };
+
+  const steerAirplaneVertical = (deltaY: number) => {
+    if (isAnswerRevealedRef.current || isQuestionIntroRef.current) return;
+    // Apply smooth acceleration impulse
+    airplaneVelocityRef.current.vy = Math.max(-0.95, Math.min(0.95, airplaneVelocityRef.current.vy + (deltaY < 0 ? -0.45 : 0.45)));
+  };
+
+  const steerAirplaneHorizontal = (deltaX: number) => {
+    if (isAnswerRevealedRef.current || isQuestionIntroRef.current) return;
+    airplaneVelocityRef.current.vx = Math.max(-0.75, Math.min(0.75, airplaneVelocityRef.current.vx + (deltaX < 0 ? -0.35 : 0.35)));
+  };
+
+  const handleArenaPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (isAnswerRevealedRef.current || isQuestionIntroRef.current) return;
+    if (!airplaneArenaRef.current) return;
+    const rect = airplaneArenaRef.current.getBoundingClientRect();
+    if (rect.height <= 0) return;
+    const relY = ((e.clientY - rect.top) / rect.height) * 100;
+    const targetY = Math.max(14, Math.min(82, relY));
+
+    // Smooth proportional steering towards finger/cursor position
+    const diffY = targetY - airplanePosRef.current.y;
+    const desiredVy = Math.max(-0.95, Math.min(0.95, diffY * 0.08));
+    airplaneVelocityRef.current.vy += (desiredVy - airplaneVelocityRef.current.vy) * 0.25;
+  };
+
+  const handleAirplaneCollision = (cloudItem: { idx: number; text: string; x: number; y: number }) => {
+    if (isAnswerRevealedRef.current || isQuestionIntroRef.current) return;
+    const q = activeChallengeRef.current?.questions[currentQuestionIdxRef.current];
+    if (!q) return;
+
+    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    if (airplaneLoopRef.current) cancelAnimationFrame(airplaneLoopRef.current);
+    airplaneLoopRef.current = null;
+
+    isAnswerRevealedRef.current = true;
+    setIsAnswerRevealed(true);
+    setSelectedAnswerIdx(cloudItem.idx);
+
+    const isTimeout = cloudItem.idx === -1;
+    const isCorrect = !isTimeout && checkIsCorrect(q, cloudItem.idx);
+
+    setAirplaneTargetCloud(cloudItem.idx);
+    setAirplanePos({ x: cloudItem.x, y: cloudItem.y });
+    airplanePosRef.current = { x: cloudItem.x, y: cloudItem.y };
+    if (airplaneSpriteRef.current) {
+      airplaneSpriteRef.current.style.left = `${cloudItem.x}%`;
+      airplaneSpriteRef.current.style.top = `${cloudItem.y}%`;
+      airplaneSpriteRef.current.style.transform = `translate(-50%, -50%) rotate(0deg)`;
+    }
+
+    if (isCorrect) {
+      sfx.playCorrect();
+      sfx.playCloudBurst();
+      setAirplaneState("celebrating");
+      setCloudBurstEffect({ cloudIdx: cloudItem.idx, type: "correct" });
+      setAirplaneBanner("صحيح! 🎉");
+      setAirplaneBannerType("correct");
+      setCorrectCount(prev => prev + 1);
+      setStreak(prev => prev + 1);
+      const streakBonus = streak >= 2 ? 50 : 0;
+      setScore(prev => prev + 150 + streakBonus);
+
+      // Sparkle particles around cloud
+      const colors = ["#38bdf8", "#34d399", "#fcd34d", "#f43f5e", "#a7f3d0", "#ffffff"];
+      const newParticles = Array.from({ length: 24 }).map(() => ({
+        id: Math.random(),
+        x: cloudItem.x + (Math.random() - 0.5) * 14,
+        y: cloudItem.y + (Math.random() - 0.5) * 12,
+        color: colors[Math.floor(Math.random() * colors.length)]
+      }));
+      setParticles(newParticles);
+      setTimeout(() => setParticles([]), 900);
+    } else {
+      sfx.playIncorrect();
+      sfx.playLightningBuzz();
+      setAirplaneState("hit_wrong");
+      if (cloudItem.idx >= 0) {
+        setCloudBurstEffect({ cloudIdx: cloudItem.idx, type: "wrong" });
+      }
+      setAirplaneBanner("خطأ!");
+      setAirplaneBannerType("wrong");
+      setStreak(0);
+      setAirplaneLives(prev => Math.max(0, prev - 1));
+      setScore(prev => Math.max(0, prev - 40));
+    }
+    setLastAnswerCorrect(isCorrect);
+
+    // Reset and advance to next question after 2.8 seconds
+    setTimeout(() => {
+      setIsAnswerRevealed(false);
+      isAnswerRevealedRef.current = false;
+      setLastAnswerCorrect(null);
+      setAirplaneBanner(null);
+      setCloudBurstEffect(null);
+      setAirplaneTargetCloud(null);
+      setAirplaneState("flying");
+      setAirplaneAngle(0);
+      airplaneAngleRef.current = 0;
+      setAirplanePos({ x: 18, y: 48 });
+      airplanePosRef.current = { x: 18, y: 48 };
+      if (airplaneSpriteRef.current) {
+        airplaneSpriteRef.current.style.left = `18%`;
+        airplaneSpriteRef.current.style.top = `48%`;
+        airplaneSpriteRef.current.style.transform = `translate(-50%, -50%) rotate(0deg)`;
+      }
+
+      const latestChallenge = activeChallengeRef.current;
+      const latestIdx = currentQuestionIdxRef.current;
+      if (latestChallenge && latestIdx + 1 < latestChallenge.questions.length) {
+        const nextIdx = latestIdx + 1;
+        setCurrentQuestionIdx(nextIdx);
+        currentQuestionIdxRef.current = nextIdx;
+        startQuestionWithIntro(nextIdx, "cloud_airplane");
+      } else {
+        handleFinishGame();
+      }
+    }, 2800);
+  };
+
+  const handleAirplaneHitCloud = (targetIdx: number) => {
+    if (isAnswerRevealedRef.current || isQuestionIntroRef.current) return;
+    const q = activeChallengeRef.current?.questions[currentQuestionIdxRef.current];
+    if (!q) return;
+
+    if (targetIdx === -1) {
+      handleAirplaneCollision({ idx: -1, text: "", x: 50, y: 50 });
+      return;
+    }
+
+    const foundCloud = airplaneCloudsRef.current.find(c => c.idx === targetIdx);
+    const cloud = foundCloud || {
+      idx: targetIdx,
+      text: q.options[targetIdx] || "",
+      x: 50,
+      y: 40
+    };
+
+    setAirplaneTargetCloud(targetIdx);
+    setAirplaneState("zooming");
+    const dx = cloud.x - airplanePosRef.current.x;
+    const dy = cloud.y - airplanePosRef.current.y;
+    const angleDeg = Math.max(-30, Math.min(30, (Math.atan2(dy, dx) * 180) / Math.PI));
+    setAirplaneAngle(angleDeg);
+    airplaneAngleRef.current = angleDeg;
+    setAirplanePos({ x: cloud.x, y: cloud.y });
+    airplanePosRef.current = { x: cloud.x, y: cloud.y };
+    if (airplaneSpriteRef.current) {
+      airplaneSpriteRef.current.style.left = `${cloud.x}%`;
+      airplaneSpriteRef.current.style.top = `${cloud.y}%`;
+      airplaneSpriteRef.current.style.transform = `translate(-50%, -50%) rotate(${angleDeg}deg)`;
+    }
+    sfx.playAirplaneSwoop();
+
+    setTimeout(() => {
+      handleAirplaneCollision(cloud);
+    }, 280);
   };
 
   // --- MAZE CHASE GAME ENGINE ---
@@ -2635,6 +3473,7 @@ export default function StudentReviewsTab({
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     if (gameSecondsRef.current) clearInterval(gameSecondsRef.current);
     if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
+    if (airplaneLoopRef.current) cancelAnimationFrame(airplaneLoopRef.current);
     if (introIntervalRef.current) clearInterval(introIntervalRef.current);
     if (gameIntroTimerRef.current) clearTimeout(gameIntroTimerRef.current);
     setIsQuestionIntro(false);
@@ -2688,6 +3527,7 @@ export default function StudentReviewsTab({
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     if (gameSecondsRef.current) clearInterval(gameSecondsRef.current);
     if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
+    if (airplaneLoopRef.current) cancelAnimationFrame(airplaneLoopRef.current);
     if (introIntervalRef.current) clearInterval(introIntervalRef.current);
     if (gameIntroTimerRef.current) clearTimeout(gameIntroTimerRef.current);
     sfx.stopBGM();
@@ -2813,6 +3653,8 @@ export default function StudentReviewsTab({
                   { gameType: "wayground_arena", id: "fixed_game_wayground_arena" },
                   { gameType: "space_invaders", id: "fixed_game_space_invaders" },
                   { gameType: "car_racing", id: "fixed_game_car_racing" },
+                  { gameType: "penalty_shootout", id: "fixed_game_penalty_shootout" },
+                  { gameType: "cloud_airplane", id: "fixed_game_cloud_airplane" },
                 ].filter(fg => resolveFixedGameForStudent(fg.gameType, fg.id).isActivated);
 
                 if (activeFixedGames.length === 0) return null;
@@ -2838,8 +3680,8 @@ export default function StudentReviewsTab({
                 );
               })()}
 
-              {/* 4 Approved Games Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {/* 5 Approved Games Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5">
                 {[
                   {
                     gameType: "wayground_arena",
@@ -2867,6 +3709,24 @@ export default function StudentReviewsTab({
                     defaultTitle: "سباق السيارات السريع 🏎️",
                     desc: "قيادة السيارة على مضمار المراجعة وتجاوز العقبات بالإجابات الصحيحة",
                     headerBg: "bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 border-b-2 border-indigo-500/50",
+                  },
+                  {
+                    gameType: "penalty_shootout",
+                    id: "fixed_game_penalty_shootout",
+                    badgeLabel: "PENALTY CUP ⚽",
+                    gameTitle: "ركلات الترجيح ⚽",
+                    defaultTitle: "ركلات الترجيح وكأس الأبطال ⚽",
+                    desc: "تسديد ركلات الترجيح وهز شباك المرمى باختيار زاوية الإجابة الصحيحة",
+                    headerBg: "bg-gradient-to-br from-emerald-950 via-teal-950 to-slate-950 border-b-2 border-emerald-500/50",
+                  },
+                  {
+                    gameType: "cloud_airplane",
+                    id: "fixed_game_cloud_airplane",
+                    badgeLabel: "CLOUD AIRPLANE ✈️",
+                    gameTitle: "طائرة السحاب ✈️",
+                    defaultTitle: "طائرة السحاب ✈️☁️",
+                    desc: "التحليق بالطائرة في السماء واختراق السحب ذات الإجابات الصحيحة",
+                    headerBg: "bg-gradient-to-br from-sky-600 via-sky-500 to-blue-600 border-b-2 border-sky-300/50",
                   }
                 ].map((fg) => {
                   const { challenge, isActivated } = resolveFixedGameForStudent(fg.gameType, fg.id);
@@ -2910,6 +3770,15 @@ export default function StudentReviewsTab({
                         <div className="relative z-10 my-auto text-center space-y-1">
                           {fg.gameType === "car_racing" && <div className="text-3xl">🏎️</div>}
                           {fg.gameType === "space_invaders" && <div className="text-3xl animate-bounce">🚀</div>}
+                          {fg.gameType === "penalty_shootout" && (
+                            <div className="space-y-1">
+                              <div className="text-3xl animate-bounce">⚽</div>
+                              <div className="flex justify-center gap-1.5 text-[9px] font-black text-white">
+                                <span className="bg-emerald-600 px-1.5 py-0.5 rounded shadow-xs">🧤 حارس المرمى</span>
+                                <span className="bg-amber-600 px-1.5 py-0.5 rounded shadow-xs">🥅 4 زوايا</span>
+                              </div>
+                            </div>
+                          )}
                           {fg.gameType === "wayground_arena" && (
                             <div className="space-y-1">
                               <div className="text-2xl">🎪</div>
@@ -2918,6 +3787,15 @@ export default function StudentReviewsTab({
                                 <span className="bg-blue-600 px-1.5 py-0.5 rounded shadow-xs">◆ أزرق</span>
                                 <span className="bg-amber-500 px-1.5 py-0.5 rounded shadow-xs">● أصفر</span>
                                 <span className="bg-emerald-600 px-1.5 py-0.5 rounded shadow-xs">■ أخضر</span>
+                              </div>
+                            </div>
+                          )}
+                          {fg.gameType === "cloud_airplane" && (
+                            <div className="space-y-1">
+                              <div className="text-3xl animate-bounce">✈️</div>
+                              <div className="flex justify-center gap-1.5 text-[9px] font-black text-white">
+                                <span className="bg-sky-600 px-1.5 py-0.5 rounded shadow-xs">☁️ سحب الإجابات</span>
+                                <span className="bg-blue-600 px-1.5 py-0.5 rounded shadow-xs">🕹️ توجيه الطائرة</span>
                               </div>
                             </div>
                           )}
@@ -5169,6 +6047,1383 @@ export default function StudentReviewsTab({
                         </div>
                       </div>
                       </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* GAME TYPE 5: PENALTY SHOOTOUT ⚽ */}
+                  {activeChallenge.gameType === "penalty_shootout" && (
+                    <div className="space-y-4 relative z-10" dir="rtl">
+                      {activeChallenge.liveState === "podium" ? (
+                        /* PODIUM VIEW FOR ALL STUDENTS */
+                        <div className="w-full flex flex-col items-center justify-center p-2 sm:p-4 relative">
+                          <div className="w-full flex items-center justify-between gap-3 mb-4 pb-3 border-b border-emerald-800/40">
+                            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-black shadow-md">
+                              <span>🏆 منصة تتويج كأس ركلات الترجيح ⚽🏆</span>
+                            </div>
+                            <button
+                              onClick={handleExitGame}
+                              className="px-3.5 py-1.5 bg-rose-600/90 hover:bg-rose-500 border border-rose-400/40 text-white rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-1.5 shadow-md active:scale-95 shrink-0"
+                              title="إغلاق والعودة للرئيسية"
+                            >
+                              <span>إغلاق</span>
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+
+                          <div className="text-center space-y-2 mb-4">
+                            <h3 className="text-2xl md:text-3xl font-black text-white drop-shadow-md">
+                              انتهت بطولة ركلات الترجيح! ⚽🎉
+                            </h3>
+                            <p className="text-xs md:text-sm text-slate-300 font-bold max-w-lg mx-auto">
+                              مبارك لهدافي وأبطال ركلات الترجيح! لقد سجلت وحصلت على <span className="text-yellow-400 font-sans font-black">{score}</span> نقطة.
+                            </p>
+                          </div>
+
+                          <LivePodiumView
+                            scores={getPodiumScores()}
+                            onReset={() => {}}
+                            onClose={handleExitGame}
+                            isAdmin={false}
+                            podiumAt={activeChallenge.podiumAt}
+                          />
+
+                          {podiumSecondsLeft !== null && (
+                            <div className="mt-5 px-5 py-2.5 bg-gradient-to-r from-rose-500/20 via-emerald-500/20 to-teal-500/20 border border-emerald-400/30 text-emerald-200 rounded-2xl text-xs sm:text-sm font-extrabold text-center shadow-lg flex items-center justify-center gap-2">
+                              <span>⏱️ التوقيت التنازلي للإغلاق:</span>
+                              <span className="font-sans font-black text-lg text-emerald-300 bg-emerald-950/80 px-3 py-0.5 rounded-lg border border-emerald-500/40 min-w-[2.5rem] inline-block shadow-inner">
+                                {podiumSecondsLeft}
+                              </span>
+                              <span>ثانية</span>
+                            </div>
+                          )}
+
+                          <div className="mt-5">
+                            <button
+                              onClick={handleExitGame}
+                              className="px-7 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 border border-emerald-300/30 text-white rounded-2xl text-xs sm:text-sm font-black transition cursor-pointer shadow-xl flex items-center gap-2 active:scale-95"
+                            >
+                              <span>إغلاق والعودة للرئيسية</span>
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ) : (hasFinishedWaygroundQuestions || gameState === "finished") ? (
+                        /* WAITING FOR OTHER PLAYERS SCREEN */
+                        <div className="flex flex-col flex-1 items-center justify-center p-6 md:p-8 text-center space-y-6 my-auto">
+                          <motion.div
+                            animate={{ scale: [1, 1.12, 1], rotate: [0, 8, -8, 0] }}
+                            transition={{ repeat: Infinity, duration: 2.5, ease: "easeInOut" }}
+                            className="w-24 h-24 bg-gradient-to-tr from-emerald-500/20 via-teal-500/20 to-green-500/20 rounded-full border-2 border-emerald-400/50 flex items-center justify-center text-5xl shadow-[0_0_40px_rgba(16,185,129,0.25)]"
+                          >
+                            ⚽
+                          </motion.div>
+
+                          <div className="space-y-3 max-w-lg mx-auto">
+                            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-black shadow-md">
+                              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+                              <span>الرجاء الانتظار... ⚽</span>
+                            </div>
+                            <h3 className="text-2xl md:text-3xl font-black text-white drop-shadow-md">
+                              أحسنت! سددت جميع ركلات الترجيح ⚽🔥
+                            </h3>
+                            <p className="text-sm text-slate-200 font-bold leading-relaxed">
+                              أنهيت جميع الركلات بنجاح وحصلت على <span className="text-yellow-400 font-sans font-black">{score}</span> نقطة.
+                              <br />
+                              <span className="text-emerald-200 font-normal text-xs mt-1 block">
+                                بانتظار إعلان المعلم لمنصة التتويج وكأس الأبطال! 🏆
+                              </span>
+                            </p>
+                          </div>
+
+                          <div className="bg-slate-900/95 border border-emerald-800/80 p-5 rounded-2xl max-w-md w-full space-y-3 shadow-xl backdrop-blur-md">
+                            <div className="text-right flex justify-between items-center text-xs font-bold text-emerald-200 pb-2 border-b border-slate-800">
+                              <span className="flex items-center gap-1.5">
+                                <span>🌟</span>
+                                <span>النقاط الإجمالية:</span>
+                              </span>
+                              <span className="font-sans font-black text-base text-yellow-400">{score} ن</span>
+                            </div>
+                            <div className="text-right flex justify-between items-center text-xs font-bold text-emerald-200 pb-2 border-b border-slate-800">
+                              <span className="flex items-center gap-1.5">
+                                <span>⚽</span>
+                                <span>الأهداف المسجلة:</span>
+                              </span>
+                              <span className="font-sans font-black text-sm text-emerald-400">{correctCount} / {activeChallenge.questions.length}</span>
+                            </div>
+                            <div className="text-right flex justify-between items-center text-xs font-bold text-emerald-200 pb-2 border-b border-slate-800">
+                              <span className="flex items-center gap-1.5">
+                                <span>⏱️</span>
+                                <span>الزمن المستغرق:</span>
+                              </span>
+                              <span className="font-sans font-black text-sm text-teal-300">{timeSpent} ثانية</span>
+                            </div>
+                            <div className="text-right flex justify-between items-center text-xs font-bold text-amber-300 pt-1">
+                              <span className="flex items-center gap-1.5">
+                                <span>👥</span>
+                                <span>الطلاب الذين أنهوا الركلات:</span>
+                              </span>
+                              <span className="font-sans font-black text-xs text-amber-400">
+                                {liveActivePlayers.filter(p => p.finished === true).length} من أصل {liveActivePlayers.length || 1} طالب
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="p-3.5 bg-emerald-950/60 border border-emerald-500/30 rounded-xl max-w-md w-full text-xs font-bold text-emerald-200 flex items-center justify-center gap-2 animate-pulse">
+                            <span>📡 جاري المتابعة مباشرة... ستظهر شاشة التتويج فور اكتمال الركلات!</span>
+                          </div>
+
+                          <div className="pt-2 w-full max-w-md mx-auto">
+                            <button
+                              type="button"
+                              onClick={handleExitGame}
+                              className="w-full py-3.5 px-6 bg-gradient-to-r from-rose-600 via-red-600 to-rose-700 hover:from-rose-500 hover:to-red-500 text-white rounded-2xl text-xs sm:text-sm font-black shadow-xl shadow-rose-950/60 border border-rose-400/40 transition transform active:scale-95 cursor-pointer flex items-center justify-center gap-2.5 hover:brightness-110"
+                            >
+                              <LogOut className="w-4 h-4 rotate-180" />
+                              <span>إغلاق وإنهاء اللعبة بدون تتويج 🚪</span>
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          {/* Football Pitch & Ultra-Realistic Stadium Arena */}
+                          <div className="w-full min-h-[520px] md:min-h-[580px] bg-slate-950 rounded-3xl border-2 border-emerald-600/40 relative overflow-hidden flex flex-col justify-between select-none shadow-2xl">
+                            {/* TV Broadcast Top Match Graphics Bar */}
+                            <div className="relative z-20 w-full bg-slate-950/90 border-b border-emerald-500/30 px-3 py-2 flex flex-wrap items-center justify-between gap-2 backdrop-blur-md">
+                              <div className="flex items-center gap-2">
+                                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-rose-500/20 border border-rose-500/40 text-rose-400 text-[10px] font-black">
+                                  <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                                  <span>بث مباشر 🔴</span>
+                                </span>
+                                <span className="text-xs font-black text-white hidden sm:inline">
+                                  ⚽ بطولة ركلات الترجيح وكأس الأبطال
+                                </span>
+                              </div>
+
+                              {/* Penalty Shootout Series Rounds Dots (FIFA/Champions League style) */}
+                              <div className="flex items-center gap-1.5 bg-slate-900/80 px-2.5 py-1 rounded-xl border border-slate-700/60 shadow-inner">
+                                <span className="text-[10px] font-black text-slate-400 ml-1">سلسلة الركلات:</span>
+                                {activeChallenge.questions.map((_, qIdx) => {
+                                  const result = penaltyKicksHistory[qIdx];
+                                  const isCurrent = qIdx === currentQuestionIdx;
+                                  return (
+                                    <div
+                                      key={`kick-dot-${qIdx}`}
+                                      className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black border transition-all ${
+                                        result === "goal"
+                                          ? "bg-emerald-600 border-emerald-400 text-white shadow-[0_0_8px_#10b981]"
+                                          : result === "miss"
+                                          ? "bg-rose-600 border-rose-400 text-white shadow-[0_0_8px_#f43f5e]"
+                                          : isCurrent
+                                          ? "bg-amber-500/30 border-amber-400 text-amber-300 animate-pulse ring-1 ring-amber-400"
+                                          : "bg-slate-800 border-slate-700 text-slate-500"
+                                      }`}
+                                      title={`الركلة ${qIdx + 1}`}
+                                    >
+                                      {result === "goal" ? "✓" : result === "miss" ? "✕" : isCurrent ? "⚽" : (qIdx + 1)}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+
+                              {/* Radar Shot Speedometer HUD */}
+                              {penaltyShotSpeed && (
+                                <motion.div
+                                  initial={{ opacity: 0, scale: 0.8 }}
+                                  animate={{ opacity: 1, scale: 1 }}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-gradient-to-r from-amber-500/20 to-yellow-500/20 border border-yellow-400/50 text-yellow-300 font-mono text-xs font-black shadow-[0_0_15px_rgba(234,179,8,0.3)] animate-pulse"
+                                >
+                                  <span>⚡ سرعة التسديدة:</span>
+                                  <span className="text-sm font-sans font-black text-white">{penaltyShotSpeed}</span>
+                                  <span>كم/ساعة</span>
+                                </motion.div>
+                              )}
+                            </div>
+
+                            {/* Stadium Visual Background (Crowd, LED Boards, Floodlights, & 3D Pitch) */}
+                            <div className="absolute inset-0 top-10 bg-gradient-to-b from-slate-950 via-emerald-950 to-emerald-900 overflow-hidden pointer-events-none">
+                              {/* Stadium Grandstands Silhouette & Crowds */}
+                              <div className="absolute top-0 inset-x-0 h-24 bg-gradient-to-b from-slate-950 via-slate-900 to-transparent flex flex-col justify-between opacity-80 pointer-events-none">
+                                {/* Spectator silhouette dots in tiers */}
+                                <div className="w-full h-12 flex flex-wrap gap-1 px-4 opacity-40 overflow-hidden">
+                                  {Array.from({ length: 90 }).map((_, i) => (
+                                    <div
+                                      key={`crowd-${i}`}
+                                      className={`w-1.5 h-2 rounded-t-sm ${
+                                        i % 5 === 0 ? "bg-emerald-400" : i % 3 === 0 ? "bg-yellow-300" : "bg-slate-400"
+                                      }`}
+                                    />
+                                  ))}
+                                </div>
+                                {/* Random Camera Flashes in Stands */}
+                                <div className="absolute top-2 left-1/4 w-3 h-3 bg-white rounded-full blur-[2px] animate-ping" style={{ animationDuration: "2.4s" }} />
+                                <div className="absolute top-4 right-1/3 w-3 h-3 bg-white rounded-full blur-[2px] animate-ping" style={{ animationDuration: "1.8s", animationDelay: "0.9s" }} />
+                                <div className="absolute top-6 left-2/3 w-3 h-3 bg-white rounded-full blur-[2px] animate-ping" style={{ animationDuration: "3.1s", animationDelay: "1.4s" }} />
+                              </div>
+
+                              {/* Glowing LED Pitchside Advertising Boards */}
+                              <div className="absolute top-16 inset-x-0 h-7 bg-slate-900 border-y border-emerald-500/40 flex items-center justify-around overflow-hidden text-[10px] font-black text-emerald-300 tracking-wider shadow-md pointer-events-none">
+                                <span className="text-yellow-300">🏆 كأس أبطال المراجعة • CHAMPIONS LEAGUE ⚽</span>
+                                <span className="text-emerald-400">🔥 سدد بقوة وهز الشباك • STRIKE & SCORE 🔥</span>
+                                <span className="text-teal-300 hidden md:inline">⚡ تحدي ركلات الترجيح الحاسم ⚡</span>
+                              </div>
+
+                              {/* Twin Stadium Floodlight Towers with Volumetric Cones */}
+                              <div className="absolute -top-4 -left-8 w-96 h-96 bg-gradient-to-br from-yellow-100/20 via-emerald-400/10 to-transparent rounded-full blur-3xl pointer-events-none" />
+                              <div className="absolute -top-4 -right-8 w-96 h-96 bg-gradient-to-bl from-yellow-100/20 via-teal-400/10 to-transparent rounded-full blur-3xl pointer-events-none" />
+
+                              {/* 3D Perspective Pitch Grass & Mower Stripes */}
+                              <div className="absolute top-24 inset-x-0 bottom-0 flex flex-col opacity-30 pointer-events-none">
+                                {Array.from({ length: 9 }).map((_, i) => (
+                                  <div
+                                    key={`turf-stripe-${i}`}
+                                    className={`flex-1 ${i % 2 === 0 ? "bg-emerald-800/40" : "bg-transparent"}`}
+                                  />
+                                ))}
+                              </div>
+
+                              {/* Authentic Pitch Markings */}
+                              {/* Penalty Box Outer Lines */}
+                              <div className="absolute top-24 inset-x-6 h-52 border-b-2 border-x-2 border-white/30 pointer-events-none shadow-[0_0_8px_rgba(255,255,255,0.15)]" />
+                              {/* 6-Yard Box */}
+                              <div className="absolute top-24 inset-x-20 h-28 border-b-2 border-x-2 border-white/35 pointer-events-none" />
+                              {/* Penalty Spot Mark (White Chalk Circle) */}
+                              <div className="absolute top-[85%] left-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-white shadow-[0_0_12px_white] pointer-events-none border border-emerald-300" />
+                              {/* Penalty Arc (D) */}
+                              <div className="absolute top-[85%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-36 h-24 border-b-2 border-white/30 rounded-b-full pointer-events-none" />
+                            </div>
+
+                            {/* Floating Question & Timer Bar */}
+                            {!isQuestionIntro && (
+                              <motion.div
+                                key={`penalty-q-${currentQuestionIdx}`}
+                                initial={{ opacity: 0, y: -10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                className="relative z-20 mx-4 mt-2 bg-slate-950/95 border border-emerald-500/50 p-3 sm:p-3.5 rounded-2xl text-center shadow-2xl backdrop-blur-md ring-1 ring-emerald-400/30 space-y-2"
+                              >
+                                <div className="space-y-1">
+                                  <div className="flex items-center justify-between text-xs font-black px-1">
+                                    <div className="flex items-center gap-1.5 text-emerald-200">
+                                      <Clock className="w-3.5 h-3.5 text-emerald-400 animate-spin" style={{ animationDuration: "4s" }} />
+                                      <span className="text-[11px]">وقت الركلة:</span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      {streak > 1 && (
+                                        <span className="text-[10px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2 py-0.5 rounded-full animate-bounce">
+                                          سلسلة {streak} أهداف 🔥
+                                        </span>
+                                      )}
+                                      <div className={`flex items-center gap-1 font-sans font-black text-xs ${
+                                        timeLeft <= 4 ? "text-rose-400 animate-pulse text-sm" : timeLeft <= 8 ? "text-amber-400" : "text-emerald-400"
+                                      }`}>
+                                        <span>{timeLeft}</span>
+                                        <span className="text-[10px]">ثانية</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="w-full bg-slate-900/90 border border-emerald-900/80 rounded-full h-2 p-0.5 shadow-inner overflow-hidden relative">
+                                    <motion.div 
+                                      className={`h-full rounded-full transition-all duration-1000 ease-linear ${
+                                        timeLeft <= 4
+                                          ? "bg-gradient-to-r from-rose-600 to-rose-400 shadow-[0_0_12px_rgba(244,63,94,0.8)]"
+                                          : timeLeft <= 8
+                                          ? "bg-gradient-to-r from-amber-500 to-yellow-400 shadow-[0_0_10px_rgba(245,158,11,0.6)]"
+                                          : "bg-gradient-to-r from-emerald-500 to-teal-400 shadow-[0_0_10px_rgba(16,185,129,0.5)]"
+                                      }`}
+                                      style={{ width: `${Math.max(0, Math.min(100, (timeLeft / 20) * 100))}%` }}
+                                    />
+                                  </div>
+                                </div>
+
+                                <h3 className="text-sm sm:text-base md:text-lg font-black text-white leading-snug">
+                                  {activeChallenge.questions[currentQuestionIdx]?.text}
+                                </h3>
+                              </motion.div>
+                            )}
+
+                            {/* 1. TOP SECTION: ALL OPTIONS (تظهر الاختيارات في الأعلى جميعها) */}
+                            {!isQuestionIntro && (
+                              <div className="relative z-20 w-full px-3 sm:px-4 mt-2">
+                                <div className={`grid gap-2 sm:gap-2.5 w-full max-w-3xl mx-auto ${
+                                  activeChallenge.questions[currentQuestionIdx]?.options.length === 2
+                                    ? "grid-cols-2"
+                                    : activeChallenge.questions[currentQuestionIdx]?.options.length === 3
+                                    ? "grid-cols-3"
+                                    : "grid-cols-2 sm:grid-cols-4"
+                                }`}>
+                                  {activeChallenge.questions[currentQuestionIdx]?.options.map((opt, optIdx) => {
+                                    const isTargeted = penaltyBallState.targetIdx === optIdx;
+                                    const isCorrect = checkIsCorrect(activeChallenge.questions[currentQuestionIdx], optIdx);
+                                    const showResult = isAnswerRevealed;
+                                    const isHovered = penaltyHoverIdx === optIdx;
+
+                                    let borderStyles = "border-white/20 hover:border-emerald-400 bg-slate-950/90 hover:bg-emerald-950/90";
+                                    if (showResult) {
+                                      if (isCorrect) {
+                                        borderStyles = "border-emerald-400 bg-emerald-950/95 ring-2 ring-emerald-400 shadow-[0_0_25px_#10b981]";
+                                      } else if (isTargeted) {
+                                        borderStyles = "border-rose-500 bg-rose-950/95 ring-2 ring-rose-400 shadow-[0_0_25px_#f43f5e]";
+                                      } else {
+                                        borderStyles = "border-slate-800 bg-slate-950/50 opacity-30";
+                                      }
+                                    } else if (isHovered) {
+                                      borderStyles = "border-yellow-400 bg-emerald-950/90 ring-2 ring-yellow-400/60 shadow-[0_0_20px_rgba(234,179,8,0.5)]";
+                                    }
+
+                                    return (
+                                      <button
+                                        key={`penalty-opt-${optIdx}`}
+                                        type="button"
+                                        disabled={isAnswerRevealed}
+                                        onClick={() => handlePenaltyShot(optIdx)}
+                                        onMouseEnter={() => setPenaltyHoverIdx(optIdx)}
+                                        onMouseLeave={() => setPenaltyHoverIdx(null)}
+                                        className={`relative p-2 sm:p-2.5 rounded-xl border-2 transition-all duration-200 cursor-pointer flex flex-col justify-between text-right group shadow-lg backdrop-blur-md min-h-[64px] sm:min-h-[72px] ${borderStyles}`}
+                                      >
+                                        {/* Target Badge & Keyboard Shortcut */}
+                                        <div className="flex items-center justify-between w-full pb-1 border-b border-white/10">
+                                          <span className="text-[10px] font-black text-emerald-300 group-hover:text-yellow-300 transition flex items-center gap-1">
+                                            <span>🎯</span>
+                                            <span>الهدف [{optIdx + 1}]</span>
+                                          </span>
+                                          <span className="text-[10px] font-sans font-black bg-white/20 text-white px-1.5 py-0.2 rounded border border-white/30 group-hover:bg-yellow-400 group-hover:text-slate-950 transition">
+                                            [{optIdx + 1}]
+                                          </span>
+                                        </div>
+
+                                        {/* Option Text */}
+                                        <span className="text-xs sm:text-xs font-black text-white group-hover:text-emerald-200 leading-tight pt-1 line-clamp-2">
+                                          {opt}
+                                        </span>
+
+                                        {/* Status Badges on Result Reveal */}
+                                        {showResult && isCorrect && (
+                                          <div className="absolute -bottom-2 -left-1 bg-emerald-500 text-white rounded-full px-2 py-0.5 shadow-lg animate-bounce text-[10px] font-black flex items-center gap-1 z-30">
+                                            <span>⚽</span>
+                                            <span>هدف عالمي! ✓</span>
+                                          </div>
+                                        )}
+                                        {showResult && isTargeted && !isCorrect && (
+                                          <div className="absolute -bottom-2 -left-1 bg-rose-600 text-white rounded-full px-2 py-0.5 shadow-lg text-[10px] font-black flex items-center gap-1 z-30">
+                                            <span>🧤</span>
+                                            <span>تصدي الحارس ✕</span>
+                                          </div>
+                                        )}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* 2. CENTER STADIUM: Realistic 3D Goal & Goalkeeper */}
+                            <div className="relative flex-1 w-full max-w-2xl mx-auto px-3 sm:px-4 flex flex-col items-center justify-center my-auto min-h-[210px] sm:min-h-[240px]">
+                              {/* 3D Realistic Goal Net and Tubular Metal Frame */}
+                              <div className={`relative w-full max-w-xl h-44 sm:h-52 rounded-t-2xl border-t-[10px] border-x-[10px] border-white shadow-[0_15px_45px_rgba(0,0,0,0.85)] flex flex-col justify-between overflow-hidden transition-all duration-200 ${
+                                netShaking ? "scale-[1.03] border-yellow-300 shadow-[0_0_35px_rgba(234,179,8,0.7)]" : ""
+                              }`}>
+                                {/* Goal Frame Metallic Sheen Reflection */}
+                                <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-b from-white via-slate-200 to-transparent shadow-[0_0_12px_white]" />
+                                <div className="absolute top-0 bottom-0 left-0 w-1.5 bg-gradient-to-r from-white via-slate-200 to-transparent shadow-[0_0_12px_white]" />
+                                <div className="absolute top-0 bottom-0 right-0 w-1.5 bg-gradient-to-l from-white via-slate-200 to-transparent shadow-[0_0_12px_white]" />
+
+                                {/* Realistic Hexagonal Net Mesh with Depth */}
+                                <div className={`absolute inset-0 bg-slate-950/65 bg-[radial-gradient(#ffffff_1.4px,transparent_1.4px)] [background-size:10px_10px] opacity-45 transition-transform duration-150 ${
+                                  netShaking ? "scale-[1.05] opacity-60" : ""
+                                }`} />
+                                <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-transparent to-emerald-950/90 pointer-events-none" />
+
+                                {/* Glove Impact Sparks on Save */}
+                                {keeperGloveSpark && (
+                                  <motion.div
+                                    initial={{ scale: 0.2, opacity: 1 }}
+                                    animate={{ scale: [0.2, 1.8, 2.2], opacity: [1, 0.8, 0] }}
+                                    transition={{ duration: 0.45 }}
+                                    style={{ left: `${keeperGloveSpark.x}%`, top: `${keeperGloveSpark.y}%` }}
+                                    className="absolute -translate-x-1/2 -translate-y-1/2 z-30 pointer-events-none text-3xl select-none filter drop-shadow-[0_0_15px_#f43f5e]"
+                                  >
+                                    💥🧤
+                                  </motion.div>
+                                )}
+
+                                {/* Realistic Athletic Goalkeeper */}
+                                <motion.div
+                                  animate={
+                                    penaltyKeeperState.isDiving
+                                      ? penaltyKeeperState.diveDirection === "top_left"
+                                        ? { x: -145, y: -45, rotate: -42, scale: 1.15 }
+                                        : penaltyKeeperState.diveDirection === "bottom_left"
+                                        ? { x: -145, y: 35, rotate: -72, scale: 1.15 }
+                                        : penaltyKeeperState.diveDirection === "top_right"
+                                        ? { x: 145, y: -45, rotate: 42, scale: 1.15 }
+                                        : penaltyKeeperState.diveDirection === "bottom_right"
+                                        ? { x: 145, y: 35, rotate: 72, scale: 1.15 }
+                                        : penaltyKeeperState.diveDirection === "left"
+                                        ? { x: -125, y: 0, rotate: -38, scale: 1.1 }
+                                        : penaltyKeeperState.diveDirection === "right"
+                                        ? { x: 125, y: 0, rotate: 38, scale: 1.1 }
+                                        : { x: 0, y: -20, rotate: 0, scale: 1.1 }
+                                      : { x: 0, y: 0, rotate: 0, scale: 1 }
+                                  }
+                                  transition={{ type: "spring", stiffness: 380, damping: 22 }}
+                                  className="absolute bottom-2 left-1/2 -translate-x-1/2 flex flex-col items-center pointer-events-none z-10 select-none"
+                                >
+                                  <motion.div
+                                    animate={
+                                      !penaltyKeeperState.isDiving
+                                        ? { x: [-6, 6, -6], y: [0, -3, 0] }
+                                        : { x: 0, y: 0 }
+                                    }
+                                    transition={{ repeat: Infinity, duration: 1.4, ease: "easeInOut" }}
+                                    className="flex flex-col items-center"
+                                  >
+                                    {/* Outstretched Goalkeeper Gloves */}
+                                    <div className="flex items-center gap-7 -mb-2">
+                                      <div className="text-2xl -rotate-15 filter drop-shadow-[0_2px_4px_rgba(0,0,0,0.6)]">🧤</div>
+                                      <div className="text-2xl rotate-15 filter drop-shadow-[0_2px_4px_rgba(0,0,0,0.6)]">🧤</div>
+                                    </div>
+                                    {/* Goalkeeper Head & Face */}
+                                    <div className="w-8 h-8 rounded-full bg-amber-200 border-2 border-amber-400 flex items-center justify-center text-xs shadow-md">
+                                      🧢
+                                    </div>
+                                    {/* Fluorescent Goalkeeper Jersey with Number 1 */}
+                                    <div className="w-13 h-12 bg-gradient-to-b from-lime-400 to-green-500 border-2 border-lime-200 rounded-t-lg shadow-md flex items-center justify-center text-xs font-black text-slate-950 font-sans">
+                                      1
+                                    </div>
+                                    {/* Shorts & Cleats */}
+                                    <div className="w-11 h-6 bg-slate-950 rounded-b-md flex justify-around px-1">
+                                      <div className="w-4 h-6 bg-slate-900 border-x border-slate-700" />
+                                      <div className="w-4 h-6 bg-slate-900 border-x border-slate-700" />
+                                    </div>
+                                    <div className="flex gap-4 text-xs -mt-1">
+                                      <span>👟</span>
+                                      <span>👟</span>
+                                    </div>
+                                  </motion.div>
+                                </motion.div>
+                              </div>
+
+                              {/* Goal Line Turf Shadow */}
+                              <div className="w-full max-w-xl h-3.5 bg-emerald-950/80 border-t-2 border-white/60 shadow-lg" />
+                            </div>
+
+                            {/* 3. BOTTOM SECTION: THE BALLS ON THE TURF (الكور في الأسفل يقوم اللاعب بركل الكرة) */}
+                            {!isQuestionIntro && (
+                              <div className="relative z-20 w-full px-3 sm:px-4 pb-3 pt-1">
+                                {/* Instructions Pill */}
+                                <div className="flex items-center justify-center mb-1.5">
+                                  <div className="flex items-center gap-1.5 text-[10px] sm:text-xs font-black bg-slate-950/85 border border-emerald-500/40 text-emerald-200 px-3.5 py-1 rounded-full shadow-lg backdrop-blur-md">
+                                    <span className="text-sm animate-bounce">⚽</span>
+                                    <span>اضغط على أي كرة في الأسفل أو زر [1-4] لركلها نحو الإجابة الصحيحة في الأعلى!</span>
+                                  </div>
+                                </div>
+
+                                {/* Balls Row directly below matching options */}
+                                <div className={`grid gap-2 sm:gap-2.5 w-full max-w-3xl mx-auto ${
+                                  activeChallenge.questions[currentQuestionIdx]?.options.length === 2
+                                    ? "grid-cols-2"
+                                    : activeChallenge.questions[currentQuestionIdx]?.options.length === 3
+                                    ? "grid-cols-3"
+                                    : "grid-cols-2 sm:grid-cols-4"
+                                }`}>
+                                  {activeChallenge.questions[currentQuestionIdx]?.options.map((_, optIdx) => {
+                                    const isKicked = penaltyBallState.isShooting && penaltyBallState.targetIdx === optIdx;
+                                    const isHovered = penaltyHoverIdx === optIdx;
+
+                                    return (
+                                      <div key={`penalty-ball-station-${optIdx}`} className="relative flex flex-col items-center">
+                                        {/* Trajectory dotted line on hover */}
+                                        {isHovered && !penaltyBallState.isShooting && !isAnswerRevealed && (
+                                          <motion.div
+                                            initial={{ opacity: 0, height: 0 }}
+                                            animate={{ opacity: 0.8, height: 100 }}
+                                            className="absolute bottom-16 w-0.5 border-r-2 border-dashed border-yellow-300 pointer-events-none z-10"
+                                          />
+                                        )}
+
+                                        {/* Kick Button / Ball Trigger */}
+                                        <button
+                                          type="button"
+                                          disabled={isAnswerRevealed}
+                                          onClick={() => handlePenaltyShot(optIdx)}
+                                          onMouseEnter={() => setPenaltyHoverIdx(optIdx)}
+                                          onMouseLeave={() => setPenaltyHoverIdx(null)}
+                                          className={`group cursor-pointer transition-all duration-200 flex flex-col items-center p-1.5 rounded-2xl w-full ${
+                                            isHovered ? "scale-105" : "hover:scale-102"
+                                          } active:scale-95 disabled:cursor-not-allowed`}
+                                        >
+                                          {/* 3D Ball Resting on Turf Chalk Spot */}
+                                          <div className="relative flex flex-col items-center">
+                                            {/* Turf Chalk Spot */}
+                                            <div className="w-10 h-3 rounded-full border border-white/60 bg-white/20 shadow-[0_0_8px_white]" />
+
+                                            {/* Soccer Ball (hidden when this specific ball is the one kicked and in flight) */}
+                                            <div className={`text-3xl sm:text-4xl transition-all select-none -mt-4.5 filter drop-shadow-[0_6px_6px_rgba(0,0,0,0.8)] ${
+                                              isKicked ? "opacity-0" : "opacity-100"
+                                            } ${isHovered ? "rotate-12 scale-110" : ""}`}>
+                                              ⚽
+                                            </div>
+                                          </div>
+
+                                          {/* Action Badge */}
+                                          <div className={`mt-1 text-[10px] sm:text-[11px] font-black px-2.5 py-0.5 rounded-full border transition-all flex items-center gap-1 shadow-md ${
+                                            isHovered
+                                              ? "bg-yellow-400 text-slate-950 border-yellow-300 scale-105"
+                                              : "bg-slate-900/90 text-emerald-300 border-emerald-500/50 group-hover:border-emerald-400"
+                                          }`}>
+                                            <span>اركل كُرة [{optIdx + 1}]</span>
+                                            <span>👟</span>
+                                          </div>
+                                        </button>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Striker Player (مسدد الركلة) running dynamically to the active ball on the pitch */}
+                            <motion.div
+                              animate={{
+                                left: penaltyBallState.isShooting && penaltyBallState.targetIdx !== null
+                                  ? `${getPenaltyOptionX(penaltyBallState.targetIdx, activeChallenge.questions[currentQuestionIdx]?.options.length || 4) - 4}%`
+                                  : penaltyHoverIdx !== null
+                                  ? `${getPenaltyOptionX(penaltyHoverIdx, activeChallenge.questions[currentQuestionIdx]?.options.length || 4) - 4}%`
+                                  : "46%",
+                                y: penaltyStrikerState.phase === "runup"
+                                  ? -16
+                                  : penaltyStrikerState.phase === "kick"
+                                  ? -22
+                                  : penaltyStrikerState.phase === "celebrate"
+                                  ? -18
+                                  : penaltyStrikerState.phase === "disappointed"
+                                  ? 4
+                                  : 0,
+                                rotate: penaltyStrikerState.phase === "kick" ? -8 : 0,
+                                scale: penaltyStrikerState.phase === "celebrate" ? 1.15 : 1,
+                              }}
+                              transition={{ type: "spring", stiffness: 320, damping: 26 }}
+                              className="absolute bottom-6 z-15 pointer-events-none select-none flex flex-col items-center"
+                            >
+                              <motion.div
+                                animate={
+                                  penaltyStrikerState.phase === "celebrate"
+                                    ? { y: [0, -10, 0], rotate: [0, 6, -6, 0] }
+                                    : { y: 0, rotate: 0 }
+                                }
+                                transition={
+                                  penaltyStrikerState.phase === "celebrate"
+                                    ? { repeat: Infinity, duration: 0.6, ease: "easeInOut" }
+                                    : { duration: 0.2 }
+                                }
+                                className="flex flex-col items-center"
+                              >
+                                {/* Striker Emoji Head / Expression */}
+                                <div className="text-xl">
+                                  {penaltyStrikerState.phase === "celebrate" ? "🙌" : penaltyStrikerState.phase === "disappointed" ? "🤦‍♂️" : "🏃‍♂️"}
+                                </div>
+                                {/* Striker Jersey #9 */}
+                                <div className="w-8 h-8 bg-gradient-to-b from-blue-600 to-indigo-700 rounded-t-md border border-blue-400 flex items-center justify-center text-[9px] font-black text-white font-sans shadow-md">
+                                  9
+                                </div>
+                                <div className="w-7 h-4 bg-slate-900 rounded-b-sm" />
+                                <div className="flex gap-1.5 text-[10px] -mt-1">
+                                  <span>👟</span>
+                                  <span>👟</span>
+                                </div>
+                                <span className="text-[9px] font-black text-blue-200 bg-slate-950/80 px-1.5 py-0.2 rounded mt-0.5 shadow-xs">
+                                  المسدد
+                                </span>
+                              </motion.div>
+                            </motion.div>
+
+                            {/* Animated Kicked Football ⚽ flying up from bottom ball spot directly to target answer card */}
+                            {penaltyBallState.isShooting && (
+                              <>
+                                {/* Dynamic Turf Ball Shadow tracking the shot */}
+                                <motion.div
+                                  initial={{
+                                    left: `${penaltyBallState.startX}%`,
+                                    top: `${penaltyBallState.startY}%`,
+                                    opacity: 0.65,
+                                    scale: 1,
+                                  }}
+                                  animate={{
+                                    left: `${penaltyBallState.x}%`,
+                                    top: `${penaltyBallState.y + 14}%`,
+                                    opacity: 0.2,
+                                    scale: 1.4,
+                                  }}
+                                  transition={{ duration: 0.45, ease: "easeOut" }}
+                                  className="absolute -translate-x-1/2 -translate-y-1/2 w-8 h-3 rounded-full bg-slate-950/80 blur-[2px] z-25 pointer-events-none"
+                                />
+
+                                {/* Kicked Football launching upwards to the chosen answer */}
+                                <motion.div
+                                  initial={{
+                                    left: `${penaltyBallState.startX}%`,
+                                    top: `${penaltyBallState.startY}%`,
+                                    scale: 1.05,
+                                    rotate: 0,
+                                  }}
+                                  animate={{
+                                    left: `${penaltyBallState.x}%`,
+                                    top: `${penaltyBallState.y}%`,
+                                    scale: penaltyBallState.scale || 0.52,
+                                    rotate: penaltyBallState.rotation || 720,
+                                  }}
+                                  transition={{ duration: 0.45, ease: "easeOut" }}
+                                  className="absolute -translate-x-1/2 -translate-y-1/2 z-30 pointer-events-none text-4xl select-none filter drop-shadow-[0_8px_14px_rgba(0,0,0,0.85)]"
+                                >
+                                  ⚽
+                                </motion.div>
+                              </>
+                            )}
+
+                            {/* Floating Goal / Save TV Replay Banner */}
+                            <AnimatePresence>
+                              {penaltyGoalBanner && (
+                                <motion.div
+                                  initial={{ scale: 0.3, y: 20, opacity: 0 }}
+                                  animate={{ scale: [0.3, 1.15, 1], y: 0, opacity: 1 }}
+                                  exit={{ scale: 0.8, opacity: 0 }}
+                                  className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 px-6 py-4 rounded-3xl border-2 shadow-2xl backdrop-blur-xl text-center font-black ${
+                                    penaltyBallState.isGoal
+                                      ? "bg-emerald-950/95 border-emerald-400 text-yellow-300 shadow-[0_0_55px_rgba(16,185,129,0.8)] text-xl sm:text-2xl"
+                                      : "bg-rose-950/95 border-rose-400 text-rose-200 shadow-[0_0_55px_rgba(244,63,94,0.8)] text-lg sm:text-xl"
+                                  }`}
+                                >
+                                  {penaltyGoalBanner}
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
+
+                            {/* Confetti Sparks on Goal */}
+                            {particles.map(p => (
+                              <div
+                                key={p.id}
+                                style={{ left: `${p.x}%`, top: `${p.y}%`, backgroundColor: p.color }}
+                                className="absolute w-3.5 h-3.5 rounded-full animate-ping z-30 pointer-events-none shadow-md"
+                              />
+                            ))}
+
+                            {/* Beautiful Question Intro & Penalty Cup Preview Overlay */}
+                            {isQuestionIntro && (
+                              <div className="absolute inset-0 bg-slate-950/95 z-30 flex flex-col items-center justify-center p-4 sm:p-6 text-center overflow-hidden">
+                                {gameIntroStage === "preview" ? (
+                                  <motion.div
+                                    initial={{ opacity: 0, scale: 0.9 }}
+                                    animate={{ opacity: 1, scale: 1 }}
+                                    className="relative z-10 max-w-lg w-full bg-slate-900/90 border border-emerald-500/40 p-6 rounded-3xl shadow-[0_0_50px_rgba(16,185,129,0.3)] backdrop-blur-xl space-y-5"
+                                  >
+                                    <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500/20 border border-emerald-400/30 text-emerald-200 text-xs font-black tracking-wide">
+                                      <span>⚽ بطولة ركلات الترجيح وكأس الأبطال</span>
+                                      <span className="w-2 h-2 rounded-full bg-yellow-400 animate-ping" />
+                                    </div>
+
+                                    {/* Animated Football Kick in preview */}
+                                    <div className="relative py-6 flex items-center justify-center h-28">
+                                      <motion.div
+                                        animate={{
+                                          y: [0, -25, 0],
+                                          rotate: [0, 360],
+                                        }}
+                                        transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
+                                        className="text-7xl select-none drop-shadow-[0_0_25px_rgba(16,185,129,0.8)]"
+                                      >
+                                        ⚽
+                                      </motion.div>
+                                    </div>
+
+                                    <div className="space-y-2">
+                                      <h3 className="text-xl md:text-2xl font-black text-white drop-shadow-md">
+                                        سدد نحو شباك المرمى وهز الشباك! 🥅🔥
+                                      </h3>
+                                      <p className="text-xs sm:text-sm text-slate-300 font-bold leading-relaxed">
+                                        اختر زاوية الإجابة الصحيحة لتسديد ركلة ترجيح صاروخية وتجاوز تصدي حارس المرمى!
+                                      </p>
+                                    </div>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const q = activeChallenge.questions[currentQuestionIdx];
+                                        if (q) triggerGameCountdown(currentQuestionIdx, "penalty_shootout", q);
+                                      }}
+                                      className="w-full py-3.5 bg-gradient-to-r from-emerald-500 via-teal-600 to-green-600 hover:from-emerald-400 hover:to-teal-500 text-white rounded-2xl text-sm font-black shadow-lg shadow-emerald-950 transition transform active:scale-95 cursor-pointer flex items-center justify-center gap-2 border border-emerald-300/30"
+                                    >
+                                      <span>بدء تسديد الركلات الآن ⚽</span>
+                                    </button>
+                                  </motion.div>
+                                ) : gameIntroStage === "countdown" ? (
+                                  <div className="relative z-10 max-w-lg w-full flex flex-col items-center justify-center space-y-6">
+                                    <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-400/30 text-emerald-300 text-xs font-black shadow-md animate-pulse">
+                                      <span>⚽ استعد لتسديد الركلة...</span>
+                                    </div>
+
+                                    <div className="relative flex items-center justify-center w-36 h-36">
+                                      <motion.div
+                                        animate={{ rotate: 360 }}
+                                        transition={{ repeat: Infinity, duration: 4, ease: "linear" }}
+                                        className="absolute inset-0 rounded-full border-4 border-dashed border-emerald-400/40 shadow-[0_0_30px_rgba(16,185,129,0.4)]"
+                                      />
+
+                                      <AnimatePresence mode="wait">
+                                        {introCountdown === 3 && (
+                                          <motion.span
+                                            key="penalty-count-3"
+                                            initial={{ scale: 0.2, opacity: 0 }}
+                                            animate={{ scale: [0.2, 1.4, 1], opacity: 1 }}
+                                            exit={{ scale: 1.8, opacity: 0 }}
+                                            className="text-7xl font-sans font-black text-rose-500 drop-shadow-[0_0_35px_#f43f5e]"
+                                          >
+                                            3
+                                          </motion.span>
+                                        )}
+                                        {introCountdown === 2 && (
+                                          <motion.span
+                                            key="penalty-count-2"
+                                            initial={{ scale: 0.2, opacity: 0 }}
+                                            animate={{ scale: [0.2, 1.4, 1], opacity: 1 }}
+                                            exit={{ scale: 1.8, opacity: 0 }}
+                                            className="text-7xl font-sans font-black text-amber-400 drop-shadow-[0_0_35px_#f59e0b]"
+                                          >
+                                            2
+                                          </motion.span>
+                                        )}
+                                        {introCountdown === 1 && (
+                                          <motion.span
+                                            key="penalty-count-1"
+                                            initial={{ scale: 0.2, opacity: 0 }}
+                                            animate={{ scale: [0.2, 1.4, 1], opacity: 1 }}
+                                            exit={{ scale: 1.8, opacity: 0 }}
+                                            className="text-7xl font-sans font-black text-emerald-400 drop-shadow-[0_0_35px_#10b981]"
+                                          >
+                                            1
+                                          </motion.span>
+                                        )}
+                                        {introCountdown === 0 && (
+                                          <motion.div
+                                            key="penalty-count-go"
+                                            initial={{ scale: 0.3, opacity: 0 }}
+                                            animate={{ scale: [0.3, 1.3, 1], opacity: 1 }}
+                                            className="text-3xl sm:text-4xl font-black text-yellow-300 drop-shadow-[0_0_40px_#fde047] whitespace-nowrap"
+                                          >
+                                            ⚽ سدد! ✨
+                                          </motion.div>
+                                        )}
+                                      </AnimatePresence>
+                                    </div>
+
+                                    <div className="bg-slate-900/90 border border-emerald-500/40 p-4 rounded-2xl max-w-md w-full text-center space-y-1 shadow-xl backdrop-blur-md">
+                                      <span className="text-[10px] text-emerald-300 font-extrabold uppercase tracking-widest">الركلة الأولى</span>
+                                      <p className="text-sm md:text-base font-black text-white line-clamp-2">
+                                        {activeChallenge.questions[currentQuestionIdx]?.text}
+                                      </p>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  /* STANDARD QUESTION INTRO DISPLAY */
+                                  <div className="space-y-6 max-w-lg flex flex-col items-center">
+                                    <span className={`px-3 py-1 bg-emerald-600/30 text-emerald-300 border border-emerald-500/20 rounded-full text-xs font-black tracking-widest uppercase transition-all duration-500 ${isTransitioning ? 'opacity-0 scale-75' : 'opacity-100 animate-pulse'}`}>
+                                      الركلة القادمة ⚽
+                                    </span>
+                                    
+                                    <h2 
+                                      className={`text-2xl md:text-3xl lg:text-4xl font-black text-white leading-relaxed drop-shadow-[0_2px_15px_rgba(16,185,129,0.4)] transition-all duration-700 transform ${
+                                        isTransitioning 
+                                          ? '-translate-y-[220px] scale-50 opacity-0 pointer-events-none' 
+                                          : 'translate-y-0 scale-100 opacity-100'
+                                      }`}
+                                    >
+                                      {activeChallenge.questions[currentQuestionIdx]?.text}
+                                    </h2>
+
+                                    <div className={`flex flex-col items-center gap-2 pt-4 transition-all duration-500 ${isTransitioning ? 'opacity-0 scale-75' : 'opacity-100'}`}>
+                                      <span className="text-[10px] text-slate-400 font-extrabold uppercase">انطلاق الركلة خلال</span>
+                                      <div className="w-14 h-14 rounded-full bg-emerald-600/20 border-2 border-emerald-500 flex items-center justify-center shadow-lg shadow-emerald-950/50">
+                                        <span className="text-2xl font-sans font-black text-yellow-400 animate-bounce">
+                                          {introCountdown}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Quick Shot Buttons for Mobile / Tablet / Desktop */}
+                          <div className="space-y-2">
+                            <p className="text-[11px] text-center text-slate-400 font-bold leading-relaxed">
+                              💡 <span className="text-emerald-400">طريقة التسديد:</span> اضغط مباشرة على إحدى زوايا المرمى الأربعة، أو انقر على أحد الخيارات أدناه، أو استخدم أرقام الكيبورد (1، 2، 3، 4) لتسديد ركلة الترجيح!
+                            </p>
+
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                              {activeChallenge.questions[currentQuestionIdx]?.options.map((opt, optIdx) => {
+                                let cornerBadge = "";
+                                if (optIdx === 0) cornerBadge = "📐 المقص الأيسر";
+                                else if (optIdx === 1) cornerBadge = "📐 المقص الأيمن";
+                                else if (optIdx === 2) cornerBadge = "⚡ زاحفة يسار";
+                                else if (optIdx === 3) cornerBadge = "⚡ زاحفة يمين";
+
+                                return (
+                                  <button
+                                    key={`quick-shot-btn-${optIdx}`}
+                                    type="button"
+                                    disabled={isAnswerRevealed}
+                                    onClick={() => handlePenaltyShot(optIdx)}
+                                    className="p-2.5 bg-slate-900/90 hover:bg-emerald-950 border border-slate-700/80 hover:border-emerald-500 text-slate-200 rounded-xl text-xs font-black transition cursor-pointer flex flex-col items-start gap-1 active:scale-95 disabled:opacity-50 group shadow-md"
+                                  >
+                                    <div className="flex items-center justify-between w-full">
+                                      <span className="text-yellow-400 font-sans font-black text-[11px]">[{optIdx + 1}]</span>
+                                      <span className="text-[10px] text-emerald-400 group-hover:text-yellow-300 transition font-bold">{cornerBadge}</span>
+                                    </div>
+                                    <span className="truncate w-full text-right text-white font-black">{opt}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 5. CLOUD AIRPLANE GAME ARENA ✈️☁️ (طائرة السحاب) */}
+                  {activeChallenge.gameType === "cloud_airplane" && (
+                    <div 
+                      className={`relative w-full ${
+                        isAirplaneFullscreen ? 'fixed inset-0 z-50 rounded-none h-screen' : 'h-[620px] sm:h-[680px] rounded-3xl'
+                      } overflow-hidden select-none border-4 border-sky-400/40 shadow-2xl bg-gradient-to-b from-sky-400 via-sky-300 to-sky-200 flex flex-col justify-between`}
+                    >
+                      {/* Background Floating Atmosphere Clouds */}
+                      <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                        {/* Distant soft background clouds */}
+                        <div className="absolute -top-6 -left-10 w-72 h-36 bg-white/30 rounded-full blur-xl" />
+                        <div className="absolute top-20 -right-12 w-96 h-44 bg-white/25 rounded-full blur-2xl" />
+                        <div className="absolute top-48 left-1/3 w-80 h-32 bg-white/20 rounded-full blur-xl" />
+
+                        {/* City Skyline Silhouette at bottom (matching screenshot) */}
+                        <div className="absolute bottom-0 left-0 right-0 h-36 sm:h-44 pointer-events-none z-5 opacity-40">
+                          <svg className="w-full h-full" viewBox="0 0 1200 300" preserveAspectRatio="none">
+                            <defs>
+                              <linearGradient id="cityGrad1" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="#0284c7" stopOpacity="0.4" />
+                                <stop offset="100%" stopColor="#0369a1" stopOpacity="0.7" />
+                              </linearGradient>
+                              <linearGradient id="cityGrad2" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.3" />
+                                <stop offset="100%" stopColor="#0284c7" stopOpacity="0.6" />
+                              </linearGradient>
+                            </defs>
+                            {/* Back layer buildings */}
+                            <path
+                              fill="url(#cityGrad1)"
+                              d="M0 300 L0 180 L40 180 L40 150 L60 150 L60 180 L120 180 L120 110 L130 110 L130 90 L140 110 L180 110 L180 200 L240 200 L240 130 L270 130 L270 200 L320 200 L320 160 L360 160 L360 90 L390 90 L390 200 L440 200 L440 140 L480 140 L480 200 L540 200 L540 110 L550 110 L550 80 L560 110 L600 110 L600 200 L660 200 L660 150 L710 150 L710 200 L760 200 L760 120 L810 120 L810 200 L870 200 L870 140 L910 140 L910 200 L960 200 L960 100 L970 100 L970 70 L980 100 L1020 100 L1020 200 L1080 200 L1080 150 L1130 150 L1130 200 L1200 200 L1200 300 Z"
+                            />
+                            {/* Front layer buildings */}
+                            <path
+                              fill="url(#cityGrad2)"
+                              d="M0 300 L0 220 L30 220 L30 190 L70 190 L70 230 L100 230 L100 160 L140 160 L140 230 L200 230 L200 170 L250 170 L250 230 L300 230 L300 180 L340 180 L340 230 L400 230 L400 150 L450 150 L450 230 L500 230 L500 190 L530 190 L530 230 L580 230 L580 170 L630 170 L630 230 L690 230 L690 180 L740 180 L740 230 L790 230 L790 160 L840 160 L840 230 L890 230 L890 190 L940 190 L940 230 L1000 230 L1000 170 L1050 170 L1050 230 L1110 230 L1110 190 L1150 190 L1150 230 L1200 230 L1200 300 Z"
+                            />
+                          </svg>
+                        </div>
+                      </div>
+
+                      {/* TOP HEADER BAR (Exactly as shown in user screenshot) */}
+                      <div className="relative z-20 w-full px-5 pt-4 flex items-center justify-between pointer-events-auto">
+                        {/* Left: Timer Display (e.g. 0:38) */}
+                        <div className="flex items-center">
+                          <span className="text-white font-sans text-2xl sm:text-3xl font-black drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)] tracking-wider">
+                            {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, "0")}
+                          </span>
+                        </div>
+
+                        {/* Center: Result Banner (e.g. "خطأ!" or "صحيح! 🎉") */}
+                        <div className="flex-1 flex items-center justify-center">
+                          <AnimatePresence>
+                            {airplaneBanner && (
+                              <motion.div
+                                key={airplaneBanner}
+                                initial={{ opacity: 0, scale: 0.5, y: -10 }}
+                                animate={{ opacity: 1, scale: 1, y: 0 }}
+                                exit={{ opacity: 0, scale: 0.8 }}
+                                transition={{ type: "spring", stiffness: 350, damping: 20 }}
+                                className={`text-2xl sm:text-4xl font-black drop-shadow-[0_3px_6px_rgba(0,0,0,0.6)] ${
+                                  airplaneBannerType === "correct"
+                                    ? "text-emerald-100 drop-shadow-[0_0_20px_rgba(16,185,129,0.9)]"
+                                    : "text-white drop-shadow-[0_0_20px_rgba(239,68,68,0.9)]"
+                                }`}
+                              >
+                                {airplaneBanner}
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
+
+                        {/* Right: Lives Hearts & Correct Score (e.g. 🤍 🤍 1✔) */}
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1 text-xl sm:text-2xl select-none">
+                            {[0, 1, 2].map(idx => (
+                              <span 
+                                key={idx} 
+                                className={`transition-all duration-300 drop-shadow-[0_2px_4px_rgba(0,0,0,0.4)] ${
+                                  idx < airplaneLives ? 'text-red-500 scale-100' : 'text-white/85 scale-90'
+                                }`}
+                              >
+                                {idx < airplaneLives ? '❤️' : '🤍'}
+                              </span>
+                            ))}
+                          </div>
+
+                          <span className="text-white font-sans text-xl sm:text-2xl font-black drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)] mr-1">
+                            {correctCount}✔
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* FLIGHT SKY & CLOUDS INTERACTIVE STAGE */}
+                      <div 
+                        ref={airplaneArenaRef}
+                        onPointerMove={handleArenaPointerMove}
+                        onPointerDown={handleArenaPointerMove}
+                        className="relative flex-1 w-full overflow-hidden select-none cursor-crosshair touch-none"
+                      >
+                        {/* Render Floating & Moving Answer Clouds */}
+                        {(airplaneClouds && airplaneClouds.length > 0
+                          ? airplaneClouds
+                          : (activeChallenge.questions[currentQuestionIdx]?.options || []).map((opt, i) => ({
+                              idx: i,
+                              text: opt,
+                              x: 20 + i * 25,
+                              y: 30 + (i % 2) * 30,
+                              baseY: 30 + (i % 2) * 30,
+                              speed: 0.16,
+                              waveOffset: 0
+                            }))
+                        ).map((cloud) => {
+                          const optIdx = cloud.idx;
+                          const isSelected = selectedAnswerIdx === optIdx;
+                          const isTargeted = airplaneTargetCloud === optIdx;
+                          const isHovered = airplaneHoverIdx === optIdx;
+                          const q = activeChallenge.questions[currentQuestionIdx];
+                          const isThisCorrect = checkIsCorrect(q, optIdx);
+
+                          let cloudSkin = "normal";
+                          if (isAnswerRevealed) {
+                            if (isThisCorrect) cloudSkin = "correct";
+                            else if (isSelected && !isThisCorrect) cloudSkin = "wrong";
+                          }
+
+                          return (
+                            <div
+                              key={`cloud-option-${optIdx}`}
+                              ref={(el) => { cloudDomRefs.current[optIdx] = el; }}
+                              style={{
+                                left: `${cloud.x}%`,
+                                top: `${cloud.y}%`,
+                                transform: 'translate(-50%, -50%)',
+                              }}
+                              className="absolute z-15 pointer-events-none select-none"
+                            >
+                              {/* 3D Realistic Cloud Graphic */}
+                              <div className="relative filter drop-shadow-[0_12px_16px_rgba(0,0,0,0.18)]">
+                                <svg
+                                  className={`w-44 sm:w-56 md:w-64 h-24 sm:h-28 transition-colors duration-300 ${
+                                    cloudSkin === "correct"
+                                      ? "text-emerald-100 drop-shadow-[0_0_25px_rgba(16,185,129,0.7)]"
+                                      : cloudSkin === "wrong"
+                                      ? "text-slate-700 drop-shadow-[0_0_25px_rgba(239,68,68,0.7)]"
+                                      : isHovered
+                                      ? "text-sky-50 drop-shadow-[0_0_20px_rgba(255,255,255,0.9)]"
+                                      : "text-white"
+                                  }`}
+                                  viewBox="0 0 240 120"
+                                  fill="currentColor"
+                                >
+                                  {/* Puffy multi-lobed cloud path */}
+                                  <path d="M 45,95 Q 15,95 15,70 Q 15,50 35,45 Q 40,20 70,20 Q 90,20 100,32 Q 115,10 145,10 Q 180,10 190,38 Q 215,35 225,58 Q 235,80 215,95 Q 200,95 185,95 Z" />
+                                  <ellipse cx="65" cy="72" rx="42" ry="26" />
+                                  <ellipse cx="120" cy="62" rx="55" ry="36" />
+                                  <ellipse cx="175" cy="72" rx="42" ry="26" />
+                                  <ellipse cx="95" cy="48" rx="35" ry="28" />
+                                  <ellipse cx="150" cy="45" rx="38" ry="28" />
+                                </svg>
+
+                                {/* Storm Lightning Flash on Wrong Cloud */}
+                                {cloudSkin === "wrong" && (
+                                  <motion.div
+                                    initial={{ opacity: 0, scale: 0.5 }}
+                                    animate={{ opacity: [0, 1, 0, 1, 0.8], scale: 1 }}
+                                    transition={{ duration: 0.4 }}
+                                    className="absolute -top-3 left-1/2 -translate-x-1/2 text-3xl select-none"
+                                  >
+                                    ⚡
+                                  </motion.div>
+                                )}
+
+                                {/* Sparkle Stars on Correct Cloud */}
+                                {cloudSkin === "correct" && (
+                                  <motion.div
+                                    initial={{ opacity: 0, scale: 0.5 }}
+                                    animate={{ opacity: 1, scale: [0.8, 1.2, 1] }}
+                                    transition={{ duration: 0.5 }}
+                                    className="absolute -top-4 left-1/2 -translate-x-1/2 flex items-center gap-1 text-xl select-none"
+                                  >
+                                    <span>✨</span>
+                                    <span className="text-xs font-black bg-emerald-600 text-white px-2 py-0.5 rounded-full shadow-md">
+                                      +150 🌟
+                                    </span>
+                                    <span>✨</span>
+                                  </motion.div>
+                                )}
+
+                                {/* Option Content Inside Cloud */}
+                                <div className="absolute inset-0 flex flex-col items-center justify-center p-3 text-center pointer-events-none">
+                                  <span className={`font-black text-xs sm:text-sm md:text-base leading-snug line-clamp-2 px-3 select-none ${
+                                    cloudSkin === "wrong" ? "text-white" : "text-slate-900"
+                                  }`}>
+                                    {cloud.text}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                        {/* On-screen Vertical Steering Controls (Touch & Keyboard Helper) */}
+                        <div className="absolute bottom-3 left-3 sm:bottom-4 sm:left-4 z-30 flex flex-col gap-2 pointer-events-auto">
+                          <button
+                            type="button"
+                            onPointerDown={(e) => { e.stopPropagation(); steerAirplaneVertical(-12); }}
+                            className="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl bg-white/85 hover:bg-white active:bg-sky-200 text-sky-900 shadow-xl flex items-center justify-center text-lg sm:text-xl font-black border-2 border-sky-300/80 transition transform active:scale-95 cursor-pointer backdrop-blur-xs"
+                            title="توجيه الطائرة للأعلى ⬆️"
+                          >
+                            ▲
+                          </button>
+                          <button
+                            type="button"
+                            onPointerDown={(e) => { e.stopPropagation(); steerAirplaneVertical(12); }}
+                            className="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl bg-white/85 hover:bg-white active:bg-sky-200 text-sky-900 shadow-xl flex items-center justify-center text-lg sm:text-xl font-black border-2 border-sky-300/80 transition transform active:scale-95 cursor-pointer backdrop-blur-xs"
+                            title="توجيه الطائرة للأسفل ⬇️"
+                          >
+                            ▼
+                          </button>
+                        </div>
+
+                        {/* RED PROPELLER AIRPLANE (Identical to user's uploaded image!) */}
+                        <div
+                          ref={airplaneSpriteRef}
+                          style={{
+                            left: `${airplanePos.x}%`,
+                            top: `${airplanePos.y}%`,
+                            transform: `translate(-50%, -50%) rotate(${airplaneAngle}deg)`,
+                            transition: airplaneState === "zooming" ? "left 0.28s cubic-bezier(0.4, 0, 0.2, 1), top 0.28s cubic-bezier(0.4, 0, 0.2, 1)" : "none",
+                            width: "110px",
+                            height: "70px",
+                          }}
+                          className="absolute z-25 pointer-events-none"
+                        >
+                          {/* Propeller Vapor Trail */}
+                          <div className="absolute -left-6 top-1/2 -translate-y-1/2 flex items-center space-x-1 opacity-60">
+                            <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+                            <span className="w-3 h-1.5 rounded-full bg-white/70 blur-[1px]" />
+                          </div>
+
+                          {/* High Quality Red Passenger Propeller Airplane SVG */}
+                          <svg
+                            className="w-full h-full filter drop-shadow-[0_8px_12px_rgba(0,0,0,0.35)]"
+                            viewBox="0 0 160 100"
+                            fill="none"
+                          >
+                            {/* Tail Rudder (Red with white trim) */}
+                            <path d="M 15 48 L 5 15 L 28 15 L 35 48 Z" fill="#b91c1c" />
+                            <path d="M 5 15 L 28 15 L 24 24 L 8 24 Z" fill="#f87171" />
+                            
+                            {/* Horizontal Stabilizers */}
+                            <path d="M 8 50 L 2 44 L 20 44 L 26 50 Z" fill="#991b1b" />
+
+                            {/* Main Fuselage (Curved aerodynamic red cabin) */}
+                            <path
+                              d="M 22 52 C 20 42, 35 34, 60 33 C 95 32, 130 36, 145 48 C 150 52, 150 56, 144 60 C 130 68, 95 70, 60 69 C 35 68, 20 62, 22 52 Z"
+                              fill="#dc2626"
+                            />
+                            {/* Fuselage top highlight */}
+                            <path
+                              d="M 35 42 C 55 36, 100 36, 140 48 C 120 42, 75 40, 35 42 Z"
+                              fill="#f87171"
+                              opacity="0.8"
+                            />
+
+                            {/* White Racing Stripe */}
+                            <path
+                              d="M 28 54 C 55 52, 100 52, 142 53 C 142 56, 100 55, 28 57 Z"
+                              fill="#ffffff"
+                            />
+
+                            {/* Cockpit Windshield (Glass Blue) */}
+                            <path
+                              d="M 124 43 C 132 44, 138 48, 142 52 L 130 52 C 126 48, 124 45, 124 43 Z"
+                              fill="#38bdf8"
+                              stroke="#ffffff"
+                              strokeWidth="1"
+                            />
+                            {/* Cabin Windows (Round Portholes) */}
+                            <circle cx="108" cy="48" r="3.5" fill="#bae6fd" stroke="#991b1b" strokeWidth="0.8" />
+                            <circle cx="92" cy="48" r="3.5" fill="#bae6fd" stroke="#991b1b" strokeWidth="0.8" />
+                            <circle cx="76" cy="48" r="3.5" fill="#bae6fd" stroke="#991b1b" strokeWidth="0.8" />
+                            <circle cx="60" cy="48" r="3.5" fill="#bae6fd" stroke="#991b1b" strokeWidth="0.8" />
+
+                            {/* Main Wing (Red with darker underwing shadow) */}
+                            <path
+                              d="M 68 53 L 88 88 C 94 90, 102 88, 102 84 L 98 53 Z"
+                              fill="#b91c1c"
+                            />
+                            <path
+                              d="M 72 53 L 90 84 L 96 84 L 95 53 Z"
+                              fill="#ef4444"
+                            />
+                            {/* Wingtip Light */}
+                            <circle cx="96" cy="86" r="2" fill="#22c55e" />
+
+                            {/* Front Nose Spinner Hub */}
+                            <path
+                              d="M 144 48 C 152 50, 155 54, 144 58 Z"
+                              fill="#e2e8f0"
+                            />
+
+                            {/* High-speed Spinning Propeller Blur Effect */}
+                            <g className="origin-[148px_53px]">
+                              <ellipse cx="149" cy="53" rx="2.5" ry="24" fill="#f8fafc" opacity="0.75" />
+                              <ellipse cx="149" cy="53" rx="1.5" ry="18" fill="#38bdf8" opacity="0.4" />
+                            </g>
+                          </svg>
+
+                          {/* Airplane State Reactions */}
+                          {airplaneState === "celebrating" && (
+                            <motion.div
+                              initial={{ scale: 0 }}
+                              animate={{ scale: [0, 1.4, 1] }}
+                              className="absolute -top-4 -right-2 text-2xl select-none"
+                            >
+                              🌟
+                            </motion.div>
+                          )}
+                          {airplaneState === "hit_wrong" && (
+                            <motion.div
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: [0, 1, 0] }}
+                              transition={{ duration: 0.5 }}
+                              className="absolute -top-3 left-1/2 -translate-x-1/2 text-2xl select-none"
+                            >
+                              💨
+                            </motion.div>
+                          )}
+                        </div>
+
+                        {/* Confetti & Sparkles */}
+                        {particles.map(p => (
+                          <div
+                            key={p.id}
+                            style={{ left: `${p.x}%`, top: `${p.y}%`, backgroundColor: p.color }}
+                            className="absolute w-3.5 h-3.5 rounded-full animate-ping z-30 pointer-events-none shadow-md"
+                          />
+                        ))}
+
+                        {/* On-Screen Aerodynamic Flight Controls (Arrow Pad for Touch & Mouse) */}
+                        <div className="absolute bottom-3 left-3 sm:bottom-4 sm:left-4 z-30 pointer-events-auto flex items-center gap-1.5 bg-slate-950/50 backdrop-blur-md p-1.5 rounded-2xl border border-white/20 shadow-2xl select-none">
+                          {/* Left Arrow Button */}
+                          <button
+                            type="button"
+                            onPointerDown={(e) => { e.preventDefault(); airplaneArrowHoldRef.current.left = true; }}
+                            onPointerUp={() => { airplaneArrowHoldRef.current.left = false; }}
+                            onPointerLeave={() => { airplaneArrowHoldRef.current.left = false; }}
+                            onPointerCancel={() => { airplaneArrowHoldRef.current.left = false; }}
+                            className="w-10 h-10 rounded-xl bg-white/15 hover:bg-sky-500/40 active:bg-sky-500/70 text-white font-black text-sm sm:text-base flex items-center justify-center border border-white/10 transition active:scale-95 shadow-sm"
+                            title="تحريك لليسار (◄)"
+                          >
+                            ◄
+                          </button>
+
+                          {/* Vertical Column (Up & Down) */}
+                          <div className="flex flex-col gap-1">
+                            <button
+                              type="button"
+                              onPointerDown={(e) => { e.preventDefault(); airplaneArrowHoldRef.current.up = true; }}
+                              onPointerUp={() => { airplaneArrowHoldRef.current.up = false; }}
+                              onPointerLeave={() => { airplaneArrowHoldRef.current.up = false; }}
+                              onPointerCancel={() => { airplaneArrowHoldRef.current.up = false; }}
+                              className="w-10 h-8 rounded-xl bg-white/15 hover:bg-sky-500/40 active:bg-sky-500/70 text-white font-black text-xs sm:text-sm flex items-center justify-center border border-white/10 transition active:scale-95 shadow-sm"
+                              title="صعود للأعلى (▲)"
+                            >
+                              ▲
+                            </button>
+                            <button
+                              type="button"
+                              onPointerDown={(e) => { e.preventDefault(); airplaneArrowHoldRef.current.down = true; }}
+                              onPointerUp={() => { airplaneArrowHoldRef.current.down = false; }}
+                              onPointerLeave={() => { airplaneArrowHoldRef.current.down = false; }}
+                              onPointerCancel={() => { airplaneArrowHoldRef.current.down = false; }}
+                              className="w-10 h-8 rounded-xl bg-white/15 hover:bg-sky-500/40 active:bg-sky-500/70 text-white font-black text-xs sm:text-sm flex items-center justify-center border border-white/10 transition active:scale-95 shadow-sm"
+                              title="هبوط للأسفل (▼)"
+                            >
+                              ▼
+                            </button>
+                          </div>
+
+                          {/* Right Arrow Button */}
+                          <button
+                            type="button"
+                            onPointerDown={(e) => { e.preventDefault(); airplaneArrowHoldRef.current.right = true; }}
+                            onPointerUp={() => { airplaneArrowHoldRef.current.right = false; }}
+                            onPointerLeave={() => { airplaneArrowHoldRef.current.right = false; }}
+                            onPointerCancel={() => { airplaneArrowHoldRef.current.right = false; }}
+                            className="w-10 h-10 rounded-xl bg-white/15 hover:bg-sky-500/40 active:bg-sky-500/70 text-white font-black text-sm sm:text-base flex items-center justify-center border border-white/10 transition active:scale-95 shadow-sm"
+                            title="تحريك لليمين (►)"
+                          >
+                            ►
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* BOTTOM QUESTION BAR (Identical to screenshot!) */}
+                      <div className="relative z-20 w-full px-4 pb-3 flex flex-col items-center gap-2 pointer-events-auto">
+                        {/* Question Card Box */}
+                        <div className="w-full max-w-3xl bg-slate-900/90 border border-slate-700/80 rounded-2xl sm:rounded-3xl p-3 sm:p-4 text-center shadow-2xl backdrop-blur-md flex items-center justify-between gap-3">
+                          {/* Menu Bar Icon Left */}
+                          <button
+                            type="button"
+                            onClick={() => triggerToast("استخدم الفأرة أو اللمس لتوجيه الطائرة نحو السحابة ذات الإجابة الصحيحة ☁️✈️", "info")}
+                            className="p-2 text-slate-400 hover:text-white transition rounded-xl hover:bg-slate-800 shrink-0 cursor-pointer"
+                            title="تعليمات اللعبة"
+                          >
+                            <span className="text-lg">☰</span>
+                          </button>
+
+                          {/* Question Text in Center */}
+                          <div className="flex-1 text-center">
+                            <h3 className="text-white font-black text-sm sm:text-base md:text-lg leading-relaxed line-clamp-2">
+                              {activeChallenge.questions[currentQuestionIdx]?.text}
+                            </h3>
+                          </div>
+
+                          {/* Right Controls (Audio & Fullscreen) */}
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => setSoundEnabled(!soundEnabled)}
+                              className="p-2 text-slate-400 hover:text-white transition rounded-xl hover:bg-slate-800 cursor-pointer"
+                              title={soundEnabled ? "كتم الصوت" : "تشغيل الصوت"}
+                            >
+                              {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setIsAirplaneFullscreen(!isAirplaneFullscreen)}
+                              className="p-2 text-slate-400 hover:text-white transition rounded-xl hover:bg-slate-800 cursor-pointer"
+                              title={isAirplaneFullscreen ? "تصغير الشاشة" : "ملء الشاشة"}
+                            >
+                              {isAirplaneFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Flight Guidance Indicator */}
+                        <div className="flex items-center gap-2 text-xs text-sky-200/90 bg-slate-900/80 border border-sky-500/30 px-3.5 py-1.5 rounded-full backdrop-blur-md font-bold shadow-lg">
+                          <span>✈️</span>
+                          <span>وجّه الطائرة باللمس أو الأسهم للاصطدام بسحابة الإجابة الصحيحة</span>
+                        </div>
+                      </div>
+
+                      {/* Game Intro & Preview Overlay */}
+                      {isQuestionIntro && (
+                        <div className="absolute inset-0 bg-slate-950/90 z-40 flex flex-col items-center justify-center p-4 sm:p-6 text-center overflow-hidden">
+                          {gameIntroStage === "preview" ? (
+                            <motion.div
+                              initial={{ opacity: 0, scale: 0.9 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              className="relative z-10 max-w-lg w-full bg-slate-900/95 border border-sky-400/40 p-6 rounded-3xl shadow-[0_0_50px_rgba(56,189,248,0.3)] backdrop-blur-xl space-y-5"
+                            >
+                              <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-sky-500/20 border border-sky-400/30 text-sky-200 text-xs font-black tracking-wide">
+                                <span>✈️ مغامرة طائرة السحاب</span>
+                                <span className="w-2 h-2 rounded-full bg-yellow-400 animate-ping" />
+                              </div>
+
+                              <div className="relative py-4 flex items-center justify-center h-24">
+                                <motion.div
+                                  animate={{
+                                    y: [0, -15, 0],
+                                    rotate: [0, 8, -8, 0],
+                                  }}
+                                  transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
+                                  className="text-6xl select-none drop-shadow-[0_0_20px_rgba(56,189,248,0.8)]"
+                                >
+                                  ✈️
+                                </motion.div>
+                              </div>
+
+                              <div className="space-y-2">
+                                <h3 className="text-xl md:text-2xl font-black text-white drop-shadow-md">
+                                  حلّق في السماء واخترق سحب الإجابة الصحيحة! ☁️✈️
+                                </h3>
+                                <p className="text-xs sm:text-sm text-slate-300 font-bold leading-relaxed">
+                                  وجّه الطائرة باللمس أو الأسهم للاصطدام بسحابة الإجابة الصحيحة لكسب النقاط والتقدم! ✈️☁️
+                                </p>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const q = activeChallenge.questions[currentQuestionIdx];
+                                  if (q) triggerGameCountdown(currentQuestionIdx, "cloud_airplane", q);
+                                }}
+                                className="w-full py-3.5 bg-gradient-to-r from-sky-500 via-blue-600 to-indigo-600 hover:from-sky-400 hover:to-blue-500 text-white rounded-2xl text-sm font-black shadow-lg shadow-sky-950 transition transform active:scale-95 cursor-pointer flex items-center justify-center gap-2 border border-sky-300/30"
+                              >
+                                <span>بدء التحليق الآن ✈️</span>
+                              </button>
+                            </motion.div>
+                          ) : (
+                            <div className="relative z-10 max-w-lg w-full flex flex-col items-center justify-center space-y-6">
+                              <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-sky-500/10 border border-sky-400/30 text-sky-300 text-xs font-black shadow-md animate-pulse">
+                                <span>✈️ استعد للتحليق...</span>
+                              </div>
+
+                              <div className="relative flex items-center justify-center w-36 h-36">
+                                <AnimatePresence mode="wait">
+                                  {introCountdown > 0 && (
+                                    <motion.span
+                                      key={`cloud-count-${introCountdown}`}
+                                      initial={{ scale: 0.2, opacity: 0 }}
+                                      animate={{ scale: [0.2, 1.4, 1], opacity: 1 }}
+                                      exit={{ scale: 1.8, opacity: 0 }}
+                                      className="text-7xl font-sans font-black text-sky-300 drop-shadow-[0_0_35px_#38bdf8]"
+                                    >
+                                      {introCountdown}
+                                    </motion.span>
+                                  )}
+                                  {introCountdown === 0 && (
+                                    <motion.div
+                                      key="cloud-count-go"
+                                      initial={{ scale: 0.3, opacity: 0 }}
+                                      animate={{ scale: [0.3, 1.3, 1], opacity: 1 }}
+                                      className="text-3xl sm:text-4xl font-black text-yellow-300 drop-shadow-[0_0_40px_#fde047] whitespace-nowrap"
+                                    >
+                                      ✈️ حلّق الآن! ✨
+                                    </motion.div>
+                                  )}
+                                </AnimatePresence>
+                              </div>
+
+                              <div className="bg-slate-900/90 border border-sky-500/40 p-4 rounded-2xl max-w-md w-full text-center space-y-1 shadow-xl backdrop-blur-md">
+                                <span className="text-[10px] text-sky-300 font-extrabold uppercase tracking-widest">السؤال الحالي</span>
+                                <p className="text-sm md:text-base font-black text-white line-clamp-2">
+                                  {activeChallenge.questions[currentQuestionIdx]?.text}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   )}

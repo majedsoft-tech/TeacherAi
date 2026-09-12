@@ -8729,12 +8729,13 @@ export default function App() {
       const secs = quizTimer % 60;
       const displayTime = `${mins}:${secs < 10 ? "0" : ""}${secs}`;
 
-      // Submit Button Activation: Configured by Teacher (or defaults to 5 minutes before end)
-      const isUntimedQuiz = studentQuiz.durationMinutes === 9999;
-      const isSubmitLockConfigured = studentQuiz.enableSubmitLock !== false;
+      // Submit Button Activation: Live-synced with latest teacher configurations in real-time
+      const liveQuizRecord = quizzes.find((q) => q.id === studentQuiz.id) || studentQuiz;
+      const isUntimedQuiz = (liveQuizRecord.durationMinutes ?? studentQuiz.durationMinutes) === 9999;
+      const isSubmitLockConfigured = (liveQuizRecord.enableSubmitLock ?? studentQuiz.enableSubmitLock) !== false;
       const submitUnlockMinutes = Math.min(
-        studentQuiz.durationMinutes || 15,
-        Math.max(1, studentQuiz.submitLockMinutesBeforeEnd ?? 5),
+        liveQuizRecord.durationMinutes || studentQuiz.durationMinutes || 15,
+        Math.max(1, liveQuizRecord.submitLockMinutesBeforeEnd ?? studentQuiz.submitLockMinutesBeforeEnd ?? 5),
       );
       const submitUnlockThreshold = submitUnlockMinutes * 60; // in seconds
 

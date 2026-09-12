@@ -769,6 +769,20 @@ export const FIXED_GAMES = [
     title: "سباق السيارات السريع 🏎️",
     badge: "🏎️ سباق السيارات",
     desc: "قيادة السيارة على مضمار المراجعة وتجاوز العقبات بالإجابات الصحيحة"
+  },
+  {
+    gameType: "penalty_shootout",
+    id: "fixed_game_penalty_shootout",
+    title: "ركلات الترجيح وكأس الأبطال ⚽",
+    badge: "⚽ ركلات الترجيح",
+    desc: "تسديد ركلات الترجيح وهز شباك المرمى باختيار زاوية الإجابة الصحيحة"
+  },
+  {
+    gameType: "cloud_airplane",
+    id: "fixed_game_cloud_airplane",
+    title: "طائرة الغيوم - محلق السماء ✈️",
+    badge: "✈️ طائرة الغيوم",
+    desc: "التحليق بالطائرة في السماء واختراق السحابة التي تحمل الإجابة الصحيحة وتجنب السحب الخاطئة"
   }
 ];
 
@@ -820,7 +834,7 @@ export default function ReviewsAdminTab({
   const [newSubject, setNewSubject] = useState("");
   const [newGrade, setNewGrade] = useState("جميع الفصول (عام)"); // Available to everyone by default
   const [newSemester, setNewSemester] = useState("عام"); // Default/cancelled semester
-  const [newGameType, setNewGameType] = useState<'quiz_game' | 'time_attack' | 'space_invaders' | 'car_racing' | 'wayground_arena'>("space_invaders");
+  const [newGameType, setNewGameType] = useState<'quiz_game' | 'time_attack' | 'space_invaders' | 'car_racing' | 'penalty_shootout' | 'cloud_airplane' | 'wayground_arena'>("space_invaders");
   const [selectedQuizIdForImport, setSelectedQuizIdForImport] = useState("");
   const [selectedQuestions, setSelectedQuestions] = useState<Question[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -2127,7 +2141,7 @@ export default function ReviewsAdminTab({
                   <div>
                     <h3 className="text-base sm:text-lg font-black text-slate-800 flex items-center gap-2">
                       <Gamepad2 className="w-5 h-5 text-indigo-600" />
-                      الألعاب والتحديات التفاعلية المثبتة (3 ألعاب)
+                      الألعاب والتحديات التفاعلية المثبتة (4 ألعاب)
                     </h3>
                     <p className="text-xs text-slate-500 font-bold mt-0.5">
                       الألعاب مثبتة بصفحة المعلم والطالب. اضغط "تغيير الأسئلة" لتعديل أو استيراد أسئلة اللعبة وتفعيلها فوراً للطلاب!
@@ -2136,7 +2150,7 @@ export default function ReviewsAdminTab({
 
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
               {FIXED_GAMES.map((fg) => {
                 const { targetChallenge } = getResolvedChallenge(fg.id);
                 const challenge = targetChallenge;
@@ -2208,6 +2222,58 @@ export default function ReviewsAdminTab({
                             </div>
                           </div>
                         </div>
+                      ) : fg.gameType === "penalty_shootout" ? (
+                        <div className="w-full h-full bg-gradient-to-br from-emerald-950 via-teal-950 to-slate-950 border-b-2 border-emerald-500/50 flex flex-col justify-between p-3.5 relative overflow-hidden">
+                          <div className="absolute inset-0 bg-emerald-900/20 flex items-center justify-center opacity-40 pointer-events-none">
+                            <div className="w-24 h-16 border-2 border-white/60 rounded-t-md" />
+                          </div>
+                          <div className="relative z-10 flex justify-between items-center">
+                            <span className="text-[10px] font-black text-emerald-300 bg-slate-950/90 px-2.5 py-1 rounded-full border border-emerald-500/40 shadow-xs">
+                              ⚽ PENALTY CUP
+                            </span>
+                            {isActivated ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-500 text-white shadow-xs animate-pulse">
+                                مفعلة 🟢
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-slate-800 text-slate-300 border border-slate-700">
+                                غير مفعلة ⏸️
+                              </span>
+                            )}
+                          </div>
+                          <div className="relative z-10 my-auto text-center space-y-1">
+                            <div className="text-3xl animate-bounce">⚽</div>
+                            <div className="text-[11px] font-black text-emerald-200 tracking-wide uppercase">
+                              ركلات الترجيح
+                            </div>
+                          </div>
+                        </div>
+                      ) : fg.gameType === "cloud_airplane" ? (
+                        <div className="w-full h-full bg-gradient-to-br from-sky-600 via-sky-500 to-blue-600 border-b-2 border-sky-300/50 flex flex-col justify-between p-3.5 relative overflow-hidden">
+                          <div className="absolute inset-0 bg-white/10 flex items-center justify-center opacity-40 pointer-events-none">
+                            <div className="text-4xl">☁️</div>
+                          </div>
+                          <div className="relative z-10 flex justify-between items-center">
+                            <span className="text-[10px] font-black text-white bg-slate-950/80 px-2.5 py-1 rounded-full border border-sky-300/40 shadow-xs">
+                              ✈️ SKY AIRPLANE
+                            </span>
+                            {isActivated ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-500 text-white shadow-xs animate-pulse">
+                                مفعلة 🟢
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-slate-800 text-slate-300 border border-slate-700">
+                                غير مفعلة ⏸️
+                              </span>
+                            )}
+                          </div>
+                          <div className="relative z-10 my-auto text-center space-y-1">
+                            <div className="text-3xl animate-bounce">✈️</div>
+                            <div className="text-[11px] font-black text-sky-100 tracking-wide uppercase">
+                              طائرة الغيوم
+                            </div>
+                          </div>
+                        </div>
                       ) : (
                         <div className="w-full h-full bg-gradient-to-br from-purple-950 via-indigo-900 to-purple-900 border-b-2 border-purple-500/50 flex flex-col justify-between p-3.5 relative">
                           <div className="relative z-10 flex justify-between items-center">
@@ -2240,7 +2306,7 @@ export default function ReviewsAdminTab({
                     {/* Full Width Game Type Bar attached to Top Banner */}
                     <div className="w-full bg-gradient-to-r from-indigo-50 via-blue-50 to-indigo-50 border-y border-indigo-200/90 py-2.5 px-4 text-center">
                       <span className="text-sm sm:text-base font-black text-indigo-900 tracking-wide">
-                        {fg.gameType === "space_invaders" ? "الفضاء 🚀" : fg.gameType === "car_racing" ? "السيارات 🏎️" : "Quiz Plus 🎪"}
+                        {fg.gameType === "space_invaders" ? "الفضاء 🚀" : fg.gameType === "car_racing" ? "السيارات 🏎️" : fg.gameType === "penalty_shootout" ? "ركلات الترجيح ⚽" : fg.gameType === "cloud_airplane" ? "طائرة الغيوم ✈️" : "Quiz Plus 🎪"}
                       </span>
                     </div>
 
@@ -2448,7 +2514,7 @@ export default function ReviewsAdminTab({
                     <h4 className="text-xs md:text-sm font-black text-slate-800">تحديد اختيار أسئلة التحدي من بنك الأسئلة 📚</h4>
                   </div>
                   <span className="text-xs font-black px-3 py-1 rounded-full bg-indigo-100 text-indigo-800 border border-indigo-300">
-                    اللعبة: {newGameType === "space_invaders" ? "الفضاء 🚀" : newGameType === "car_racing" ? "السيارات 🏎️" : "Quiz Plus 🎪"}
+                    اللعبة: {newGameType === "space_invaders" ? "الفضاء 🚀" : newGameType === "car_racing" ? "السيارات 🏎️" : newGameType === "penalty_shootout" ? "ركلات الترجيح ⚽" : newGameType === "cloud_airplane" ? "طائرة الغيوم ✈️" : "Quiz Plus 🎪"}
                   </span>
                 </div>
 
@@ -4053,6 +4119,10 @@ export default function ReviewsAdminTab({
                               ? "معركة الفضاء 🚀"
                               : targetChallenge?.gameType === "car_racing" || fixedGameMeta.gameType === "car_racing"
                               ? "سباق السيارات 🏎️"
+                              : targetChallenge?.gameType === "penalty_shootout" || fixedGameMeta.gameType === "penalty_shootout"
+                              ? "ركلات الترجيح ⚽"
+                              : targetChallenge?.gameType === "cloud_airplane" || fixedGameMeta.gameType === "cloud_airplane"
+                              ? "طائرة الغيوم ✈️"
                               : fixedGameMeta.title
                           }
                         </span>

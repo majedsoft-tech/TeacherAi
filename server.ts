@@ -1023,6 +1023,16 @@ ${JSON.stringify(questionsPayload, null, 2)}`;
       if (quizData.status === "closed") {
         return res.status(403).json({ error: "عفواً، هذا الاختبار مغلق حالياً من قبل المعلم." });
       }
+      if (
+        quizData.targetStudentIds &&
+        Array.isArray(quizData.targetStudentIds) &&
+        quizData.targetStudentIds.length > 0
+      ) {
+        const reqStudentId = req.query.studentId as string;
+        if (reqStudentId && !quizData.targetStudentIds.includes(reqStudentId)) {
+          return res.status(403).json({ error: "عفواً، هذا الاختبار مخصص لطلاب محددين فقط." });
+        }
+      }
       if (quizData.availabilityStart) {
         const startTime = new Date(quizData.availabilityStart).getTime();
         if (!isNaN(startTime) && now < startTime) {
@@ -1093,6 +1103,16 @@ ${JSON.stringify(questionsPayload, null, 2)}`;
       const now = Date.now();
       if (quizData.status === "closed") {
         return res.status(403).json({ error: "عفواً، هذا الاختبار مغلق حالياً من قبل المعلم ولا يمكن قبول الإجابات." });
+      }
+      if (
+        quizData.targetStudentIds &&
+        Array.isArray(quizData.targetStudentIds) &&
+        quizData.targetStudentIds.length > 0
+      ) {
+        const sId = studentInfo.id;
+        if (sId && !quizData.targetStudentIds.includes(sId)) {
+          return res.status(403).json({ error: "عفواً، هذا الاختبار مخصص لطلاب محددين فقط." });
+        }
       }
       if (quizData.availabilityEnd) {
         const endTime = new Date(quizData.availabilityEnd).getTime();

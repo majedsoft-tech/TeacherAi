@@ -3307,6 +3307,9 @@ export default function App() {
     setBuilderGrade(quiz.grade || "");
     setBuilderSemester(quiz.semester || "");
     setBuilderCustomizeClass(!!(quiz.grade || quiz.semester));
+    setBuilderSelectedStudentIds(quiz.targetStudentIds || []);
+    setBuilderTargetStudentMode(quiz.targetStudentIds && quiz.targetStudentIds.length > 0 ? "selected" : "all");
+    setBuilderStudentSearch("");
     setBuilderShowResultToStudent(quiz.showResultToStudent ?? true);
     setBuilderShuffleQuestions(quiz.shuffleQuestions ?? false);
     setBuilderAvailabilityStart(quiz.availabilityStart || "");
@@ -3369,6 +3372,12 @@ export default function App() {
   const [builderEnableSubmitLock, setBuilderEnableSubmitLock] = useState(true);
   const [builderSubmitLockMinutes, setBuilderSubmitLockMinutes] = useState(5);
   const [builderHasAvailability, setBuilderHasAvailability] = useState(false);
+  const [builderSelectedStudentIds, setBuilderSelectedStudentIds] = useState<string[]>([]);
+  const [builderTargetStudentMode, setBuilderTargetStudentMode] = useState<"all" | "selected">("all");
+  const [builderStudentSearch, setBuilderStudentSearch] = useState("");
+  const [autoBuilderSelectedStudentIds, setAutoBuilderSelectedStudentIds] = useState<string[]>([]);
+  const [autoBuilderTargetStudentMode, setAutoBuilderTargetStudentMode] = useState<"all" | "selected">("all");
+  const [autoBuilderStudentSearch, setAutoBuilderStudentSearch] = useState("");
 
   // Immediate toggle and broadcast of submit button lock for in-progress & saved quizzes
   const handleToggleQuizSubmitLock = async (quizId: string, newLockState: boolean) => {
@@ -3547,6 +3556,9 @@ export default function App() {
     }
     setBuilderSemester("");
     setBuilderCustomizeClass(false);
+    setBuilderSelectedStudentIds([]);
+    setBuilderTargetStudentMode("all");
+    setBuilderStudentSearch("");
     setBuilderShowResultToStudent(true);
     setBuilderShuffleQuestions(true);
     setBuilderAvailabilityStart("");
@@ -3668,6 +3680,9 @@ export default function App() {
     setBuilderTargetGrade(importFilterGrade);
     setBuilderTargetSemester(importFilterSemester);
     setIsBuilderTargetAudienceEnabled(false);
+    setAutoBuilderSelectedStudentIds([]);
+    setAutoBuilderTargetStudentMode("all");
+    setAutoBuilderStudentSearch("");
     setAutoBuilderPublishNow(true);
     setShowBuilderAutoQuizModal(true);
   };
@@ -3676,6 +3691,11 @@ export default function App() {
   const handleConfirmBuilderAutoQuiz = async () => {
     if (!isBuilderTargetAudienceEnabled) {
       triggerToast("يرجى تفعيل مربع الاختيار لتحديد الفئة المستهدفة (الصف والفصل) لتوليد الاختبار.", "error");
+      return;
+    }
+
+    if (autoBuilderTargetStudentMode === "selected" && autoBuilderSelectedStudentIds.length === 0) {
+      triggerToast("لقد اخترت تخصيص طلاب محددين، يرجى تحديد طالب واحد على الأقل أو اختيار 'جميع طلاب الفصل'.", "error");
       return;
     }
 
@@ -3830,6 +3850,12 @@ export default function App() {
       requireAcademicId: false,
       requireClassGroup: false,
       teacherId: currentUser?.uid,
+      targetStudentIds:
+        isBuilderTargetAudienceEnabled &&
+        autoBuilderTargetStudentMode === "selected" &&
+        autoBuilderSelectedStudentIds.length > 0
+          ? autoBuilderSelectedStudentIds
+          : null,
       questions: mapped,
     };
 
@@ -4210,6 +4236,18 @@ export default function App() {
       return;
     }
 
+    if (
+      builderCustomizeClass &&
+      builderTargetStudentMode === "selected" &&
+      builderSelectedStudentIds.length === 0
+    ) {
+      triggerToast(
+        "لقد قمت باختيار تحديد طلاب معينين، يرجى تحديد طالب واحد على الأقل أو النقر على 'جميع طلاب الفصل'.",
+        "error"
+      );
+      return;
+    }
+
     for (let i = 0; i < finalQuestions.length; i++) {
       const q = finalQuestions[i];
       if (!q.text.trim()) {
@@ -4257,6 +4295,12 @@ export default function App() {
       requireClassGroup: builderRequireClassGroup,
       enableSubmitLock: builderIsTimed ? builderEnableSubmitLock : false,
       submitLockMinutesBeforeEnd: builderIsTimed ? Number(builderSubmitLockMinutes || 5) : 5,
+      targetStudentIds:
+        builderCustomizeClass &&
+        builderTargetStudentMode === "selected" &&
+        builderSelectedStudentIds.length > 0
+          ? builderSelectedStudentIds
+          : null,
       questions: finalQuestions.map((q, index) => ({
         ...q,
         points: Number(q.points || 1),
@@ -4278,6 +4322,9 @@ export default function App() {
       setBuilderSubject("");
       setBuilderDuration(15);
       setBuilderCustomizeClass(false);
+      setBuilderSelectedStudentIds([]);
+      setBuilderTargetStudentMode("all");
+      setBuilderStudentSearch("");
       setBuilderShowResultToStudent(true);
       setBuilderShuffleQuestions(true);
       setBuilderAvailabilityStart("");
@@ -5075,6 +5122,58 @@ export default function App() {
     }
     return unique;
   }, [getSemestersForGrade, builderGrade, gradesList]);
+
+  // Students belonging to the chosen grade & class in the quiz builder
+  const builderClassStudents = useMemo(() => {
+    if (!builderCustomizeClass || !builderGrade) return [];
+    return students.filter((s) => {
+      const gradeMatch = isGradeMatching(builderGrade, s.grade, s.gradeClass);
+      if (!gradeMatch) return false;
+      if (
+        builderSemester &&
+        builderSemester !== "جميع الفصول" &&
+        builderSemester !== "الكل" &&
+        builderSemester !== "جميع فصول الصف" &&
+        builderSemester !== "جميع الفصول والشعب (عام)"
+      ) {
+        return isClassMatching(builderSemester, s.semester, s.gradeClass);
+      }
+      return true;
+    });
+  }, [students, builderCustomizeClass, builderGrade, builderSemester]);
+
+  // Students belonging to the chosen audience in the automatic quiz builder
+  const autoBuilderClassStudents = useMemo(() => {
+    if (!isBuilderTargetAudienceEnabled) return [];
+    return students.filter((s) => {
+      if (builderTargetGrade && builderTargetGrade !== "all") {
+        const gradeMatch = isGradeMatching(builderTargetGrade, s.grade, s.gradeClass);
+        if (!gradeMatch) return false;
+      }
+      if (
+        builderTargetSemester &&
+        builderTargetSemester !== "all" &&
+        builderTargetSemester !== "جميع الفصول" &&
+        builderTargetSemester !== "جميع فصول الصف" &&
+        builderTargetSemester !== "جميع الفصول والشعب (عام)"
+      ) {
+        const classMatch = isClassMatching(builderTargetSemester, s.semester, s.gradeClass);
+        if (!classMatch) return false;
+      }
+      return true;
+    });
+  }, [students, isBuilderTargetAudienceEnabled, builderTargetGrade, builderTargetSemester]);
+
+  // Sync selected student IDs with available students when class/grade changes
+  useEffect(() => {
+    if (builderSelectedStudentIds.length > 0) {
+      const validIdSet = new Set(builderClassStudents.map((s) => s.id));
+      const retained = builderSelectedStudentIds.filter((id) => validIdSet.has(id));
+      if (retained.length !== builderSelectedStudentIds.length) {
+        setBuilderSelectedStudentIds(retained);
+      }
+    }
+  }, [builderClassStudents]);
 
   // Automatically sync select defaults when grades list loads or changes
   useEffect(() => {
@@ -6816,6 +6915,17 @@ export default function App() {
           )
         ) {
           return false;
+        }
+
+        // Specific targeted students check
+        if (
+          q.targetStudentIds &&
+          Array.isArray(q.targetStudentIds) &&
+          q.targetStudentIds.length > 0
+        ) {
+          if (!q.targetStudentIds.includes(activeStudent.id)) {
+            return false;
+          }
         }
 
         // Ensure student has not submitted this quiz yet (matching by title or finished state in storage)
@@ -10695,6 +10805,11 @@ export default function App() {
                                     {quiz.semester}
                                   </span>
                                 )}
+                                {quiz.targetStudentIds && quiz.targetStudentIds.length > 0 && (
+                                  <span className="px-1.5 py-0.5 text-[9px] font-black text-amber-800 bg-amber-50 border border-amber-200 rounded-lg shadow-3xs max-w-full truncate">
+                                    مخصص لـ {quiz.targetStudentIds.length} طلاب
+                                  </span>
+                                )}
                               </div>
                             ) : (
                               <div
@@ -11864,6 +11979,214 @@ export default function App() {
                                   ))}
                                 </select>
                               </div>
+                            </div>
+
+                            {/* Section: Select Specific Students in Chosen Class */}
+                            <div className="pt-4 border-t border-indigo-100/80 space-y-3.5">
+                              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5">
+                                <div>
+                                  <label className="text-xs sm:text-sm font-black text-slate-800 flex items-center gap-2">
+                                    <Users className="w-4 h-4 text-indigo-600" />
+                                    <span>تحديد وتخصيص الطلاب للاختبار:</span>
+                                  </label>
+                                  <span className="text-[11px] sm:text-xs text-slate-500 font-bold block mt-0.5">
+                                    يمكنك إتاحة الاختبار لجميع طلاب الفصل أو حصر تقديمه على طلاب معينين فقط.
+                                  </span>
+                                </div>
+
+                                {/* Mode Switcher Pills */}
+                                <div className="flex items-center gap-1.5 bg-white p-1 rounded-xl border border-indigo-200/80 shadow-2xs self-start sm:self-auto">
+                                  <button
+                                    type="button"
+                                    id="btn-target-all-class-students"
+                                    onClick={() => {
+                                      setBuilderTargetStudentMode("all");
+                                      setBuilderSelectedStudentIds([]);
+                                    }}
+                                    className={`px-3 py-1.5 text-xs font-black rounded-lg transition-all cursor-pointer ${
+                                      builderTargetStudentMode === "all"
+                                        ? "bg-indigo-600 text-white shadow-xs"
+                                        : "text-slate-600 hover:bg-slate-100"
+                                    }`}
+                                  >
+                                    جميع طلاب الفصل ({builderClassStudents.length})
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    id="btn-target-specific-class-students"
+                                    onClick={() => {
+                                      setBuilderTargetStudentMode("selected");
+                                    }}
+                                    className={`px-3 py-1.5 text-xs font-black rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                                      builderTargetStudentMode === "selected"
+                                        ? "bg-indigo-600 text-white shadow-xs"
+                                        : "text-slate-600 hover:bg-slate-100"
+                                    }`}
+                                  >
+                                    <span>تحديد طلاب محددين</span>
+                                    {builderSelectedStudentIds.length > 0 && (
+                                      <span
+                                        className={`text-[10px] px-1.5 py-0.5 rounded-full font-black ${
+                                          builderTargetStudentMode === "selected"
+                                            ? "bg-white text-indigo-700"
+                                            : "bg-indigo-100 text-indigo-700"
+                                        }`}
+                                      >
+                                        {builderSelectedStudentIds.length}
+                                      </span>
+                                    )}
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* Specific Students Picker Container */}
+                              {builderTargetStudentMode === "selected" && (
+                                <div className="bg-white rounded-2xl border border-indigo-200/90 p-4 space-y-3.5 shadow-2xs animate-fadeIn">
+                                  {/* Toolbar: Search, Counters, and Action Buttons */}
+                                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                                    {/* Search Input */}
+                                    <div className="relative flex-1 max-w-sm">
+                                      <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                      <input
+                                        type="text"
+                                        id="input-builder-student-search"
+                                        value={builderStudentSearch}
+                                        onChange={(e) => setBuilderStudentSearch(e.target.value)}
+                                        placeholder="بحث باسم الطالب..."
+                                        className="w-full pr-9 pl-3 py-2 text-xs sm:text-sm font-bold bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white text-slate-800 placeholder:text-slate-400"
+                                      />
+                                      {builderStudentSearch && (
+                                        <button
+                                          type="button"
+                                          onClick={() => setBuilderStudentSearch("")}
+                                          className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 hover:text-slate-600"
+                                        >
+                                          ×
+                                        </button>
+                                      )}
+                                    </div>
+
+                                    {/* Actions & Counter */}
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span className="text-xs font-black text-indigo-700 bg-indigo-50 border border-indigo-100 px-2.5 py-1.5 rounded-lg whitespace-nowrap">
+                                        تم تحديد {builderSelectedStudentIds.length} من {builderClassStudents.length} طالباً
+                                      </span>
+
+                                      <button
+                                        type="button"
+                                        id="btn-select-all-builder-students"
+                                        onClick={() => {
+                                          const allIds = builderClassStudents.map((s) => s.id);
+                                          setBuilderSelectedStudentIds(allIds);
+                                        }}
+                                        className="px-2.5 py-1.5 text-xs font-black text-slate-700 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg transition-colors cursor-pointer"
+                                      >
+                                        تحديد الكل
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        id="btn-clear-all-builder-students"
+                                        onClick={() => {
+                                          setBuilderSelectedStudentIds([]);
+                                        }}
+                                        className="px-2.5 py-1.5 text-xs font-black text-slate-700 hover:text-red-600 hover:bg-red-50 border border-slate-200 rounded-lg transition-colors cursor-pointer"
+                                      >
+                                        إلغاء التحديد
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  {/* Students List Grid */}
+                                  {builderClassStudents.length === 0 ? (
+                                    <div className="text-center py-6 px-4 bg-slate-50/70 rounded-xl border border-dashed border-slate-200">
+                                      <Users className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                                      <p className="text-xs sm:text-sm font-black text-slate-600">
+                                        لا يوجد طلاب مسجلون في هذا الصف/الفصل حالياً
+                                      </p>
+                                      <p className="text-[11px] text-slate-400 mt-1">
+                                        يرجى إضافة الطلاب من تبويب الطلاب أو اختيار صف وفصل آخر.
+                                      </p>
+                                    </div>
+                                  ) : (
+                                    (() => {
+                                      const filtered = builderClassStudents.filter((s) => {
+                                        if (!builderStudentSearch.trim()) return true;
+                                        return (s.name || "").toLowerCase().includes(builderStudentSearch.trim().toLowerCase());
+                                      });
+
+                                      if (filtered.length === 0) {
+                                        return (
+                                          <div className="text-center py-6 px-4 text-xs font-bold text-slate-500 bg-slate-50 rounded-xl">
+                                            لا توجد نتائج مطابقة لبحثك: "{builderStudentSearch}"
+                                          </div>
+                                        );
+                                      }
+
+                                      return (
+                                        <div
+                                          id="builder-students-selection-grid"
+                                          className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 max-h-64 overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-slate-200"
+                                        >
+                                          {filtered.map((student) => {
+                                            const isSelected = builderSelectedStudentIds.includes(student.id);
+                                            return (
+                                              <div
+                                                key={student.id}
+                                                id={`builder-student-item-${student.id}`}
+                                                onClick={() => {
+                                                  setBuilderSelectedStudentIds((prev) =>
+                                                    isSelected
+                                                      ? prev.filter((id) => id !== student.id)
+                                                      : [...prev, student.id]
+                                                  );
+                                                }}
+                                                className={`flex items-center gap-2.5 p-2.5 rounded-xl border transition-all cursor-pointer select-none text-right ${
+                                                  isSelected
+                                                    ? "bg-indigo-50/90 border-indigo-300 ring-2 ring-indigo-400/40 shadow-xs"
+                                                    : "bg-slate-50/70 hover:bg-slate-100/90 border-slate-200/80 text-slate-700"
+                                                }`}
+                                              >
+                                                <input
+                                                  type="checkbox"
+                                                  id={`cbx-builder-student-${student.id}`}
+                                                  checked={isSelected}
+                                                  onChange={() => {}}
+                                                  className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer accent-indigo-600 shrink-0"
+                                                />
+
+                                                <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-xs shrink-0">
+                                                  {(student.name || "ط")[0]}
+                                                </div>
+
+                                                <div className="min-w-0 flex-1">
+                                                  <span className="text-xs font-black text-slate-800 block truncate">
+                                                    {student.name}
+                                                  </span>
+                                                  {student.semester && student.semester !== builderSemester && (
+                                                    <span className="text-[10px] text-slate-400 font-bold block truncate">
+                                                      {student.semester}
+                                                    </span>
+                                                  )}
+                                                </div>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      );
+                                    })()
+                                  )}
+
+                                  {/* Helper Alert if In Selected Mode but None Selected */}
+                                  {builderClassStudents.length > 0 && builderSelectedStudentIds.length === 0 && (
+                                    <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2 text-amber-800 text-xs font-bold animate-fadeIn">
+                                      <span>⚠️</span>
+                                      <span>يرجى تحديد طالب واحد على الأقل، أو النقر على "جميع طلاب الفصل" لإتاحته للكل.</span>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           </div>
                         )}
@@ -15747,6 +16070,180 @@ export default function App() {
                             </select>
                           </div>
                         </div>
+
+                        {/* Specific Students Selection in Auto Builder */}
+                        {isBuilderTargetAudienceEnabled && (
+                          <div className="pt-3 border-t border-indigo-100 space-y-3">
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                              <div>
+                                <label className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                                  <Users className="w-3.5 h-3.5 text-indigo-600" />
+                                  <span>تخصيص طلاب محددين:</span>
+                                </label>
+                                <span className="text-[10px] text-slate-500 font-bold block mt-0.5">
+                                  يمكنك إتاحة الاختبار لكافة طلاب الفصل أو حصر تقديمه على طلاب معينين.
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-1.5 bg-white p-1 rounded-xl border border-indigo-200/80 shadow-2xs self-start sm:self-auto">
+                                <button
+                                  type="button"
+                                  id="btn-auto-builder-target-all"
+                                  onClick={() => {
+                                    setAutoBuilderTargetStudentMode("all");
+                                    setAutoBuilderSelectedStudentIds([]);
+                                  }}
+                                  className={`px-2.5 py-1 text-xs font-black rounded-lg transition-all cursor-pointer ${
+                                    autoBuilderTargetStudentMode === "all"
+                                      ? "bg-indigo-600 text-white shadow-xs"
+                                      : "text-slate-600 hover:bg-slate-100"
+                                  }`}
+                                >
+                                  جميع الطلاب ({autoBuilderClassStudents.length})
+                                </button>
+
+                                <button
+                                  type="button"
+                                  id="btn-auto-builder-target-specific"
+                                  onClick={() => {
+                                    setAutoBuilderTargetStudentMode("selected");
+                                  }}
+                                  className={`px-2.5 py-1 text-xs font-black rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                                    autoBuilderTargetStudentMode === "selected"
+                                      ? "bg-indigo-600 text-white shadow-xs"
+                                      : "text-slate-600 hover:bg-slate-100"
+                                  }`}
+                                >
+                                  <span>تحديد طلاب معينين</span>
+                                  {autoBuilderSelectedStudentIds.length > 0 && (
+                                    <span
+                                      className={`text-[9px] px-1.5 py-0.2 rounded-full font-black ${
+                                        autoBuilderTargetStudentMode === "selected"
+                                          ? "bg-white text-indigo-700"
+                                          : "bg-indigo-100 text-indigo-700"
+                                      }`}
+                                    >
+                                      {autoBuilderSelectedStudentIds.length}
+                                    </span>
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+
+                            {autoBuilderTargetStudentMode === "selected" && (
+                              <div className="bg-white rounded-xl border border-indigo-200 p-3 space-y-2.5 shadow-2xs animate-fadeIn">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-100">
+                                  <div className="relative flex-1 max-w-xs">
+                                    <Search className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                    <input
+                                      type="text"
+                                      id="input-auto-builder-student-search"
+                                      value={autoBuilderStudentSearch}
+                                      onChange={(e) => setAutoBuilderStudentSearch(e.target.value)}
+                                      placeholder="بحث باسم الطالب..."
+                                      className="w-full pr-8 pl-3 py-1.5 text-xs font-bold bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white text-slate-800 placeholder:text-slate-400"
+                                    />
+                                  </div>
+
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-[11px] font-black text-indigo-700 bg-indigo-50 border border-indigo-100 px-2 py-1 rounded-md">
+                                      تم تحديد {autoBuilderSelectedStudentIds.length} من {autoBuilderClassStudents.length}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      id="btn-auto-builder-select-all-students"
+                                      onClick={() => {
+                                        setAutoBuilderSelectedStudentIds(autoBuilderClassStudents.map((s) => s.id));
+                                      }}
+                                      className="px-2 py-1 text-xs font-black text-slate-700 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-md transition-colors cursor-pointer"
+                                    >
+                                      تحديد الكل
+                                    </button>
+                                    <button
+                                      type="button"
+                                      id="btn-auto-builder-clear-all-students"
+                                      onClick={() => {
+                                        setAutoBuilderSelectedStudentIds([]);
+                                      }}
+                                      className="px-2 py-1 text-xs font-black text-slate-700 hover:text-red-600 hover:bg-red-50 border border-slate-200 rounded-md transition-colors cursor-pointer"
+                                    >
+                                      إلغاء التحديد
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {autoBuilderClassStudents.length === 0 ? (
+                                  <div className="text-center py-4 px-3 text-xs font-bold text-slate-500 bg-slate-50 rounded-lg">
+                                    لا يوجد طلاب مسجلون في هذا الصف/الفصل حالياً
+                                  </div>
+                                ) : (
+                                  (() => {
+                                    const filtered = autoBuilderClassStudents.filter((s) => {
+                                      if (!autoBuilderStudentSearch.trim()) return true;
+                                      return (s.name || "").toLowerCase().includes(autoBuilderStudentSearch.trim().toLowerCase());
+                                    });
+
+                                    if (filtered.length === 0) {
+                                      return (
+                                        <div className="text-center py-4 px-3 text-xs font-bold text-slate-500 bg-slate-50 rounded-lg">
+                                          لا توجد نتائج مطابقة لبحثك
+                                        </div>
+                                      );
+                                    }
+
+                                    return (
+                                      <div
+                                        id="auto-builder-students-selection-grid"
+                                        className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-slate-200"
+                                      >
+                                        {filtered.map((student) => {
+                                          const isSelected = autoBuilderSelectedStudentIds.includes(student.id);
+                                          return (
+                                            <div
+                                              key={student.id}
+                                              id={`auto-builder-student-item-${student.id}`}
+                                              onClick={() => {
+                                                setAutoBuilderSelectedStudentIds((prev) =>
+                                                  isSelected
+                                                    ? prev.filter((id) => id !== student.id)
+                                                    : [...prev, student.id]
+                                                );
+                                              }}
+                                              className={`flex items-center gap-2 p-2 rounded-xl border transition-all cursor-pointer select-none text-right ${
+                                                isSelected
+                                                  ? "bg-indigo-50 border-indigo-300 ring-2 ring-indigo-400/40 shadow-xs"
+                                                  : "bg-slate-50/80 hover:bg-slate-100 border-slate-200/80 text-slate-700"
+                                              }`}
+                                            >
+                                              <input
+                                                type="checkbox"
+                                                id={`cbx-auto-builder-student-${student.id}`}
+                                                checked={isSelected}
+                                                onChange={() => {}}
+                                                className="w-3.5 h-3.5 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer accent-indigo-600 shrink-0"
+                                              />
+                                              <div className="min-w-0 flex-1">
+                                                <span className="text-xs font-bold text-slate-800 block truncate">
+                                                  {student.name}
+                                                </span>
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    );
+                                  })()
+                                )}
+
+                                {autoBuilderClassStudents.length > 0 && autoBuilderSelectedStudentIds.length === 0 && (
+                                  <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-[11px] font-bold">
+                                    ⚠️ يرجى تحديد طالب واحد على الأقل، أو النقر على "جميع الطلاب".
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       {/* Immediate Publishing Toggle */}

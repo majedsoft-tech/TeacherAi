@@ -30,6 +30,7 @@ export interface Quiz {
   teacherId?: string;
   enableSubmitLock?: boolean;
   submitLockMinutesBeforeEnd?: number;
+  targetStudentIds?: string[] | null;
 }
 
 export interface StudentGrade {

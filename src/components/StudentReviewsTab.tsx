@@ -6001,8 +6001,7 @@ export default function StudentReviewsTab({
                               key={m.id}
                               ref={el => { roadCarDomRefs.current[m.idx] = el; }}
                               style={{ left: `${m.x}%`, top: `${m.y}%`, willChange: "top, left" }}
-                              onClick={() => handleCarCollision(m)}
-                              className="absolute transform -translate-x-1/2 p-2 rounded-2xl text-center select-none w-[140px] max-w-[155px] shadow-lg hover:scale-105 z-10 cursor-pointer"
+                              className="absolute transform -translate-x-1/2 p-2 rounded-2xl text-center select-none w-[140px] max-w-[155px] shadow-lg z-10 pointer-events-none"
                             >
                               <div className={`rounded-xl p-2.5 shadow-md ${cardClasses}`}>
                                 {cardContent}

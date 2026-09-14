@@ -35,13 +35,16 @@ import {
   Calendar,
   Power,
   Lock,
-  Unlock
+  Unlock,
+  Copy,
+  ExternalLink
 } from "lucide-react";
 import { doc, onSnapshot, setDoc, collection, query, where } from "firebase/firestore";
 import { db, handleFirestoreError, OperationType } from "../firebase";
 import { PRELOADED_SUBJECTS } from "./StudentCurriculumReview";
 import { BankQuestion, Student } from "../types";
 import { isGradeMatching } from "../utils/questionUtils";
+import { buildReviewPortalUrl } from "../utils/reviewAccessCrypto";
 
 interface CurriculumReviewAdminTabProps {
   currentUser: any;
@@ -1273,6 +1276,55 @@ export default function CurriculumReviewAdminTab({
                   <Lock className="w-3.5 h-3.5 text-rose-500" />
                 )}
               </span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Standalone External Link Quick Action Banner */}
+      {!isFullScreenResults && (
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-4 bg-gradient-to-r from-amber-500/10 via-amber-100/50 to-orange-50/70 border border-amber-250/80 rounded-2xl shadow-3xs">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shadow-xs shrink-0">
+              <ExternalLink className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs sm:text-sm font-black text-amber-950">
+                  رابط المراجعة الخارجي المستقل (مشفر 🔒)
+                </span>
+                <span className="text-[10px] bg-amber-200 text-amber-900 px-2 py-0.5 rounded-full font-bold">
+                  بدون تسجيل دخول • بدون قوائم
+                </span>
+              </div>
+              <p className="text-[11px] text-amber-800 font-semibold mt-0.5">
+                رابط مباشر يفتح قسم المراجعة للطلاب دون تسجيل دخول وبدون أي قوائم جانبية، مع تشفير العنوان ومنع الوصول لباقي خدمات الموقع.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                const link = buildReviewPortalUrl(currentUser?.uid || "demo_teacher", window.location.origin);
+                navigator.clipboard.writeText(link);
+                triggerToast("تم نسخ رابط المراجعة المستقل والمشفر بنجاح! 📋", "success");
+              }}
+              className="px-4 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer"
+            >
+              <Copy className="w-3.5 h-3.5" />
+              <span>نسخ الرابط المشفر</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const link = buildReviewPortalUrl(currentUser?.uid || "demo_teacher", window.location.origin);
+                window.open(link, "_blank");
+              }}
+              className="p-2.5 bg-white hover:bg-amber-100/80 text-amber-800 border border-amber-300/80 rounded-xl text-xs font-bold flex items-center justify-center shadow-xs transition-all active:scale-95 cursor-pointer"
+              title="فتح الرابط للتجربة في نافذة جديدة"
+            >
+              <ExternalLink className="w-4 h-4" />
             </button>
           </div>
         </div>

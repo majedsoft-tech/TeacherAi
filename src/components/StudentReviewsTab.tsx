@@ -5701,7 +5701,7 @@ export default function StudentReviewsTab({
                       <div 
                         onMouseMove={handleCanvasMouseMove}
                         onTouchMove={handleCanvasTouchMove}
-                        className="w-full h-[480px] md:h-[520px] bg-slate-900 rounded-2xl border border-slate-800 relative overflow-hidden flex flex-col justify-end cursor-pointer select-none"
+                        className="w-full h-[480px] md:h-[520px] bg-slate-900 rounded-2xl border border-slate-800 relative overflow-hidden flex flex-col justify-end cursor-default select-none"
                         style={{
                           backgroundImage: "linear-gradient(rgba(0,0,0,0.4), rgba(0,0,0,0.8))"
                         }}
@@ -6092,9 +6092,15 @@ export default function StudentReviewsTab({
 
                       {/* Instructions and Steering buttons for mobile/tablet */}
                       <div className="space-y-3">
-                        <p className="text-[11px] text-center text-slate-400 font-bold leading-relaxed">
-                          💡 <span className="text-indigo-400">طريقة اللعب:</span> وجه سيارتك واصطدم بالمسار الذي يحتوي على الإجابة الصحيحة للتقدم! يمكنك **الضغط مع الاستمرار على زر المسافة (Space) لزيادة سرعة الطريق والخيارات بشكل خارق 🚀**
-                        </p>
+                        <div className="p-2.5 bg-slate-900/90 border border-cyan-500/30 rounded-2xl text-center space-y-1">
+                          <p className="text-xs text-center text-cyan-200 font-black leading-relaxed flex items-center justify-center gap-1.5">
+                            <span>🚫 تم إلغاء النقر المباشر على الخيارات</span>
+                            <span className="text-[10px] bg-cyan-500/20 text-cyan-300 px-2 py-0.5 rounded-full border border-cyan-400/30">القيادة والاصطدام بالمسار فقط 🏎️</span>
+                          </p>
+                          <p className="text-[11px] text-center text-slate-400 font-bold leading-relaxed">
+                            💡 <span className="text-indigo-300">طريقة اختيار الجواب:</span> وجّه سيارتك نحو مسار الإجابة الصحيحة بالماوس أو أزرار التوجيه أدناه أو أسهم لوحة المفاتيح للاصطدام بها والتقدم! (Space للنيترو والتسريع 🚀)
+                          </p>
+                        </div>
 
                         <div className="grid grid-cols-3 gap-2 sm:gap-3 bg-slate-900/60 p-2 sm:p-2.5 rounded-2xl border border-slate-800/90 shadow-md">
                           <button

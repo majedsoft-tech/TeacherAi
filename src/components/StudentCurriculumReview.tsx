@@ -539,6 +539,7 @@ interface StudentCurriculumReviewProps {
   teacherId?: string;
   ongoingQuizzes?: any[];
   onOpenOngoingQuiz?: (quiz: any) => void;
+  isStandaloneReview?: boolean;
 }
 
 export default function StudentCurriculumReview({
@@ -550,7 +551,8 @@ export default function StudentCurriculumReview({
   onGoBackToQuizzes,
   teacherId,
   ongoingQuizzes,
-  onOpenOngoingQuiz
+  onOpenOngoingQuiz,
+  isStandaloneReview = false,
 }: StudentCurriculumReviewProps) {
   // Sounds
   const synth = useMemo(() => new ReviewSoundSynth(), []);
@@ -673,6 +675,7 @@ export default function StudentCurriculumReview({
 
   // Helper to check if subject targeting matches current student's grade and class
   const isSubjectTargetingStudent = (subName: string, studentGrade?: string | null, studentGradeClass?: string | null) => {
+    if (isStandaloneReview) return true;
     const target = subjectTargets[subName];
     if (!target) return true;
 
@@ -709,28 +712,30 @@ export default function StudentCurriculumReview({
         triggerToast(`قام المعلم بإغلاق وقفل مراجعة مادة (${selectedSubject}) حالياً.`, "warning");
         return;
       }
-      // 1. Check if locked by ongoing quiz
-      const lockingQuiz = getLockingQuizForSubject(selectedSubject, selectedSubject, ongoingQuizzesState);
-      if (lockingQuiz) {
-        onSelectedSubjectChange(null);
-        setIsPlaying(false);
-        triggerToast(
-          `تم إقفال مراجعة مادة (${selectedSubject}) لوجود اختبار مدرسي نشط قيد التقديم (${lockingQuiz.title}).`,
-          "warning"
-        );
-        return;
+      // 1. Check if locked by ongoing quiz (skip in standalone review)
+      if (!isStandaloneReview) {
+        const lockingQuiz = getLockingQuizForSubject(selectedSubject, selectedSubject, ongoingQuizzesState);
+        if (lockingQuiz) {
+          onSelectedSubjectChange(null);
+          setIsPlaying(false);
+          triggerToast(
+            `تم إقفال مراجعة مادة (${selectedSubject}) لوجود اختبار مدرسي نشط قيد التقديم (${lockingQuiz.title}).`,
+            "warning"
+          );
+          return;
+        }
       }
 
       // 2. Check visibility and targeting
       const isVisible = visibleSubjects.includes(selectedSubject);
-      const isTargeted = isSubjectTargetingStudent(selectedSubject, activeStudent?.grade, activeStudent?.gradeClass);
+      const isTargeted = isStandaloneReview || isSubjectTargetingStudent(selectedSubject, activeStudent?.grade, activeStudent?.gradeClass);
       if (!isVisible || !isTargeted) {
         onSelectedSubjectChange(null);
         setIsPlaying(false);
-        triggerToast("عذراً، هذه المادة غير متاحة لصفك الدراسي أو تم إخفاؤها مؤخراً.", "warning");
+        triggerToast("عذراً، هذه المادة غير متاحة أو تم إخفاؤها مؤخراً.", "warning");
       }
     }
-  }, [selectedSubject, isReviewEnabled, lockedSubjects, visibleSubjects, subjectTargets, activeStudent?.grade, activeStudent?.gradeClass, ongoingQuizzesState, onSelectedSubjectChange, triggerToast]);
+  }, [selectedSubject, isReviewEnabled, lockedSubjects, visibleSubjects, subjectTargets, activeStudent?.grade, activeStudent?.gradeClass, ongoingQuizzesState, onSelectedSubjectChange, triggerToast, isStandaloneReview]);
 
   // Dynamic Syllabus constructed ONLY from custom bankQuestions loaded from Firestore matching student's grade
   const syllabus = useMemo(() => {
@@ -738,6 +743,7 @@ export default function StudentCurriculumReview({
 
     // Filter bank questions to include questions for subjects targeted to this student
     const filteredBankQuestions = bankQuestions.filter((q) => {
+      if (isStandaloneReview) return true;
       const subName = q.subject || "أخرى";
 
       // Check if subject is targeted to student according to teacher settings
@@ -1513,15 +1519,31 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
               <BookOpen className="w-7 h-7" />
             </div>
             <div>
-              <div className="flex items-center gap-2.5 flex-wrap">
-                <h2 className="text-xl font-black text-slate-950">{activeStudent?.name || "طالب مجهول"}</h2>
-                <span className="text-xs bg-indigo-55 text-indigo-600 font-extrabold px-3 py-1 rounded-lg border border-indigo-100 shadow-xs">
-                  بوابة المراجعة التفاعلية 📖
-                </span>
-              </div>
-              <p className="text-sm text-slate-500 font-bold mt-1.5">
-                الصف: {activeStudent?.gradeClass || "غير محدد"} • الفصل الدراسي: {activeStudent?.semester || "غير محدد"}
-              </p>
+              {isStandaloneReview ? (
+                <div>
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <h2 className="text-xl font-black text-slate-950">بوابة المراجعة الشاملة المباشرة</h2>
+                    <span className="text-xs bg-amber-50 text-amber-800 font-extrabold px-3 py-1 rounded-lg border border-amber-200/80 shadow-xs">
+                      مراجعة المنهج تفاعلياً 📖
+                    </span>
+                  </div>
+                  <p className="text-sm text-slate-500 font-bold mt-1.5">
+                    استعراض وحل أسئلة الوحدات والدروس المقررة
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <h2 className="text-xl font-black text-slate-950">{activeStudent?.name || "طالب مجهول"}</h2>
+                    <span className="text-xs bg-indigo-55 text-indigo-600 font-extrabold px-3 py-1 rounded-lg border border-indigo-100 shadow-xs">
+                      بوابة المراجعة التفاعلية 📖
+                    </span>
+                  </div>
+                  <p className="text-sm text-slate-500 font-bold mt-1.5">
+                    الصف: {activeStudent?.gradeClass || "غير محدد"} • الفصل الدراسي: {activeStudent?.semester || "غير محدد"}
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1540,7 +1562,7 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
               className="text-xs md:text-sm font-black text-rose-600 hover:bg-rose-50 hover:text-rose-700 bg-white px-4.5 py-3 rounded-xl transition-all border border-rose-200 flex items-center gap-2 cursor-pointer shadow-sm"
             >
               <LogOut className="w-4 h-4 shrink-0" />
-              <span>الخروج للرئيسية</span>
+              <span>{isStandaloneReview ? "قائمة المواد 📚" : "الخروج للرئيسية"}</span>
             </button>
           </div>
         </div>
@@ -1583,12 +1605,12 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
                 المراجعة الشاملة مقفلة حالياً
               </h2>
               <p className="text-sm sm:text-base text-slate-600 font-semibold max-w-md mx-auto leading-relaxed">
-                قام معلم المادة بإغلاق قسم المراجعة الشاملة للطلاب في الوقت الحالي. سيتم فتح المراجعة وإتاحة الأسئلة مجدداً فور تفعيلها من قبل المعلم.
+                قام معلم المادة بإغلاق قسم المراجعة الشاملة في الوقت الحالي. سيتم فتح المراجعة وإتاحة الأسئلة مجدداً فور تفعيلها من قبل المعلم.
               </p>
             </div>
 
             <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-center gap-3">
-              {onGoBackToQuizzes && (
+              {!isStandaloneReview && onGoBackToQuizzes && (
                 <button
                   type="button"
                   onClick={onGoBackToQuizzes}
@@ -1624,7 +1646,7 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
                 Object.keys(syllabus).filter(
                   (key) =>
                     visibleSubjects.includes(key) &&
-                    isSubjectTargetingStudent(key, activeStudent?.grade, activeStudent?.gradeClass)
+                    (isStandaloneReview || isSubjectTargetingStudent(key, activeStudent?.grade, activeStudent?.gradeClass))
                 )
               )
             );
@@ -1635,9 +1657,13 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
                   <div className="w-16 h-16 bg-slate-50 border border-slate-150 rounded-2xl flex items-center justify-center mx-auto text-slate-400">
                     <BookOpen className="w-8 h-8" />
                   </div>
-                  <h3 className="text-base font-black text-slate-800">لا توجد مواد مراجعة مفعّلة لصفك الدراسي حالياً</h3>
+                  <h3 className="text-base font-black text-slate-800">
+                    {isStandaloneReview ? "لا توجد مواد مراجعة مفعّلة حالياً" : "لا توجد مواد مراجعة مفعّلة لصفك الدراسي حالياً"}
+                  </h3>
                   <p className="text-xs text-slate-500 font-semibold max-w-sm mx-auto leading-relaxed">
-                    عندما يقوم المعلم بتفعيل مادة المراجعة الخاصة بصفك الدراسي ({activeStudent?.grade || activeStudent?.gradeClass || "صفك"})، ستظهر هنا فوراً.
+                    {isStandaloneReview
+                      ? "عندما يقوم المعلم بتفعيل مواد المراجعة من إعدادات المراجعة الشاملة، ستظهر هنا فوراً."
+                      : `عندما يقوم المعلم بتفعيل مادة المراجعة الخاصة بصفك الدراسي (${activeStudent?.grade || activeStudent?.gradeClass || "صفك"})، ستظهر هنا فوراً.`}
                   </p>
                 </div>
               );

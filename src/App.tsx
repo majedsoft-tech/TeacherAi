@@ -64,6 +64,8 @@ import {
   LogIn,
   Menu,
   Hourglass,
+  ShieldAlert,
+  ExternalLink,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import * as XLSX from "xlsx";
@@ -97,6 +99,12 @@ import { RegisteredTeachersTab } from "./components/RegisteredTeachersTab";
 import { getOngoingQuizzesForStudent, getLockingQuizForSubject } from "./utils/quizLockUtils";
 import { UnitLessonMultiSelect } from "./components/UnitLessonMultiSelect";
 import { QuestionBankSmartFilters } from "./components/QuestionBankSmartFilters";
+import {
+  generateReviewAccessToken,
+  verifyReviewAccessToken,
+  buildReviewPortalUrl,
+  extractReviewTokenFromUrl,
+} from "./utils/reviewAccessCrypto";
 import { initializeApp, getApp, getApps } from "firebase/app";
 import {
   GoogleAuthProvider,
@@ -676,9 +684,70 @@ export default function App() {
     return localStorage.getItem(`seb_student_${activeId}_quiz_finished`) === "true";
   });
 
+  // Standalone Comprehensive Curriculum Review Portal (Direct link, no login, encrypted URL, zero sidebars)
+  const initialReviewToken = extractReviewTokenFromUrl();
+  const initialReviewVerification = initialReviewToken ? verifyReviewAccessToken(initialReviewToken) : null;
+
+  const [reviewTokenTampered, setReviewTokenTampered] = useState<boolean>(() => {
+    if (initialReviewToken && initialReviewVerification && !initialReviewVerification.valid) {
+      return true;
+    }
+    return false;
+  });
+
+  const [reviewPortalActive, setReviewPortalActive] = useState<boolean>(() => {
+    if (initialReviewVerification && initialReviewVerification.valid) {
+      try {
+        sessionStorage.setItem("seb_standalone_review_token", initialReviewToken!);
+        sessionStorage.setItem(
+          "seb_standalone_review_teacher_id",
+          initialReviewVerification.teacherId || "demo_teacher"
+        );
+      } catch {}
+      return true;
+    }
+    try {
+      const savedToken = sessionStorage.getItem("seb_standalone_review_token");
+      if (savedToken) {
+        const v = verifyReviewAccessToken(savedToken);
+        if (v.valid) return true;
+      }
+    } catch {}
+    return false;
+  });
+
+  const [reviewPortalTeacherId, setReviewPortalTeacherId] = useState<string>(() => {
+    if (initialReviewVerification?.valid && initialReviewVerification.teacherId) {
+      return initialReviewVerification.teacherId;
+    }
+    try {
+      const savedTid = sessionStorage.getItem("seb_standalone_review_teacher_id");
+      if (savedTid) return savedTid;
+      const savedToken = sessionStorage.getItem("seb_standalone_review_token");
+      if (savedToken) {
+        const v = verifyReviewAccessToken(savedToken);
+        if (v.valid && v.teacherId) return v.teacherId;
+      }
+    } catch {}
+    return "demo_teacher";
+  });
+
+  const [standaloneReviewSelectedSubject, setStandaloneReviewSelectedSubject] = useState<string | null>(null);
+  const [showStandaloneReviewModal, setShowStandaloneReviewModal] = useState<boolean>(false);
+
   // Student Portal-wide states
   const [studentPortalActive, setStudentPortalActive] = useState<boolean>(
     () => {
+      // If review token is present or review portal is active, do not activate student portal!
+      if (initialReviewToken || reviewTokenTampered) {
+        return false;
+      }
+      try {
+        if (sessionStorage.getItem("seb_standalone_review_token")) {
+          return false;
+        }
+      } catch {}
+
       // Student portal is active ONLY if student parameters or quiz link are explicitly provided in URL
       if (
         urlParams.get("portal") === "student" ||
@@ -705,6 +774,7 @@ export default function App() {
 
   // Standalone Question Bank Portal state
   const [bankPortalActive, setBankPortalActive] = useState<boolean>(() => {
+    if (initialReviewToken || reviewTokenTampered) return false;
     return (
       urlParams.get("portal") === "bank" ||
       urlParams.get("bank") === "true"
@@ -2087,6 +2157,40 @@ export default function App() {
     };
   }, [studentQuizId, studentPortalActive, studentPortalTeacherId, teacherPreviewActive, currentUser?.uid]);
 
+  // Standalone Comprehensive Curriculum Review Portal: Real-time questions loading
+  useEffect(() => {
+    if (!reviewPortalActive || !reviewPortalTeacherId) return;
+
+    let unsubQb: (() => void) | null = null;
+    try {
+      unsubQb = onSnapshot(
+        query(
+          collection(db, "question_bank"),
+          where("teacherId", "==", reviewPortalTeacherId)
+        ),
+        (snapshot) => {
+          const qbList: BankQuestion[] = [];
+          snapshot.forEach((doc) => {
+            qbList.push(normalizeQuestion(doc.data() as BankQuestion));
+          });
+          setBankQuestions(qbList);
+          setBankQuestionsLoaded(true);
+        },
+        (err) => {
+          console.warn("Failed to listen to question_bank in standalone review:", err);
+          setBankQuestionsLoaded(true);
+        }
+      );
+    } catch (err) {
+      console.warn("Error setting up question_bank listener in standalone review:", err);
+      setBankQuestionsLoaded(true);
+    }
+
+    return () => {
+      if (unsubQb) unsubQb();
+    };
+  }, [reviewPortalActive, reviewPortalTeacherId]);
+
 
 
   // Student Quiz Countdown Timer Hook (supporting survival inside/outside active screen)
@@ -3218,6 +3322,25 @@ export default function App() {
       setToastMessage(null);
     }, 4000);
   };
+
+  const copyStandaloneReviewLink = useCallback((showToast = true) => {
+    const tId = currentUser?.uid || "demo_teacher";
+    const link = buildReviewPortalUrl(tId, window.location.origin);
+    navigator.clipboard.writeText(link);
+    if (showToast) {
+      triggerToast(
+        "تم نسخ رابط المراجعة المستقل والمشفر بنجاح! يمكن للطلاب فتحه مباشرة بدون تسجيل وبدون أي قوائم جانبية.",
+        "success"
+      );
+    }
+    return link;
+  }, [currentUser?.uid]);
+
+  const openStandaloneReviewLink = useCallback(() => {
+    const tId = currentUser?.uid || "demo_teacher";
+    const link = buildReviewPortalUrl(tId, window.location.origin);
+    window.open(link, "_blank");
+  }, [currentUser?.uid]);
 
   const triggerLoginShake = useCallback(() => {
     setShakeLoginCard(true);
@@ -6020,6 +6143,114 @@ export default function App() {
         return null;
     }
   };
+
+  // --- TAMPERED / INVALID SECURED REVIEW LINK ALERT SCREEN ---
+  if (reviewTokenTampered) {
+    return (
+      <div
+        className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-6 font-sans select-none"
+        dir="rtl"
+      >
+        <div className="max-w-md w-full bg-slate-900 border-2 border-rose-500/40 rounded-3xl p-8 text-center shadow-2xl space-y-6">
+          <div className="w-20 h-20 bg-rose-500/10 border-2 border-rose-500/30 rounded-3xl flex items-center justify-center mx-auto text-rose-400">
+            <ShieldAlert className="w-10 h-10 animate-pulse" />
+          </div>
+
+          <div className="space-y-2">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-rose-500/20 text-rose-300 rounded-full text-xs font-black">
+              <Lock className="w-3.5 h-3.5" />
+              <span>تنبيه أمان الرابط المشفر</span>
+            </span>
+            <h2 className="text-xl font-black text-white">
+              رابط المراجعة غير صالح أو تم التعديل عليه
+            </h2>
+            <p className="text-xs text-slate-400 leading-relaxed font-bold">
+              تم رصد حذف أو تعديل في أحرف عنوان الرابط في شريط المتصفح. تم إيقاف الوصول لمنع الدخول غير المصرّح به لباقي خدمات الموقع وحماية بيانات النظام والطلاب.
+            </p>
+          </div>
+
+          <div className="p-4 bg-slate-800/80 rounded-2xl border border-slate-700 text-right text-xs text-slate-300 space-y-1.5 font-bold">
+            <p className="text-amber-400 font-black">💡 نصيحة للاستخدام:</p>
+            <p>يرجى نسخ الرابط كاملاً كما تم إرساله من المعلم دون حذف أو تعديل أي حرف من عنوان الصفحة.</p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              try {
+                sessionStorage.removeItem("seb_standalone_review_token");
+                sessionStorage.removeItem("seb_standalone_review_teacher_id");
+              } catch {}
+              window.location.href = window.location.origin;
+            }}
+            className="w-full py-3 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-black transition-colors cursor-pointer"
+          >
+            العودة للصفحة الرئيسية
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // --- STANDALONE COMPREHENSIVE CURRICULUM REVIEW PORTAL VIEW RENDER ---
+  // Pure standalone view: Direct review, no login required, no sidebars, no access to other site features
+  if (reviewPortalActive) {
+    return (
+      <div
+        className="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col selection:bg-amber-100 selection:text-amber-900"
+        dir="rtl"
+      >
+        {/* Minimalist Standalone Header - Strictly Curriculum Review Only */}
+        <header className="bg-white/95 backdrop-blur-md border-b border-slate-200/80 sticky top-0 z-40 px-4 sm:px-6 py-3.5 shadow-2xs">
+          <div className="max-w-6xl mx-auto flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-[#1e3a8a] to-blue-600 text-white flex items-center justify-center shadow-xs">
+                <BookOpen className="w-5 h-5 text-amber-300" />
+              </div>
+              <div>
+                <h1 className="text-sm sm:text-base font-black text-slate-900 flex items-center gap-2">
+                  <span>بوابة المراجعة الشاملة للمناهج</span>
+                  <span className="hidden sm:inline-flex items-center gap-1 text-[10px] bg-amber-50 text-amber-800 border border-amber-200 px-2 py-0.5 rounded-md font-extrabold">
+                    <Lock className="w-3 h-3 text-amber-600" />
+                    <span>رابط مستقل مشفر</span>
+                  </span>
+                </h1>
+                <p className="text-[11px] text-slate-500 font-bold hidden xs:block">
+                  مراجعة تفاعلية لأسئلة المنهج والدروس بدون تسجيل وبدون قوائم جانبية
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-black shadow-3xs">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>مراجعة مباشرة ومحمية</span>
+              </span>
+            </div>
+          </div>
+        </header>
+
+        {/* Main Review Content Body - Full Screen, No Sidebars, Zero navigation away */}
+        <main className="flex-1 max-w-6xl w-full mx-auto p-4 sm:p-6 md:p-8">
+          <StudentCurriculumReview
+            activeStudent={null}
+            bankQuestions={bankQuestions}
+            triggerToast={triggerToast}
+            selectedSubject={standaloneReviewSelectedSubject}
+            onSelectedSubjectChange={setStandaloneReviewSelectedSubject}
+            onGoBackToQuizzes={() => {}}
+            teacherId={reviewPortalTeacherId}
+            isStandaloneReview={true}
+          />
+        </main>
+
+        {/* Minimalist Discreet Footer */}
+        <footer className="border-t border-slate-200/80 bg-white/70 py-3 text-center text-[11px] text-slate-400 font-bold select-none">
+          منظومة المراجعة الشاملة المعتمدة • مراجعة تفاعلية مستقلة
+        </footer>
+      </div>
+    );
+  }
 
   // --- STANDALONE QUESTION BANK PORTAL VIEW RENDER ---
   if (bankPortalActive) {
@@ -9935,6 +10166,49 @@ export default function App() {
                 )}
               </button>
 
+              {/* Standalone External Review Link - Directly below Comprehensive Review in Right Sidebar */}
+              <div className="my-1.5 p-2 bg-gradient-to-br from-amber-50/90 via-orange-50/50 to-amber-100/60 border border-amber-200/90 rounded-xl space-y-1.5 shadow-2xs">
+                <div className="flex items-center justify-between gap-1">
+                  <div className="flex items-center gap-1.5 text-xs font-black text-amber-900">
+                    <ExternalLink className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                    <span>رابط المراجعة المستقل</span>
+                  </div>
+                  <span className="text-[9px] bg-amber-200/90 text-amber-900 px-1.5 py-0.5 rounded font-black">
+                    مشفر 🔒
+                  </span>
+                </div>
+                <p className="text-[10px] text-amber-800 font-bold leading-tight">
+                  رابط مباشر للمراجعة فقط بدون تسجيل وبدون أي قوائم جانبية.
+                </p>
+                <div className="flex items-center gap-1 pt-0.5">
+                  <button
+                    type="button"
+                    onClick={() => copyStandaloneReviewLink()}
+                    className="flex-1 py-1.5 px-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white rounded-lg text-[10.5px] font-black flex items-center justify-center gap-1 shadow-xs cursor-pointer active:scale-95 transition-all"
+                    title="نسخ الرابط الخارجي المشفر"
+                  >
+                    <Copy className="w-3 h-3" />
+                    <span>نسخ الرابط</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openStandaloneReviewLink()}
+                    className="p-1.5 bg-white hover:bg-amber-50 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold flex items-center justify-center shadow-xs cursor-pointer active:scale-95 transition-all"
+                    title="فتح ومعاينة الرابط في علامة تبويب جديدة"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowStandaloneReviewModal(true)}
+                    className="p-1.5 bg-white hover:bg-amber-50 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold flex items-center justify-center shadow-xs cursor-pointer active:scale-95 transition-all"
+                    title="معلومات وتفاصيل حماية الرابط المشفر"
+                  >
+                    <Info className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
               <button
                 type="button"
                 onClick={() => setActiveTab("reviews_admin")}
@@ -10112,6 +10386,16 @@ export default function App() {
             >
               <Copy className="w-4 h-4 shrink-0 text-emerald-600 animate-bounce" style={{ animationDuration: '3s' }} />
               <span>نسخ رابط صفحة الطلاب</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => copyStandaloneReviewLink()}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-black bg-gradient-to-r from-amber-50 to-orange-50 hover:from-amber-100 hover:to-orange-100 text-amber-900 border border-amber-300/70 transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer shadow-3xs"
+              title="نسخ رابط المراجعة الشاملة المستقل والمشفر (بدون تسجيل دخول وبدون قوائم)"
+            >
+              <ExternalLink className="w-4 h-4 shrink-0 text-amber-700" />
+              <span>نسخ رابط المراجعة المستقل (مشفر)</span>
             </button>
           </div>
         </div>
@@ -18031,6 +18315,18 @@ export default function App() {
                   <span>نسخ رابط صفحة الطلاب</span>
                 </button>
 
+                <button
+                  type="button"
+                  onClick={() => {
+                    copyStandaloneReviewLink();
+                    setMobileMoreDrawerOpen(false);
+                  }}
+                  className="w-full flex items-center gap-3 p-3 rounded-2xl text-xs font-black bg-gradient-to-r from-amber-50 to-orange-50 hover:from-amber-100 hover:to-orange-100 text-amber-900 border border-amber-300/70 cursor-pointer"
+                >
+                  <ExternalLink className="w-4 h-4 text-amber-700" />
+                  <span>نسخ رابط المراجعة المستقل (مشفر)</span>
+                </button>
+
                 {/* Profile card & logout */}
                 <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -18060,6 +18356,133 @@ export default function App() {
                   >
                     <LogOut className="w-4 h-4" />
                     <span>خروج</span>
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Standalone Curriculum Review Share & Security Modal */}
+      <AnimatePresence>
+        {showStandaloneReviewModal && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden"
+              dir="rtl"
+            >
+              {/* Modal Header */}
+              <div className="p-5 sm:p-6 bg-gradient-to-br from-amber-500/10 via-amber-500/5 to-transparent border-b border-amber-100 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center shadow-xs">
+                    <ExternalLink className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-slate-900">
+                      رابط المراجعة المستقل والمشفر 🔗
+                    </h3>
+                    <p className="text-xs text-slate-500 font-bold">
+                      رابط مباشر بدون تسجيل دخول وبدون أي قوائم جانبية
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowStandaloneReviewModal(false)}
+                  className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div className="p-5 sm:p-6 space-y-4">
+                {/* Link Preview Box */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-black text-slate-700 block">
+                    عنوان الرابط المشفر (آمن ومحمي من التلاعب):
+                  </label>
+                  <div className="flex items-center gap-2 p-2.5 bg-slate-50 border border-slate-200 rounded-2xl">
+                    <input
+                      type="text"
+                      readOnly
+                      value={buildReviewPortalUrl(currentUser?.uid || "demo_teacher", window.location.origin)}
+                      className="flex-1 bg-transparent text-xs text-slate-700 font-mono select-all focus:outline-none overflow-x-auto"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => copyStandaloneReviewLink()}
+                      className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer shrink-0"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>نسخ</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Security and Feature Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div className="p-3 bg-emerald-50/70 border border-emerald-150 rounded-2xl space-y-1">
+                    <div className="flex items-center gap-1.5 text-emerald-800 text-xs font-black">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>بدون تسجيل دخول</span>
+                    </div>
+                    <p className="text-[11px] text-emerald-700 font-medium leading-relaxed">
+                      يفتح قسم المراجعة للطلاب مباشرة دون الحاجة لبريد أو هوية أو رمز دخول.
+                    </p>
+                  </div>
+
+                  <div className="p-3 bg-blue-50/70 border border-blue-150 rounded-2xl space-y-1">
+                    <div className="flex items-center gap-1.5 text-blue-800 text-xs font-black">
+                      <Lock className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                      <span>بدون قوائم جانبية</span>
+                    </div>
+                    <p className="text-[11px] text-blue-700 font-medium leading-relaxed">
+                      يعزل شاشة المراجعة تماماً بدون أي قوائم جانبية أو أزرار للتنقل لباقي خدمات المنصة.
+                    </p>
+                  </div>
+
+                  <div className="p-3 bg-amber-50/70 border border-amber-150 rounded-2xl space-y-1">
+                    <div className="flex items-center gap-1.5 text-amber-900 text-xs font-black">
+                      <ShieldAlert className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      <span>تشفير عنوان الرابط</span>
+                    </div>
+                    <p className="text-[11px] text-amber-800 font-medium leading-relaxed">
+                      الرابط يحمل رمز حماية مشفر، وحذف أي جزء من العنوان يوقف الوصول فوراً لمنع التسلل.
+                    </p>
+                  </div>
+
+                  <div className="p-3 bg-indigo-50/70 border border-indigo-150 rounded-2xl space-y-1">
+                    <div className="flex items-center gap-1.5 text-indigo-900 text-xs font-black">
+                      <Sparkles className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                      <span>تفاعل وحل فوري</span>
+                    </div>
+                    <p className="text-[11px] text-indigo-800 font-medium leading-relaxed">
+                      يستعرض أسئلة المناهج والوحدات والدروس المتاحة ويصحح إجابات الطالب فورياً.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => openStandaloneReviewLink()}
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-black flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>فتح للتجربة في نافذة جديدة</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowStandaloneReviewModal(false)}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-black transition-colors cursor-pointer"
+                  >
+                    إغلاق
                   </button>
                 </div>
               </div>

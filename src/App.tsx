@@ -463,6 +463,48 @@ export default function App() {
     number?: number;
   } | null>(null);
 
+  // Disabled Student Access state (for restricting student logins by grade or specific classes)
+  const [disabledGrades, setDisabledGrades] = useState<string[]>([]);
+  const [disabledClasses, setDisabledClasses] = useState<string[]>([]);
+
+  // Access control helper checks
+  const isGradeAccessDisabled = useCallback(
+    (gradeName: string) => {
+      if (!gradeName) return false;
+      const norm = normalizeGradeName(gradeName);
+      return disabledGrades.some((g) => normalizeGradeName(g) === norm);
+    },
+    [disabledGrades],
+  );
+
+  const isClassOnlyAccessDisabled = useCallback(
+    (gradeName: string, semesterName: string) => {
+      if (!gradeName || !semesterName) return false;
+      const normG = normalizeGradeName(gradeName);
+      const normS = normalizeSemesterName(semesterName);
+      const targetKey = `${normG}___${normS}`;
+      return disabledClasses.some((c) => {
+        if (c.includes("___")) {
+          const [cg, cs] = c.split("___");
+          return (
+            normalizeGradeName(cg) === normG &&
+            normalizeSemesterName(cs) === normS
+          );
+        }
+        return c === targetKey;
+      });
+    },
+    [disabledClasses],
+  );
+
+  const isClassAccessDisabled = useCallback(
+    (gradeName: string, semesterName: string) => {
+      if (isGradeAccessDisabled(gradeName)) return true;
+      return isClassOnlyAccessDisabled(gradeName, semesterName);
+    },
+    [isGradeAccessDisabled, isClassOnlyAccessDisabled],
+  );
+
   // Helper function to sort grades by natural numerical value or Arabic word value ascending
   const sortGradesByNumber = useCallback((a: string, b: string) => {
     // Extract numbers (supporting multiple digits)
@@ -1884,6 +1926,7 @@ export default function App() {
     let unsubStudents: (() => void) | null = null;
     let unsubQuizzes: (() => void) | null = null;
     let unsubQuestionBank: (() => void) | null = null;
+    let unsubTeacherDocRef: (() => void) | null = null;
 
     const fetchQuizAndStudents = async () => {
       setStudentQuizLoading(true);
@@ -2091,6 +2134,16 @@ export default function App() {
               if (gList.length > 0) {
                 setGrades(gList);
               }
+              const disabledGList: string[] = [];
+              gradesSnap.docs.forEach((d) => {
+                const data = d.data();
+                if (data.disabledStudentAccess && data.name) {
+                  disabledGList.push(data.name as string);
+                }
+              });
+              if (disabledGList.length > 0) {
+                setDisabledGrades((prev) => Array.from(new Set([...prev, ...disabledGList])));
+              }
               setGradesLoaded(true);
             } catch (gradesErr) {
               console.warn("Failed to fetch grades in student portal:", gradesErr);
@@ -2112,6 +2165,7 @@ export default function App() {
                 number?: number;
                 createdAt?: number;
               }> = [];
+              const disabledCList: string[] = [];
               semestersSnap.forEach((doc) => {
                 const d = doc.data();
                 semList.push({
@@ -2121,14 +2175,41 @@ export default function App() {
                   number: d.number !== undefined ? Number(d.number) : undefined,
                   createdAt: d.createdAt || 0,
                 });
+                if (d.disabledStudentAccess && d.gradeName && d.name) {
+                  disabledCList.push(`${normalizeGradeName(d.gradeName)}___${normalizeSemesterName(d.name)}`);
+                }
               });
               if (semList.length > 0) {
                 setSemesters(semList);
+              }
+              if (disabledCList.length > 0) {
+                setDisabledClasses((prev) => Array.from(new Set([...prev, ...disabledCList])));
               }
               setSemestersLoaded(true);
             } catch (semestersErr) {
               console.warn("Failed to fetch semesters in student portal:", semestersErr);
               setSemestersLoaded(true);
+            }
+
+            // Real-time access locks listener for teacher document in student portal
+            try {
+              unsubTeacherDocRef = onSnapshot(
+                doc(db, "teachers", currentTuid),
+                (tSnap) => {
+                  if (tSnap.exists()) {
+                    const data = tSnap.data();
+                    if (Array.isArray(data.disabledStudentGrades)) {
+                      setDisabledGrades(data.disabledStudentGrades);
+                    }
+                    if (Array.isArray(data.disabledStudentClasses)) {
+                      setDisabledClasses(data.disabledStudentClasses);
+                    }
+                  }
+                },
+                (err) => console.warn("Student portal teacher settings error:", err)
+              );
+            } catch (tDocErr) {
+              console.warn("Could not attach teacher doc listener:", tDocErr);
             }
           } catch (studentFetchErr) {
             console.warn(
@@ -2154,6 +2235,7 @@ export default function App() {
       if (unsubStudents) unsubStudents();
       if (unsubQuizzes) unsubQuizzes();
       if (unsubQuestionBank) unsubQuestionBank();
+      if (unsubTeacherDocRef) unsubTeacherDocRef();
     };
   }, [studentQuizId, studentPortalActive, studentPortalTeacherId, teacherPreviewActive, currentUser?.uid]);
 
@@ -2849,6 +2931,7 @@ export default function App() {
         q,
         (snapshot) => {
           const subMap = new Map<string, { id: string; name: string; createdAt: number }>();
+          const disabledG: string[] = [];
           snapshot.forEach((doc) => {
             const data = doc.data();
             subMap.set(doc.id, {
@@ -2856,7 +2939,13 @@ export default function App() {
               name: (data.name as string) || "",
               createdAt: data.createdAt || 0,
             });
+            if (data.disabledStudentAccess && data.name) {
+              disabledG.push(data.name as string);
+            }
           });
+          if (disabledG.length > 0) {
+            setDisabledGrades((prev) => Array.from(new Set([...prev, ...disabledG])));
+          }
           gradesMap.set(`tId_${idKey}`, subMap);
           refreshGrades();
         },
@@ -2892,6 +2981,7 @@ export default function App() {
         q,
         (snapshot) => {
           const subMap = new Map<string, { id: string; name: string; gradeName: string; number?: number; createdAt?: number }>();
+          const disabledC: string[] = [];
           snapshot.forEach((doc) => {
             const d = doc.data();
             subMap.set(doc.id, {
@@ -2901,13 +2991,39 @@ export default function App() {
               number: d.number !== undefined ? Number(d.number) : undefined,
               createdAt: d.createdAt || 0,
             });
+            if (d.disabledStudentAccess && d.gradeName && d.name) {
+              disabledC.push(`${normalizeGradeName(d.gradeName)}___${normalizeSemesterName(d.name)}`);
+            }
           });
+          if (disabledC.length > 0) {
+            setDisabledClasses((prev) => Array.from(new Set([...prev, ...disabledC])));
+          }
           semestersMap.set(`tId_${idKey}`, subMap);
           refreshSemesters();
         },
         (err) => console.warn("Semesters listener error:", err)
       );
       unsubs.push(unsub);
+    });
+
+    // --- TEACHER SETTINGS & ACCESS LOCKS LISTENER ---
+    teacherIdentifiers.forEach((idKey) => {
+      const unsubTeacher = onSnapshot(
+        doc(db, "teachers", idKey),
+        (tSnap) => {
+          if (tSnap.exists()) {
+            const data = tSnap.data();
+            if (Array.isArray(data.disabledStudentGrades)) {
+              setDisabledGrades(data.disabledStudentGrades);
+            }
+            if (Array.isArray(data.disabledStudentClasses)) {
+              setDisabledClasses(data.disabledStudentClasses);
+            }
+          }
+        },
+        (err) => console.warn("Teacher settings doc listener error:", err)
+      );
+      unsubs.push(unsubTeacher);
     });
 
     // --- TRASH STUDENTS MULTI-LISTENER ---
@@ -5051,6 +5167,181 @@ export default function App() {
     }
   };
 
+  // Toggle student access permissions for an entire grade
+  const handleToggleGradeStudentAccess = async (targetGrade: string) => {
+    if (!currentUser) return;
+    const normTarget = normalizeGradeName(targetGrade);
+    const currentlyDisabled = isGradeAccessDisabled(targetGrade);
+    const newDisabled = !currentlyDisabled;
+
+    const nextDisabledGrades = newDisabled
+      ? [
+          ...disabledGrades.filter(
+            (g) => normalizeGradeName(g) !== normTarget,
+          ),
+          targetGrade,
+        ]
+      : disabledGrades.filter((g) => normalizeGradeName(g) !== normTarget);
+
+    setDisabledGrades(nextDisabledGrades);
+
+    try {
+      await runWithProgress(
+        async () => {
+          // 1. Update teachers profile doc
+          const teacherRef = doc(db, "teachers", currentUser.uid);
+          await setDoc(
+            teacherRef,
+            { disabledStudentGrades: nextDisabledGrades },
+            { merge: true },
+          );
+
+          // 2. Update all matching grade docs in grades collection
+          const q = query(
+            collection(db, "grades"),
+            where("teacherId", "==", currentUser.uid),
+          );
+          const snap = await getDocs(q);
+          const batch = writeBatch(db);
+          let found = false;
+          snap.forEach((d) => {
+            const data = d.data();
+            if (normalizeGradeName(data.name) === normTarget) {
+              batch.update(doc(db, "grades", d.id), {
+                disabledStudentAccess: newDisabled,
+              });
+              found = true;
+            }
+          });
+          if (!found && newDisabled) {
+            const newId = `grade-${Math.random().toString(36).substr(2, 9)}`;
+            batch.set(doc(db, "grades", newId), {
+              id: newId,
+              teacherId: currentUser.uid,
+              teacherEmail: currentUser.email?.toLowerCase().trim() || "",
+              name: targetGrade,
+              createdAt: Date.now(),
+              disabledStudentAccess: true,
+            });
+          }
+          await batch.commit();
+        },
+        newDisabled
+          ? `جاري تعطيل دخول الطلاب لصف "${targetGrade}"...`
+          : `جاري تفعيل دخول الطلاب لصف "${targetGrade}"...`,
+        newDisabled
+          ? `تم تعطيل دخول طلاب صف "${targetGrade}" بنجاح 🔒`
+          : `تم تفعيل دخول طلاب صف "${targetGrade}" بنجاح 🟢`,
+      );
+    } catch (err) {
+      console.error("Error toggling grade student access:", err);
+      triggerToast("حدث خطأ أثناء تعديل حالة دخول طلاب الصف", "error");
+    }
+  };
+
+  // Toggle student access permissions for a specific class/semester
+  const handleToggleClassStudentAccess = async (
+    targetGrade: string,
+    targetSemester: string,
+  ) => {
+    if (!currentUser) return;
+    const normG = normalizeGradeName(targetGrade);
+    const normS = normalizeSemesterName(targetSemester);
+    const classKey = `${normG}___${normS}`;
+    const currentlyDisabled = isClassOnlyAccessDisabled(
+      targetGrade,
+      targetSemester,
+    );
+    const newDisabled = !currentlyDisabled;
+
+    const nextDisabledClasses = newDisabled
+      ? [
+          ...disabledClasses.filter((c) => {
+            if (c.includes("___")) {
+              const [cg, cs] = c.split("___");
+              return !(
+                normalizeGradeName(cg) === normG &&
+                normalizeSemesterName(cs) === normS
+              );
+            }
+            return c !== classKey;
+          }),
+          classKey,
+        ]
+      : disabledClasses.filter((c) => {
+          if (c.includes("___")) {
+            const [cg, cs] = c.split("___");
+            return !(
+              normalizeGradeName(cg) === normG &&
+              normalizeSemesterName(cs) === normS
+            );
+          }
+          return c !== classKey;
+        });
+
+    setDisabledClasses(nextDisabledClasses);
+
+    try {
+      await runWithProgress(
+        async () => {
+          // 1. Update teachers profile doc
+          const teacherRef = doc(db, "teachers", currentUser.uid);
+          await setDoc(
+            teacherRef,
+            { disabledStudentClasses: nextDisabledClasses },
+            { merge: true },
+          );
+
+          // 2. Update matching semester docs in semesters collection
+          const q = query(
+            collection(db, "semesters"),
+            where("teacherId", "==", currentUser.uid),
+          );
+          const snap = await getDocs(q);
+          const batch = writeBatch(db);
+          let found = false;
+          snap.forEach((d) => {
+            const data = d.data();
+            if (
+              normalizeGradeName(data.gradeName) === normG &&
+              normalizeSemesterName(data.name) === normS
+            ) {
+              batch.update(doc(db, "semesters", d.id), {
+                disabledStudentAccess: newDisabled,
+              });
+              found = true;
+            }
+          });
+          if (!found && newDisabled) {
+            const newId = `semester-${Math.random().toString(36).substr(2, 9)}`;
+            const matchNum = targetSemester.match(/\d+/);
+            const semNum = matchNum ? parseInt(matchNum[0], 10) : undefined;
+            batch.set(doc(db, "semesters", newId), {
+              id: newId,
+              teacherId: currentUser.uid,
+              teacherEmail: currentUser.email?.toLowerCase().trim() || "",
+              name: targetSemester,
+              gradeName: targetGrade,
+              number: semNum,
+              createdAt: Date.now(),
+              disabledStudentAccess: true,
+            });
+          }
+          await batch.commit();
+        },
+        newDisabled
+          ? `جاري تعطيل دخول طلاب فصل "${targetSemester}" لصف "${targetGrade}"...`
+          : `جاري تفعيل دخول طلاب فصل "${targetSemester}" لصف "${targetGrade}"...`,
+        newDisabled
+          ? `تم تعطيل دخول طلاب فصل "${targetSemester}" بنجاح 🔒`
+          : `تم تفعيل دخول طلاب فصل "${targetSemester}" بنجاح 🟢`,
+      );
+    } catch (err) {
+      console.error("Error toggling class student access:", err);
+      triggerToast("حدث خطأ أثناء تعديل حالة دخول طلاب الفصل", "error");
+    }
+  };
+
   // Student creation states
   const [showAddStudentModal, setShowAddStudentModal] = useState(false);
   const [newStudentName, setNewStudentName] = useState("");
@@ -6782,6 +7073,19 @@ export default function App() {
 
       const handleStudentPortalLogin = async (e?: React.FormEvent) => {
         if (e) e.preventDefault();
+
+        // Check if grade or class access is disabled by teacher
+        if (
+          isGradeAccessDisabled(studentSelectedGrade) ||
+          isClassAccessDisabled(studentSelectedGrade, studentSelectedSemester)
+        ) {
+          triggerToast(
+            "عذراً، تم تعطيل تسجيل دخول الطلاب لهذا الصف أو الفصل مؤقتاً من قبل المعلم.",
+            "error"
+          );
+          return;
+        }
+
         if (!studentLoginSelectId) {
           triggerToast(
             "الرجاء اختيار اسمك من قائمة الكشف المدرسية المدرجة",
@@ -6956,11 +7260,14 @@ export default function App() {
                       }}
                       className="w-full bg-slate-50 border border-slate-205 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-sans cursor-pointer transition-all hover:bg-slate-100"
                     >
-                      {studentGradesList.map((g) => (
-                        <option key={g} value={g}>
-                          {g}
-                        </option>
-                      ))}
+                      {studentGradesList.map((g) => {
+                        const isGDisabled = isGradeAccessDisabled(g);
+                        return (
+                          <option key={g} value={g}>
+                            {g} {isGDisabled ? "🔒 (معطل مؤقتاً)" : ""}
+                          </option>
+                        );
+                      })}
                     </select>
                   </div>
 
@@ -6976,14 +7283,43 @@ export default function App() {
                       }}
                       className="w-full bg-slate-50 border border-slate-205 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-sans cursor-pointer transition-all hover:bg-slate-100"
                     >
-                      {studentSemestersList.map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
+                      {studentSemestersList.map((s) => {
+                        const isCDisabled = isClassAccessDisabled(studentSelectedGrade, s);
+                        return (
+                          <option key={s} value={s}>
+                            {s} {isCDisabled ? "🔒 (معطل مؤقتاً)" : ""}
+                          </option>
+                        );
+                      })}
                     </select>
                   </div>
                 </div>
+
+                {/* Access Disabled Alert Banner */}
+                {(() => {
+                  const isGDisabled = isGradeAccessDisabled(studentSelectedGrade);
+                  const isCDisabled = isClassAccessDisabled(studentSelectedGrade, studentSelectedSemester);
+                  if (isGDisabled || isCDisabled) {
+                    return (
+                      <div className="p-4 rounded-2xl bg-rose-50 border border-rose-300 text-rose-900 text-xs flex items-start gap-3 shadow-sm animate-in fade-in">
+                        <div className="w-9 h-9 rounded-xl bg-rose-200 text-rose-700 flex items-center justify-center shrink-0">
+                          <Lock className="w-5 h-5" />
+                        </div>
+                        <div className="space-y-1">
+                          <span className="font-black text-rose-800 block text-xs sm:text-sm">
+                            ⚠️ دخول الطلاب معطل مؤقتاً لهذا {isGDisabled ? "الصف" : "الفصل"}
+                          </span>
+                          <p className="text-rose-700 font-bold leading-relaxed text-[11.5px]">
+                            {isGDisabled
+                              ? `قام المعلم بتعطيل وإيقاف إمكانية دخول كافة طلاب صف (${studentSelectedGrade}) مؤقتاً. يرجى مراجعة المعلم أو المحاولة لاحقاً.`
+                              : `قام المعلم بتعطيل وإيقاف إمكانية دخول طلاب فصل (${studentSelectedSemester}) لصف (${studentSelectedGrade}) مؤقتاً.`}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
 
                 <div className="space-y-1 pt-2">
                   <label className="text-slate-600 font-extrabold text-xs block">
@@ -7181,13 +7517,34 @@ export default function App() {
               </div>
 
               {/* Start Quiz CTA */}
-              <button
-                type="submit"
-                className="w-full flex items-center justify-center gap-3 px-6 py-4 bg-gradient-to-r from-indigo-600 to-indigo-700 text-white rounded-2xl font-black shadow-lg shadow-indigo-500/25 transition-all transform hover:-translate-y-0.5 hover:shadow-indigo-500/40 active:translate-y-0 active:scale-[0.99] cursor-pointer"
-              >
-                <BookOpen className="w-5 h-5" />
-                <span>دخول البوابة</span>
-              </button>
+              {(() => {
+                const isAccessBlocked =
+                  isGradeAccessDisabled(studentSelectedGrade) ||
+                  isClassAccessDisabled(studentSelectedGrade, studentSelectedSemester);
+                return (
+                  <button
+                    type="submit"
+                    disabled={isAccessBlocked}
+                    className={`w-full flex items-center justify-center gap-3 px-6 py-4 text-white rounded-2xl font-black shadow-lg transition-all cursor-pointer ${
+                      isAccessBlocked
+                        ? "bg-slate-400 cursor-not-allowed opacity-80"
+                        : "bg-gradient-to-r from-indigo-600 to-indigo-700 shadow-indigo-500/25 hover:-translate-y-0.5 hover:shadow-indigo-500/40 active:translate-y-0 active:scale-[0.99]"
+                    }`}
+                  >
+                    {isAccessBlocked ? (
+                      <>
+                        <Lock className="w-5 h-5" />
+                        <span>الدخول معطل مؤقتاً لهذا الصف/الفصل 🔒</span>
+                      </>
+                    ) : (
+                      <>
+                        <BookOpen className="w-5 h-5" />
+                        <span>دخول البوابة</span>
+                      </>
+                    )}
+                  </button>
+                );
+              })()}
 
               {/* Student Login Footer Copyright */}
               <div className="pt-4 mt-2 border-t border-slate-100 text-center">
@@ -7219,6 +7576,46 @@ export default function App() {
         status: "good" as const,
         detailedGrades: [],
       };
+
+      const studentCurGrade = activeStudent.grade || studentSelectedGrade;
+      const studentCurSemester = activeStudent.semester || studentSelectedSemester;
+      if (
+        isGradeAccessDisabled(studentCurGrade) ||
+        isClassAccessDisabled(studentCurGrade, studentCurSemester)
+      ) {
+        return (
+          <div className="min-h-screen bg-slate-50/80 flex items-center justify-center p-4" dir="rtl">
+            <div className="bg-white rounded-3xl border border-rose-200 shadow-2xl p-8 max-w-md w-full text-center space-y-5 animate-fade-in">
+              <div className="w-16 h-16 bg-rose-100 text-rose-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+                <Lock className="w-8 h-8" />
+              </div>
+              <div className="space-y-2">
+                <h2 className="text-xl font-black text-slate-800">
+                  تم إيقاف دخول الطلاب مؤقتاً
+                </h2>
+                <p className="text-sm text-slate-600 font-bold leading-relaxed">
+                  مرحباً يا <span className="text-indigo-700 font-black">{activeStudent.name}</span>، قام المعلم بتعطيل وإيقاف دخول طلاب ({studentCurGrade} - {studentCurSemester}) مؤقتاً.
+                </p>
+                <p className="text-xs text-slate-400 font-medium">
+                  يرجى مراجعة المعلم المعتمد أو إعادة المحاولة عند قيام المعلم بإعادة تفعيل الدخول.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  sessionStorage.removeItem("seb_student_logged_id");
+                  localStorage.removeItem("seb_student_logged_id");
+                  setStudentSelectedId(null);
+                  setStudentLoggedInId(null);
+                }}
+                className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white font-black text-xs rounded-xl transition-all cursor-pointer shadow-md"
+              >
+                تسجيل الخروج والعودة
+              </button>
+            </div>
+          </div>
+        );
+      }
 
       // Filter all active/scheduled quizzes from current teacher that this student has NOT taken yet
       const activeQuizzes = quizzes.filter((q) => {
@@ -14046,6 +14443,8 @@ export default function App() {
                               return <GraduationCap className={iconClass} />;
                             };
 
+                            const isGradeBlocked = isGradeAccessDisabled(g);
+
                             return (
                               <button
                                 key={g}
@@ -14062,6 +14461,8 @@ export default function App() {
                                 className={`flex flex-col rounded-xl overflow-hidden border transition-all duration-200 cursor-pointer min-w-[125px] ${
                                   isGradeSelected
                                     ? "border-[#5352ed] shadow-md shadow-[#5352ed]/20 transform scale-[1.01]"
+                                    : isGradeBlocked
+                                    ? "border-rose-300 hover:border-rose-400 bg-white shadow-3xs"
                                     : "border-slate-200 hover:border-indigo-400 bg-white shadow-3xs"
                                 }`}
                               >
@@ -14077,8 +14478,21 @@ export default function App() {
                                   {getGradeIcon(g, isGradeSelected)}
 
                                   {/* Text label */}
-                                  <span className="flex-1 text-center font-black">
-                                    {getDisplayName(g)}
+                                  <span className="flex-1 text-center font-black flex items-center justify-center gap-1">
+                                    <span>{getDisplayName(g)}</span>
+                                    {isGradeBlocked && (
+                                      <span
+                                        className={`inline-flex items-center gap-0.5 px-1 py-0.2 rounded text-[9px] font-black ${
+                                          isGradeSelected
+                                            ? "bg-rose-500 text-white"
+                                            : "bg-rose-100 text-rose-700 border border-rose-200"
+                                        }`}
+                                        title="دخول الطلاب معطل لهذا الصف 🔒"
+                                      >
+                                        <Lock className="w-2.5 h-2.5 shrink-0" />
+                                        <span>معطل</span>
+                                      </span>
+                                    )}
                                   </span>
 
                                   {/* Left check icon */}
@@ -14105,6 +14519,7 @@ export default function App() {
                         <div className="flex flex-wrap justify-start items-center gap-2.5 sm:gap-3 pt-2 border-t border-slate-200/50 w-full">
                           {semestersList.map((s, idx) => {
                             const isSemSelected = selectedTabSemester === s;
+                            const isClassBlocked = isClassAccessDisabled(selectedTabGrade, s);
                             // Map semester string to clean short numeric representations like 1, 2, 3...
                             const getSemesterNumber = (
                               semesterStr: string,
@@ -14164,19 +14579,31 @@ export default function App() {
                                 className={`flex flex-col rounded-xl overflow-hidden border transition-all duration-200 cursor-pointer min-w-[50px] sm:min-w-[58px] ${
                                   isSemSelected
                                     ? "border-[#5352ed] shadow-md shadow-[#5352ed]/20 transform scale-105"
+                                    : isClassBlocked
+                                    ? "border-rose-300 hover:border-rose-400 bg-white shadow-3xs"
                                     : "border-indigo-200 hover:border-indigo-400 bg-white shadow-3xs"
                                 }`}
-                                title={`${s} - (${semCount} طالب${showKey ? " - كلمة المرور مطلوبة 🔑" : ""})`}
+                                title={`${s} - (${semCount} طالب${showKey ? " - كلمة المرور مطلوبة 🔑" : ""}${isClassBlocked ? " - دخول الطلاب معطل 🔒" : ""})`}
                               >
-                                {/* Top Section: Class number, key icon, and check/plus */}
+                                {/* Top Section: Class number, key icon, lock icon, and check/plus */}
                                 <div
-                                  className={`px-2.5 py-1.5 flex items-center justify-center gap-1.5 text-sm sm:text-base font-black font-sans relative ${
+                                  className={`px-2.5 py-1.5 flex items-center justify-center gap-1 text-sm sm:text-base font-black font-sans relative ${
                                     isSemSelected
                                       ? "bg-[#5352ed] text-white"
                                       : "bg-white text-[#5352ed] hover:bg-slate-50"
                                   }`}
                                 >
                                   <span>{semesterNum}</span>
+                                  {isClassBlocked && (
+                                    <span
+                                      className={`inline-flex items-center justify-center shrink-0 ${
+                                        isSemSelected ? "text-rose-200" : "text-rose-600"
+                                      }`}
+                                      title="دخول الطلاب معطل لهذا الفصل 🔒"
+                                    >
+                                      <Lock className="w-3 h-3 fill-current" />
+                                    </span>
+                                  )}
                                   {showKey && (
                                     <span
                                       className={`inline-flex items-center justify-center shrink-0 transition-transform duration-150 animate-in fade-in zoom-in-75 ${
@@ -14359,6 +14786,92 @@ export default function App() {
                             )}
                           </div>
                         </div>
+
+                        {/* STUDENT ACCESS CONTROL / LOCK BAR FOR THIS CLASS & GRADE */}
+                        {activeTab === "students" && (
+                          <div className="bg-slate-50/90 px-6 py-3 border-b border-slate-200/80 flex flex-wrap items-center justify-between gap-3 text-right">
+                            <div className="flex items-center gap-2.5 flex-wrap">
+                              <span className="text-xs font-black text-slate-700 flex items-center gap-1.5">
+                                <ShieldAlert className="w-4 h-4 text-indigo-600 shrink-0" />
+                                <span>حالة دخول الطلاب للاختبارات:</span>
+                              </span>
+                              {isClassAccessDisabled(selectedTabGrade, selectedTabSemester) ? (
+                                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black bg-rose-100 text-rose-800 border border-rose-300 shadow-3xs">
+                                  <Lock className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                                  <span>دخول الطلاب معطل لهذا الفصل 🔒</span>
+                                  {isGradeAccessDisabled(selectedTabGrade) ? (
+                                    <span className="text-[10px] text-rose-700 font-bold">(بسبب تعطيل الصف كاملاً)</span>
+                                  ) : (
+                                    <span className="text-[10px] text-rose-700 font-bold">(هذا الفصل فقط معطل)</span>
+                                  )}
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black bg-emerald-50 text-emerald-800 border border-emerald-300 shadow-3xs">
+                                  <Unlock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                  <span>دخول الطلاب متاح ومفعل 🟢</span>
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {/* Toggle this class access */}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleToggleClassStudentAccess(selectedTabGrade, selectedTabSemester)
+                                }
+                                className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer shadow-3xs active:scale-95 ${
+                                  isClassOnlyAccessDisabled(selectedTabGrade, selectedTabSemester)
+                                    ? "bg-rose-600 hover:bg-rose-700 text-white shadow-rose-200"
+                                    : "bg-white hover:bg-rose-50 text-slate-700 hover:text-rose-700 border border-slate-300 hover:border-rose-300"
+                                }`}
+                                title={
+                                  isClassOnlyAccessDisabled(selectedTabGrade, selectedTabSemester)
+                                    ? `اضغط لإلغاء التعطيل وتفعيل دخول طلاب فصل (${selectedTabSemester})`
+                                    : `اضغط لتعطيل دخول طلاب فصل (${selectedTabSemester}) فقط`
+                                }
+                              >
+                                {isClassOnlyAccessDisabled(selectedTabGrade, selectedTabSemester) ? (
+                                  <Lock className="w-3.5 h-3.5 text-white" />
+                                ) : (
+                                  <Unlock className="w-3.5 h-3.5 text-slate-500" />
+                                )}
+                                <span>
+                                  {isClassOnlyAccessDisabled(selectedTabGrade, selectedTabSemester)
+                                    ? `تفعيل دخول (${selectedTabSemester})`
+                                    : `تعطيل دخول (${selectedTabSemester})`}
+                                </span>
+                              </button>
+
+                              {/* Toggle entire grade access */}
+                              <button
+                                type="button"
+                                onClick={() => handleToggleGradeStudentAccess(selectedTabGrade)}
+                                className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer shadow-3xs active:scale-95 ${
+                                  isGradeAccessDisabled(selectedTabGrade)
+                                    ? "bg-rose-600 hover:bg-rose-700 text-white shadow-rose-200"
+                                    : "bg-white hover:bg-rose-50 text-slate-700 hover:text-rose-700 border border-slate-300 hover:border-rose-300"
+                                }`}
+                                title={
+                                  isGradeAccessDisabled(selectedTabGrade)
+                                    ? `اضغط لإلغاء التعطيل وتفعيل دخول صف (${selectedTabGrade}) كاملاً`
+                                    : `اضغط لتعطيل دخول صف (${selectedTabGrade}) كاملاً بجميع فصوله`
+                                }
+                              >
+                                {isGradeAccessDisabled(selectedTabGrade) ? (
+                                  <Lock className="w-3.5 h-3.5 text-white" />
+                                ) : (
+                                  <Unlock className="w-3.5 h-3.5 text-slate-500" />
+                                )}
+                                <span>
+                                  {isGradeAccessDisabled(selectedTabGrade)
+                                    ? `تفعيل صف (${selectedTabGrade}) كاملاً`
+                                    : `تعطيل صف (${selectedTabGrade}) كاملاً`}
+                                </span>
+                              </button>
+                            </div>
+                          </div>
+                        )}
 
                         {/* INLINE ADD STUDENT FORM PANEL (Opens in the same page) */}
                         <AnimatePresence>
@@ -18072,9 +18585,39 @@ export default function App() {
                                     )}
 
                                     <div
-                                      className="flex items-center gap-1.5"
+                                      className="flex items-center gap-1.5 flex-wrap"
                                       onClick={(e) => e.stopPropagation()}
                                     >
+                                      {/* Student access control toggle for this grade */}
+                                      {!isEditing && (
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleToggleGradeStudentAccess(g);
+                                          }}
+                                          className={`px-2 py-0.5 rounded-lg text-[11px] font-black flex items-center gap-1 transition-all cursor-pointer shadow-3xs active:scale-95 ${
+                                            isGradeAccessDisabled(g)
+                                              ? "bg-rose-100 text-rose-700 hover:bg-rose-200 border border-rose-300 ring-2 ring-rose-400/20"
+                                              : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200"
+                                          }`}
+                                          title={
+                                            isGradeAccessDisabled(g)
+                                              ? `دخول الطلاب معطل لصف (${g}) كاملاً - اضغط للسماح بالدخول`
+                                              : `دخول الطلاب متاح لصف (${g}) - اضغط لتعطيل دخول طلاب الصف كاملاً`
+                                          }
+                                        >
+                                          {isGradeAccessDisabled(g) ? (
+                                            <Lock className="w-3 h-3 text-rose-600 shrink-0" />
+                                          ) : (
+                                            <Unlock className="w-3 h-3 text-emerald-600 shrink-0" />
+                                          )}
+                                          <span>
+                                            {isGradeAccessDisabled(g) ? "دخول الطلاب: معطل 🔒" : "دخول الطلاب: متاح 🟢"}
+                                          </span>
+                                        </button>
+                                      )}
+
                                       {!isEditing && gradeStudentsCount > 0 && (
                                         <span
                                           className="text-xs font-black text-rose-600 bg-rose-50 px-2.5 py-0.5 rounded-md border border-rose-100/50 flex items-center gap-0.5"
@@ -18241,6 +18784,75 @@ export default function App() {
                                               })}
                                             </div>
                                           </div>
+
+                                          {/* Access control row for individual classes of this grade */}
+                                          {(() => {
+                                            const addedSemesters = semesters.filter(
+                                              (s) => normalizeGradeName(s.gradeName) === normalizeGradeName(g)
+                                            );
+                                            if (addedSemesters.length === 0) return null;
+                                            const isGradeDisabled = isGradeAccessDisabled(g);
+
+                                            return (
+                                              <div className="mt-3 pt-2.5 border-t border-slate-200/80">
+                                                <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+                                                  <span className="text-[11px] font-black text-slate-700 flex items-center gap-1.5">
+                                                    <ShieldAlert className="w-3.5 h-3.5 text-indigo-600" />
+                                                    <span>التحكم في دخول الطلاب لكل فصل على حدة (اضغط للتعطيل أو التفعيل):</span>
+                                                  </span>
+                                                  {isGradeDisabled && (
+                                                    <span className="text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-lg border border-rose-200">
+                                                      ⚠️ الدخول معطل للصف كاملاً
+                                                    </span>
+                                                  )}
+                                                </div>
+                                                <div className="flex flex-wrap gap-1.5">
+                                                  {addedSemesters.map((sDoc) => {
+                                                    const isClassDirectlyDisabled = isClassOnlyAccessDisabled(g, sDoc.name);
+                                                    const isEffectivelyDisabled = isClassAccessDisabled(g, sDoc.name);
+                                                    return (
+                                                      <button
+                                                        key={sDoc.id}
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                          e.stopPropagation();
+                                                          handleToggleClassStudentAccess(g, sDoc.name);
+                                                        }}
+                                                        className={`px-2.5 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 border transition-all cursor-pointer shadow-3xs active:scale-95 ${
+                                                          isClassDirectlyDisabled
+                                                            ? "bg-rose-100 border-rose-300 text-rose-800 hover:bg-rose-200 ring-1 ring-rose-400/30"
+                                                            : isGradeDisabled
+                                                            ? "bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100"
+                                                            : "bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100"
+                                                        }`}
+                                                        title={
+                                                          isClassDirectlyDisabled
+                                                            ? `فصل (${sDoc.name}) معطل - اضغط لتفعيله`
+                                                            : `فصل (${sDoc.name}) متاح - اضغط لتعطيل دخول طلابه`
+                                                        }
+                                                      >
+                                                        {isEffectivelyDisabled ? (
+                                                          <Lock className="w-3 h-3 text-rose-600 shrink-0" />
+                                                        ) : (
+                                                          <Unlock className="w-3 h-3 text-emerald-600 shrink-0" />
+                                                        )}
+                                                        <span>{sDoc.name}</span>
+                                                        <span className={`text-[10px] px-1.5 py-0.2 rounded-md font-bold ${
+                                                          isClassDirectlyDisabled
+                                                            ? "bg-rose-200 text-rose-900"
+                                                            : isGradeDisabled
+                                                            ? "bg-amber-200 text-amber-900"
+                                                            : "bg-emerald-200 text-emerald-900"
+                                                        }`}>
+                                                          {isClassDirectlyDisabled ? "معطل" : isGradeDisabled ? "مقيد بالصف" : "متاح"}
+                                                        </span>
+                                                      </button>
+                                                    );
+                                                  })}
+                                                </div>
+                                              </div>
+                                            );
+                                          })()}
                                         </>
                                       );
                                     })()}

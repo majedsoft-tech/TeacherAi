@@ -1440,10 +1440,24 @@ export default function ReviewsAdminTab({
     setIsEditModalOpen(true);
   };
 
+  // Open question editor to apply questions to ALL fixed games at once
+  const handleEditAllGames = () => {
+    setNewGameType("all" as any);
+    setSelectedQuestions([]);
+    setNewTitle("تحدي المراجعة لجميع الألعاب");
+    setNewSubject(bqFilterSubject !== "all" ? bqFilterSubject : "");
+    setNewGrade(bqFilterGrade !== "all" ? bqFilterGrade : "جميع الفصول (عام)");
+    setNewSemester(bqFilterSemester !== "all" ? bqFilterSemester : "عام");
+    setEditingQIdx(null);
+    setIsAddingManualQ(false);
+    setIsEditModalOpen(true);
+  };
+
   // Save/Update Game Questions & Optionally Activate
   const handleSaveGameQuestions = async (isActivating: boolean = true) => {
+    const isAllGames = (newGameType as string) === "all";
     const fg = FIXED_GAMES.find(g => g.gameType === newGameType) || FIXED_GAMES[0];
-    const targetTitle = newTitle.trim() || fg.title;
+    const targetTitle = newTitle.trim() || (isAllGames ? "تحدي المراجعة لجميع الألعاب" : fg.title);
 
     let effectiveQuestions = selectedQuestions;
     if (effectiveQuestions.length === 0) {
@@ -1475,6 +1489,75 @@ export default function ReviewsAdminTab({
     }
 
     setIsSubmitting(true);
+
+    if (isAllGames) {
+      // Apply and save questions to ALL fixed games at once
+      try {
+        for (const game of FIXED_GAMES) {
+          const gameTitle = newTitle.trim() ? `${newTitle.trim()} - ${game.title}` : game.title;
+          const fixedId = `fixed_game_${currentUser.uid}_${game.gameType}`;
+          const defaultFixedId = `fixed_game_${game.gameType}`;
+          const matchingChallenges = reviewChallenges.filter(c => c.id === fixedId || c.id === defaultFixedId || c.gameType === game.gameType);
+          const existing = reviewChallenges.find(c => c.id === fixedId || c.id === defaultFixedId) || matchingChallenges[0];
+
+          const challengeData = {
+            id: fixedId,
+            title: gameTitle,
+            subject: newSubject || (bqFilterSubject !== "all" ? bqFilterSubject : "مراجعة عامة"),
+            grade: newGrade,
+            semester: newSemester,
+            questions: effectiveQuestions,
+            status: isActivating ? ("active" as const) : ("draft" as const),
+            teacherId: currentUser.uid,
+            createdAt: existing?.createdAt || new Date().toISOString(),
+            gameType: game.gameType
+          };
+
+          // Save user-specific challenge doc
+          await setDoc(doc(db, "reviewChallenges", fixedId), challengeData);
+
+          // Save default fixed game doc
+          await setDoc(doc(db, "reviewChallenges", defaultFixedId), {
+            ...challengeData,
+            id: defaultFixedId
+          });
+
+          // Synchronize any other challenges matching this gameType
+          for (const ch of matchingChallenges) {
+            if (ch.id && ch.id !== fixedId && ch.id !== defaultFixedId) {
+              await setDoc(doc(db, "reviewChallenges", ch.id), {
+                questions: effectiveQuestions,
+                title: gameTitle,
+                subject: challengeData.subject,
+                grade: newGrade,
+                semester: newSemester,
+                status: isActivating ? "active" : "draft"
+              }, { merge: true }).catch(() => {});
+            }
+          }
+        }
+
+        triggerToast(
+          isActivating
+            ? `تم تحديث واستبدال الأسئلة لجميع الألعاب (${FIXED_GAMES.length} ألعاب) وتفعيلها فوراً للطلاب بنجاح! ⚡🟢🎮`
+            : `تم استبدال الأسئلة وحفظ جميع الألعاب كمسودة بنجاح! 💾`,
+          "success"
+        );
+
+        // Reset & close modal
+        setNewTitle("");
+        setSelectedQuestions([]);
+        setSelectedQuizIdForImport("");
+        setIsEditModalOpen(false);
+        setActiveSubTab("list");
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, `reviewChallenges/all_fixed_games`);
+      } finally {
+        setIsSubmitting(false);
+      }
+      return;
+    }
+
     const fixedId = `fixed_game_${currentUser.uid}_${newGameType}`;
     const defaultFixedId = `fixed_game_${newGameType}`;
     const matchingChallenges = reviewChallenges.filter(c => c.id === fixedId || c.id === defaultFixedId || c.gameType === newGameType);
@@ -2148,6 +2231,18 @@ export default function ReviewsAdminTab({
                     </p>
                   </div>
 
+                  {/* Global update for all games at once */}
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleEditAllGames}
+                      className="px-4 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl text-xs sm:text-sm font-black shadow-sm transition-all duration-200 flex items-center gap-2 cursor-pointer"
+                      title="تغيير وتعديل وتحديث أسئلة جميع الألعاب الأربعة دفعة واحدة بنفس الوقت"
+                    >
+                      <Sparkles className="w-4 h-4 text-amber-300" />
+                      <span>تغيير أسئلة جميع الألعاب مرة واحدة 🎮✨</span>
+                    </button>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
@@ -2478,15 +2573,21 @@ export default function ReviewsAdminTab({
             >
               <div className="flex justify-between items-center pb-4 border-b border-slate-150 sticky -top-5 md:-top-8 bg-white/95 backdrop-blur-md z-30 pt-2 -mx-5 -mt-5 px-5 md:-mx-8 md:-mt-8 md:px-8">
                 <div className="flex items-center gap-2.5">
-                  <div className="w-10 h-10 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-black">
-                    <Wand2 className="w-5 h-5 text-indigo-600" />
+                  <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-black ${
+                    (newGameType as string) === "all" ? "bg-purple-100 text-purple-600" : "bg-indigo-50 text-indigo-600"
+                  }`}>
+                    {(newGameType as string) === "all" ? <Sparkles className="w-5 h-5 text-purple-600" /> : <Wand2 className="w-5 h-5 text-indigo-600" />}
                   </div>
                   <div>
                     <h3 className="text-base md:text-lg font-black text-slate-900">
-                      نافذة تغيير وتعديل أسئلة اللعبة 📝
+                      {(newGameType as string) === "all"
+                        ? "نافذة تغيير وتعديل الأسئلة لجميع الألعاب دفعة واحدة 🎮✨"
+                        : "نافذة تغيير وتعديل أسئلة اللعبة 📝"}
                     </h3>
                     <p className="text-xs text-slate-500 font-bold">
-                      إضافة وتعديل الأسئلة وإدارتها وتفعيلها فوراً للطلاب بالمعمل
+                      {(newGameType as string) === "all"
+                        ? "سيتم تطبيق الأسئلة المختارة على جميع الألعاب الأربعة وتفعيلها للطلاب فوراً بنفس الوقت"
+                        : "إضافة وتعديل الأسئلة وإدارتها وتفعيلها فوراً للطلاب بالمعمل"}
                     </p>
                   </div>
                 </div>
@@ -2513,8 +2614,14 @@ export default function ReviewsAdminTab({
                     <span className="w-6 h-6 rounded-full bg-indigo-600 text-white text-xs font-black flex items-center justify-center">١</span>
                     <h4 className="text-xs md:text-sm font-black text-slate-800">تحديد اختيار أسئلة التحدي من بنك الأسئلة 📚</h4>
                   </div>
-                  <span className="text-xs font-black px-3 py-1 rounded-full bg-indigo-100 text-indigo-800 border border-indigo-300">
-                    اللعبة: {newGameType === "space_invaders" ? "الفضاء 🚀" : newGameType === "car_racing" ? "السيارات 🏎️" : newGameType === "penalty_shootout" ? "ركلات الترجيح ⚽" : newGameType === "cloud_airplane" ? "طائرة الغيوم ✈️" : "Quiz Plus 🎪"}
+                  <span className={`text-xs font-black px-3 py-1 rounded-full border ${
+                    (newGameType as string) === "all"
+                      ? "bg-purple-100 text-purple-800 border-purple-300"
+                      : "bg-indigo-100 text-indigo-800 border-indigo-300"
+                  }`}>
+                    {(newGameType as string) === "all"
+                      ? "🎮 جميع الألعاب (تحديث شامل)"
+                      : `اللعبة: ${newGameType === "space_invaders" ? "الفضاء 🚀" : newGameType === "car_racing" ? "السيارات 🏎️" : newGameType === "penalty_shootout" ? "ركلات الترجيح ⚽" : newGameType === "cloud_airplane" ? "طائرة الغيوم ✈️" : "Quiz Plus 🎪"}`}
                   </span>
                 </div>
 
@@ -3057,7 +3164,13 @@ export default function ReviewsAdminTab({
                   className="flex-1 w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 disabled:bg-slate-300 text-white rounded-xl text-xs sm:text-sm font-black transition duration-200 shadow-md flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <Sparkles className="w-4 h-4 text-yellow-300" />
-                  <span>{isSubmitting ? "جاري الحفظ واستبدال الأسئلة..." : "حفظ واستبدال الأسئلة وتفعيل اللعبة للطلاب فوراً ⚡🟢"}</span>
+                  <span>
+                    {isSubmitting
+                      ? "جاري الحفظ واستبدال الأسئلة..."
+                      : (newGameType as string) === "all"
+                        ? "حفظ وتحديث الأسئلة لجميع الألعاب الأربعة وتفعيلها فوراً للطلاب ⚡🟢🎮"
+                        : "حفظ واستبدال الأسئلة وتفعيل اللعبة للطلاب فوراً ⚡🟢"}
+                  </span>
                 </button>
               </div>
             </form>

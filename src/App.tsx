@@ -14446,32 +14446,32 @@ export default function App() {
                             const isGradeBlocked = isGradeAccessDisabled(g);
 
                             return (
-                              <button
+                              <div
                                 key={g}
-                                type="button"
-                                onClick={() => {
-                                  if (isGradeSelected) {
-                                    setSelectedTabGrade(null);
-                                    setSelectedTabSemester(null);
-                                  } else {
-                                    setSelectedTabGrade(g);
-                                    setSelectedTabSemester(null); // Reset semester when changing grade
-                                  }
-                                }}
-                                className={`flex flex-col rounded-xl overflow-hidden border transition-all duration-200 cursor-pointer min-w-[125px] ${
+                                className={`flex flex-col rounded-xl overflow-hidden border transition-all duration-200 min-w-[130px] ${
                                   isGradeSelected
-                                    ? "border-[#5352ed] shadow-md shadow-[#5352ed]/20 transform scale-[1.01]"
+                                    ? "border-[#5352ed] shadow-md shadow-[#5352ed]/20 ring-2 ring-indigo-500/20 transform scale-[1.01]"
                                     : isGradeBlocked
-                                    ? "border-rose-300 hover:border-rose-400 bg-white shadow-3xs"
+                                    ? "border-rose-300 bg-white shadow-3xs"
                                     : "border-slate-200 hover:border-indigo-400 bg-white shadow-3xs"
                                 }`}
                               >
-                                {/* Top Section: Grade Name & Icon */}
-                                <div
-                                  className={`px-3 py-2 flex items-center justify-between gap-2 font-black text-xs sm:text-sm ${
+                                {/* Top Section: Grade Name & Icon (clickable to select grade) */}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (isGradeSelected) {
+                                      setSelectedTabGrade(null);
+                                      setSelectedTabSemester(null);
+                                    } else {
+                                      setSelectedTabGrade(g);
+                                      setSelectedTabSemester(null); // Reset semester when changing grade
+                                    }
+                                  }}
+                                  className={`px-3 py-2 flex items-center justify-between gap-2 font-black text-xs sm:text-sm cursor-pointer transition-colors w-full ${
                                     isGradeSelected
                                       ? "bg-[#5352ed] text-white"
-                                      : "bg-white text-slate-800"
+                                      : "bg-white text-slate-800 hover:bg-slate-50"
                                   }`}
                                 >
                                   {/* Right icon */}
@@ -14480,19 +14480,6 @@ export default function App() {
                                   {/* Text label */}
                                   <span className="flex-1 text-center font-black flex items-center justify-center gap-1">
                                     <span>{getDisplayName(g)}</span>
-                                    {isGradeBlocked && (
-                                      <span
-                                        className={`inline-flex items-center gap-0.5 px-1 py-0.2 rounded text-[9px] font-black ${
-                                          isGradeSelected
-                                            ? "bg-rose-500 text-white"
-                                            : "bg-rose-100 text-rose-700 border border-rose-200"
-                                        }`}
-                                        title="دخول الطلاب معطل لهذا الصف 🔒"
-                                      >
-                                        <Lock className="w-2.5 h-2.5 shrink-0" />
-                                        <span>معطل</span>
-                                      </span>
-                                    )}
                                   </span>
 
                                   {/* Left check icon */}
@@ -14501,14 +14488,64 @@ export default function App() {
                                       <Check className="w-3.5 h-3.5 text-white stroke-[3]" />
                                     )}
                                   </div>
-                                </div>
+                                </button>
 
-                                {/* Bottom Section: Unified Student count inside same card button */}
-                                <div className="px-2 py-1 bg-rose-50/80 border-t border-rose-100/80 flex items-center justify-center gap-1 text-center">
+                                {/* Middle Section: Student count (clickable to select grade) */}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (isGradeSelected) {
+                                      setSelectedTabGrade(null);
+                                      setSelectedTabSemester(null);
+                                    } else {
+                                      setSelectedTabGrade(g);
+                                      setSelectedTabSemester(null);
+                                    }
+                                  }}
+                                  className="w-full px-2 py-0.5 bg-rose-50/80 border-t border-rose-100/80 flex items-center justify-center gap-1 text-center cursor-pointer hover:bg-rose-100/80 transition-colors"
+                                  title="عدد طلاب هذا الصف - اضغط للاختيار"
+                                >
                                   <span className="text-xs font-black text-rose-600 leading-none">{gradeCount}</span>
                                   <span className="text-[10px] font-bold text-rose-500">طالب</span>
-                                </div>
-                              </button>
+                                </button>
+
+                                {/* Bottom Section: Open / Close Switch Button (زر فتح وإغلاق الدخول) */}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleToggleGradeStudentAccess(g);
+                                  }}
+                                  className={`w-full py-1.5 px-2 border-t text-[11px] font-black flex items-center justify-between gap-1.5 transition-all cursor-pointer select-none active:scale-[0.98] ${
+                                    isGradeBlocked
+                                      ? "bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200"
+                                      : "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200"
+                                  }`}
+                                  title={
+                                    isGradeBlocked
+                                      ? `دخول الطلاب معطل لصف (${g}) كاملاً - اضغط لفتحه والسماح بالدخول`
+                                      : `دخول الطلاب مفتوح لصف (${g}) - اضغط لإغلاقه وتعطيل دخول طلاب الصف`
+                                  }
+                                >
+                                  <span className="flex items-center gap-1">
+                                    {isGradeBlocked ? (
+                                      <Lock className="w-3 h-3 text-rose-600 shrink-0" />
+                                    ) : (
+                                      <Unlock className="w-3 h-3 text-emerald-600 shrink-0" />
+                                    )}
+                                    <span>{isGradeBlocked ? "الدخول: مغلق" : "الدخول: مفتوح"}</span>
+                                  </span>
+
+                                  {/* Toggle Switch Pill */}
+                                  <div
+                                    className={`w-7 h-4 rounded-full flex items-center px-0.5 shrink-0 transition-colors shadow-2xs ${
+                                      isGradeBlocked ? "bg-rose-500 justify-start" : "bg-emerald-500 justify-end"
+                                    }`}
+                                  >
+                                    <div className="w-3 h-3 rounded-full bg-white shadow-xs" />
+                                  </div>
+                                </button>
+                              </div>
                             );
                           })
                         )}
@@ -14567,43 +14604,36 @@ export default function App() {
                             const isPassRequired = isPasswordRequiredForSemester(selectedTabGrade, s);
                             const showKey = isPassRequired || semWithPass > 0;
 
+                            const isClassDirectlyBlocked = isClassOnlyAccessDisabled(selectedTabGrade, s);
+                            const isGradeBlocked = isGradeAccessDisabled(selectedTabGrade);
+
                             return (
-                              <button
+                              <div
                                 key={s}
-                                type="button"
-                                onClick={() => {
-                                  setSelectedTabSemester(
-                                    isSemSelected ? null : s,
-                                  );
-                                }}
-                                className={`flex flex-col rounded-xl overflow-hidden border transition-all duration-200 cursor-pointer min-w-[50px] sm:min-w-[58px] ${
+                                className={`flex flex-col rounded-xl overflow-hidden border transition-all duration-200 min-w-[54px] sm:min-w-[62px] ${
                                   isSemSelected
-                                    ? "border-[#5352ed] shadow-md shadow-[#5352ed]/20 transform scale-105"
+                                    ? "border-[#5352ed] shadow-md shadow-[#5352ed]/20 ring-2 ring-indigo-500/20 transform scale-105"
                                     : isClassBlocked
-                                    ? "border-rose-300 hover:border-rose-400 bg-white shadow-3xs"
+                                    ? "border-rose-300 bg-white shadow-3xs"
                                     : "border-indigo-200 hover:border-indigo-400 bg-white shadow-3xs"
                                 }`}
-                                title={`${s} - (${semCount} طالب${showKey ? " - كلمة المرور مطلوبة 🔑" : ""}${isClassBlocked ? " - دخول الطلاب معطل 🔒" : ""})`}
                               >
-                                {/* Top Section: Class number, key icon, lock icon, and check/plus */}
-                                <div
-                                  className={`px-2.5 py-1.5 flex items-center justify-center gap-1 text-sm sm:text-base font-black font-sans relative ${
+                                {/* Top Section: Class number, key icon, lock icon, and check */}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedTabSemester(
+                                      isSemSelected ? null : s,
+                                    );
+                                  }}
+                                  className={`px-2 py-1.5 flex items-center justify-center gap-1 text-sm sm:text-base font-black font-sans relative cursor-pointer w-full transition-colors ${
                                     isSemSelected
                                       ? "bg-[#5352ed] text-white"
                                       : "bg-white text-[#5352ed] hover:bg-slate-50"
                                   }`}
+                                  title={`${s} - (${semCount} طالب${showKey ? " - كلمة المرور مطلوبة 🔑" : ""}${isClassBlocked ? " - دخول الطلاب معطل 🔒" : ""})`}
                                 >
                                   <span>{semesterNum}</span>
-                                  {isClassBlocked && (
-                                    <span
-                                      className={`inline-flex items-center justify-center shrink-0 ${
-                                        isSemSelected ? "text-rose-200" : "text-rose-600"
-                                      }`}
-                                      title="دخول الطلاب معطل لهذا الفصل 🔒"
-                                    >
-                                      <Lock className="w-3 h-3 fill-current" />
-                                    </span>
-                                  )}
                                   {showKey && (
                                     <span
                                       className={`inline-flex items-center justify-center shrink-0 transition-transform duration-150 animate-in fade-in zoom-in-75 ${
@@ -14617,18 +14647,76 @@ export default function App() {
                                   {isSemSelected && (
                                     <Check className="w-3.5 h-3.5 text-white stroke-[3] shrink-0" />
                                   )}
-                                </div>
+                                </button>
 
-                                {/* Bottom Section: Unified Student count inside same card button */}
-                                <div className="px-1.5 py-1 bg-rose-50/80 border-t border-rose-100/80 flex items-center justify-center gap-1 text-center whitespace-nowrap">
+                                {/* Middle Section: Student count (clicking it selects the class) */}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedTabSemester(
+                                      isSemSelected ? null : s,
+                                    );
+                                  }}
+                                  className="w-full px-1.5 py-0.5 bg-rose-50/80 border-t border-rose-100/80 flex items-center justify-center gap-1 text-center whitespace-nowrap cursor-pointer hover:bg-rose-100/80 transition-colors"
+                                  title="عدد طلاب هذا الفصل - اضغط للاختيار"
+                                >
                                   <span className="text-xs font-black text-rose-600 leading-none">
                                     {semCount}
                                   </span>
                                   <span className="text-[10px] font-bold text-rose-500">
                                     طالب
                                   </span>
-                                </div>
-                              </button>
+                                </button>
+
+                                {/* Bottom Section: Dedicated Toggle Switch for Student Access directly under student count */}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleToggleClassStudentAccess(selectedTabGrade, s);
+                                  }}
+                                  className={`w-full py-1 px-1.5 border-t text-[10px] font-black flex items-center justify-between gap-1 transition-all cursor-pointer select-none active:scale-95 ${
+                                    isClassDirectlyBlocked
+                                      ? "bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200"
+                                      : isGradeBlocked
+                                      ? "bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-200"
+                                      : "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200"
+                                  }`}
+                                  title={
+                                    isClassDirectlyBlocked
+                                      ? `دخول الطلاب معطل لفصل (${s}) - اضغط للتفعيل وفتح الدخول`
+                                      : isGradeBlocked
+                                      ? `دخول طلاب هذا الفصل مقيد بسبب تعطيل صف (${selectedTabGrade}) كاملاً`
+                                      : `دخول الطلاب مفتوح لفصل (${s}) - اضغط لإغلاقه وتعطيل الدخول`
+                                  }
+                                >
+                                  <span className="flex items-center gap-0.5 leading-none">
+                                    {isClassDirectlyBlocked ? (
+                                      <Lock className="w-2.5 h-2.5 text-rose-600 shrink-0" />
+                                    ) : isGradeBlocked ? (
+                                      <Lock className="w-2.5 h-2.5 text-amber-700 shrink-0" />
+                                    ) : (
+                                      <Unlock className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
+                                    )}
+                                    <span>
+                                      {isClassDirectlyBlocked ? "مغلق" : isGradeBlocked ? "مقيد" : "مفتوح"}
+                                    </span>
+                                  </span>
+
+                                  {/* Toggle Switch Pill */}
+                                  <div
+                                    className={`w-5 h-3 rounded-full flex items-center px-0.5 shrink-0 transition-colors shadow-2xs ${
+                                      isClassDirectlyBlocked
+                                        ? "bg-rose-500 justify-start"
+                                        : isGradeBlocked
+                                        ? "bg-amber-500 justify-start"
+                                        : "bg-emerald-500 justify-end"
+                                    }`}
+                                  >
+                                    <div className="w-2 h-2 rounded-full bg-white shadow-2xs" />
+                                  </div>
+                                </button>
+                              </div>
                             );
                           })}
                         </div>
@@ -14814,35 +14902,6 @@ export default function App() {
                             </div>
 
                             <div className="flex items-center gap-2 flex-wrap">
-                              {/* Toggle this class access */}
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleToggleClassStudentAccess(selectedTabGrade, selectedTabSemester)
-                                }
-                                className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer shadow-3xs active:scale-95 ${
-                                  isClassOnlyAccessDisabled(selectedTabGrade, selectedTabSemester)
-                                    ? "bg-rose-600 hover:bg-rose-700 text-white shadow-rose-200"
-                                    : "bg-white hover:bg-rose-50 text-slate-700 hover:text-rose-700 border border-slate-300 hover:border-rose-300"
-                                }`}
-                                title={
-                                  isClassOnlyAccessDisabled(selectedTabGrade, selectedTabSemester)
-                                    ? `اضغط لإلغاء التعطيل وتفعيل دخول طلاب فصل (${selectedTabSemester})`
-                                    : `اضغط لتعطيل دخول طلاب فصل (${selectedTabSemester}) فقط`
-                                }
-                              >
-                                {isClassOnlyAccessDisabled(selectedTabGrade, selectedTabSemester) ? (
-                                  <Lock className="w-3.5 h-3.5 text-white" />
-                                ) : (
-                                  <Unlock className="w-3.5 h-3.5 text-slate-500" />
-                                )}
-                                <span>
-                                  {isClassOnlyAccessDisabled(selectedTabGrade, selectedTabSemester)
-                                    ? `تفعيل دخول (${selectedTabSemester})`
-                                    : `تعطيل دخول (${selectedTabSemester})`}
-                                </span>
-                              </button>
-
                               {/* Toggle entire grade access */}
                               <button
                                 type="button"

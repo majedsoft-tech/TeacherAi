@@ -3498,6 +3498,8 @@ export default function App() {
   const [builderSelectedStudentIds, setBuilderSelectedStudentIds] = useState<string[]>([]);
   const [builderTargetStudentMode, setBuilderTargetStudentMode] = useState<"all" | "selected">("all");
   const [builderStudentSearch, setBuilderStudentSearch] = useState("");
+  const [builderStudentViewMode, setBuilderStudentViewMode] = useState<"grade" | "by_class">("grade");
+  const [builderStudentSelectedClass, setBuilderStudentSelectedClass] = useState<string>("all");
   const [autoBuilderSelectedStudentIds, setAutoBuilderSelectedStudentIds] = useState<string[]>([]);
   const [autoBuilderTargetStudentMode, setAutoBuilderTargetStudentMode] = useState<"all" | "selected">("all");
   const [autoBuilderStudentSearch, setAutoBuilderStudentSearch] = useState("");
@@ -5246,6 +5248,12 @@ export default function App() {
     return unique;
   }, [getSemestersForGrade, builderGrade, gradesList]);
 
+  // All students belonging to the chosen grade in the quiz builder (all classes)
+  const builderGradeAllStudents = useMemo(() => {
+    if (!builderCustomizeClass || !builderGrade) return [];
+    return students.filter((s) => isGradeMatching(builderGrade, s.grade, s.gradeClass));
+  }, [students, builderCustomizeClass, builderGrade]);
+
   // Students belonging to the chosen grade & class in the quiz builder
   const builderClassStudents = useMemo(() => {
     if (!builderCustomizeClass || !builderGrade) return [];
@@ -5290,13 +5298,15 @@ export default function App() {
   // Sync selected student IDs with available students when class/grade changes
   useEffect(() => {
     if (builderSelectedStudentIds.length > 0) {
-      const validIdSet = new Set(builderClassStudents.map((s) => s.id));
+      // In grade mode, retain from builderGradeAllStudents; otherwise from builderClassStudents
+      const validPool = builderStudentViewMode === "grade" ? builderGradeAllStudents : builderClassStudents;
+      const validIdSet = new Set(validPool.map((s) => s.id));
       const retained = builderSelectedStudentIds.filter((id) => validIdSet.has(id));
       if (retained.length !== builderSelectedStudentIds.length) {
         setBuilderSelectedStudentIds(retained);
       }
     }
-  }, [builderClassStudents]);
+  }, [builderClassStudents, builderGradeAllStudents, builderStudentViewMode]);
 
   // Automatically sync select defaults when grades list loads or changes
   useEffect(() => {
@@ -12327,6 +12337,71 @@ export default function App() {
                               {/* Specific Students Picker Container */}
                               {builderTargetStudentMode === "selected" && (
                                 <div className="bg-white rounded-2xl border border-indigo-200/90 p-4 space-y-3.5 shadow-2xs animate-fadeIn">
+                                  {/* View Scope Tabs: View by Grade vs View by Class/Semester */}
+                                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2.5 border-b border-slate-150">
+                                    <div className="flex items-center gap-1.5 p-1 bg-slate-100/90 rounded-xl border border-slate-200/80">
+                                      <button
+                                        type="button"
+                                        id="btn-view-students-by-grade"
+                                        onClick={() => {
+                                          setBuilderStudentViewMode("grade");
+                                        }}
+                                        className={`px-3 py-1.5 text-xs font-black rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                                          builderStudentViewMode === "grade"
+                                            ? "bg-white text-indigo-700 shadow-xs border border-indigo-150"
+                                            : "text-slate-600 hover:text-slate-800"
+                                        }`}
+                                      >
+                                        <span>استعراض أسماء الطلاب بالصف</span>
+                                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-600 font-black">
+                                          {builderGradeAllStudents.length}
+                                        </span>
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        id="btn-view-students-by-class"
+                                        onClick={() => {
+                                          setBuilderStudentViewMode("by_class");
+                                        }}
+                                        className={`px-3 py-1.5 text-xs font-black rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                                          builderStudentViewMode === "by_class"
+                                            ? "bg-white text-indigo-700 shadow-xs border border-indigo-150"
+                                            : "text-slate-600 hover:text-slate-800"
+                                        }`}
+                                      >
+                                        <span>الاستعراض بالفصول</span>
+                                      </button>
+                                    </div>
+
+                                    {/* Class selector when in 'by_class' view mode */}
+                                    {builderStudentViewMode === "by_class" && (
+                                      <div className="flex items-center gap-2 animate-fadeIn">
+                                        <label className="text-xs font-black text-slate-600 whitespace-nowrap">
+                                          عرض فصل:
+                                        </label>
+                                        <select
+                                          id="select-builder-student-class-filter"
+                                          value={builderStudentSelectedClass}
+                                          onChange={(e) => setBuilderStudentSelectedClass(e.target.value)}
+                                          className="text-xs font-black bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                        >
+                                          <option value="all">كل الفصول ({builderGradeAllStudents.length} طالباً)</option>
+                                          {builderSemestersList.map((sem) => {
+                                            const countInSem = builderGradeAllStudents.filter((s) =>
+                                              isClassMatching(sem, s.semester, s.gradeClass)
+                                            ).length;
+                                            return (
+                                              <option key={sem} value={sem}>
+                                                فصل {sem} ({countInSem})
+                                              </option>
+                                            );
+                                          })}
+                                        </select>
+                                      </div>
+                                    )}
+                                  </div>
+
                                   {/* Toolbar: Search, Counters, and Action Buttons */}
                                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
                                     {/* Search Input */}
@@ -12337,7 +12412,7 @@ export default function App() {
                                         id="input-builder-student-search"
                                         value={builderStudentSearch}
                                         onChange={(e) => setBuilderStudentSearch(e.target.value)}
-                                        placeholder="بحث باسم الطالب..."
+                                        placeholder="بحث باسم الطالب أو الفصل..."
                                         className="w-full pr-9 pl-3 py-2 text-xs sm:text-sm font-bold bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white text-slate-800 placeholder:text-slate-400"
                                       />
                                       {builderStudentSearch && (
@@ -12353,117 +12428,228 @@ export default function App() {
 
                                     {/* Actions & Counter */}
                                     <div className="flex items-center gap-2 flex-wrap">
-                                      <span className="text-xs font-black text-indigo-700 bg-indigo-50 border border-indigo-100 px-2.5 py-1.5 rounded-lg whitespace-nowrap">
-                                        تم تحديد {builderSelectedStudentIds.length} من {builderClassStudents.length} طالباً
-                                      </span>
+                                      {(() => {
+                                        const totalAvailableStudents =
+                                          builderStudentViewMode === "grade"
+                                            ? builderGradeAllStudents
+                                            : builderStudentSelectedClass === "all"
+                                            ? builderGradeAllStudents
+                                            : builderGradeAllStudents.filter((s) =>
+                                                isClassMatching(builderStudentSelectedClass, s.semester, s.gradeClass)
+                                              );
+                                        return (
+                                          <>
+                                            <span className="text-xs font-black text-indigo-700 bg-indigo-50 border border-indigo-100 px-2.5 py-1.5 rounded-lg whitespace-nowrap">
+                                              تم تحديد {builderSelectedStudentIds.length} من {totalAvailableStudents.length} طالباً
+                                            </span>
 
-                                      <button
-                                        type="button"
-                                        id="btn-select-all-builder-students"
-                                        onClick={() => {
-                                          const allIds = builderClassStudents.map((s) => s.id);
-                                          setBuilderSelectedStudentIds(allIds);
-                                        }}
-                                        className="px-2.5 py-1.5 text-xs font-black text-slate-700 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg transition-colors cursor-pointer"
-                                      >
-                                        تحديد الكل
-                                      </button>
+                                            <button
+                                              type="button"
+                                              id="btn-select-all-builder-students"
+                                              onClick={() => {
+                                                const allIds = totalAvailableStudents.map((s) => s.id);
+                                                setBuilderSelectedStudentIds((prev) => {
+                                                  const set = new Set([...prev, ...allIds]);
+                                                  return Array.from(set);
+                                                });
+                                              }}
+                                              className="px-2.5 py-1.5 text-xs font-black text-slate-700 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg transition-colors cursor-pointer"
+                                            >
+                                              تحديد المعروض
+                                            </button>
 
-                                      <button
-                                        type="button"
-                                        id="btn-clear-all-builder-students"
-                                        onClick={() => {
-                                          setBuilderSelectedStudentIds([]);
-                                        }}
-                                        className="px-2.5 py-1.5 text-xs font-black text-slate-700 hover:text-red-600 hover:bg-red-50 border border-slate-200 rounded-lg transition-colors cursor-pointer"
-                                      >
-                                        إلغاء التحديد
-                                      </button>
+                                            <button
+                                              type="button"
+                                              id="btn-clear-all-builder-students"
+                                              onClick={() => {
+                                                setBuilderSelectedStudentIds([]);
+                                              }}
+                                              className="px-2.5 py-1.5 text-xs font-black text-slate-700 hover:text-red-600 hover:bg-red-50 border border-slate-200 rounded-lg transition-colors cursor-pointer"
+                                            >
+                                              إلغاء التحديد
+                                            </button>
+                                          </>
+                                        );
+                                      })()}
                                     </div>
                                   </div>
 
-                                  {/* Students List Grid */}
-                                  {builderClassStudents.length === 0 ? (
-                                    <div className="text-center py-6 px-4 bg-slate-50/70 rounded-xl border border-dashed border-slate-200">
-                                      <Users className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                                      <p className="text-xs sm:text-sm font-black text-slate-600">
-                                        لا يوجد طلاب مسجلون في هذا الصف/الفصل حالياً
-                                      </p>
-                                      <p className="text-[11px] text-slate-400 mt-1">
-                                        يرجى إضافة الطلاب من تبويب الطلاب أو اختيار صف وفصل آخر.
-                                      </p>
-                                    </div>
-                                  ) : (
-                                    (() => {
-                                      const filtered = builderClassStudents.filter((s) => {
-                                        if (!builderStudentSearch.trim()) return true;
-                                        return (s.name || "").toLowerCase().includes(builderStudentSearch.trim().toLowerCase());
-                                      });
+                                  {/* Students List Display (Vertical List grouped by semester/class) */}
+                                  {(() => {
+                                    const baseStudentsPool =
+                                      builderStudentViewMode === "grade"
+                                        ? builderGradeAllStudents
+                                        : builderStudentSelectedClass === "all"
+                                        ? builderGradeAllStudents
+                                        : builderGradeAllStudents.filter((s) =>
+                                            isClassMatching(builderStudentSelectedClass, s.semester, s.gradeClass)
+                                          );
 
-                                      if (filtered.length === 0) {
-                                        return (
-                                          <div className="text-center py-6 px-4 text-xs font-bold text-slate-500 bg-slate-50 rounded-xl">
-                                            لا توجد نتائج مطابقة لبحثك: "{builderStudentSearch}"
-                                          </div>
-                                        );
-                                      }
-
+                                    if (baseStudentsPool.length === 0) {
                                       return (
-                                        <div
-                                          id="builder-students-selection-grid"
-                                          className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 max-h-64 overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-slate-200"
-                                        >
-                                          {filtered.map((student) => {
-                                            const isSelected = builderSelectedStudentIds.includes(student.id);
-                                            return (
-                                              <div
-                                                key={student.id}
-                                                id={`builder-student-item-${student.id}`}
-                                                onClick={() => {
-                                                  setBuilderSelectedStudentIds((prev) =>
-                                                    isSelected
-                                                      ? prev.filter((id) => id !== student.id)
-                                                      : [...prev, student.id]
-                                                  );
-                                                }}
-                                                className={`flex items-center gap-2.5 p-2.5 rounded-xl border transition-all cursor-pointer select-none text-right ${
-                                                  isSelected
-                                                    ? "bg-indigo-50/90 border-indigo-300 ring-2 ring-indigo-400/40 shadow-xs"
-                                                    : "bg-slate-50/70 hover:bg-slate-100/90 border-slate-200/80 text-slate-700"
-                                                }`}
-                                              >
-                                                <input
-                                                  type="checkbox"
-                                                  id={`cbx-builder-student-${student.id}`}
-                                                  checked={isSelected}
-                                                  onChange={() => {}}
-                                                  className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer accent-indigo-600 shrink-0"
-                                                />
-
-                                                <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-xs shrink-0">
-                                                  {(student.name || "ط")[0]}
-                                                </div>
-
-                                                <div className="min-w-0 flex-1">
-                                                  <span className="text-xs font-black text-slate-800 block truncate">
-                                                    {student.name}
-                                                  </span>
-                                                  {student.semester && student.semester !== builderSemester && (
-                                                    <span className="text-[10px] text-slate-400 font-bold block truncate">
-                                                      {student.semester}
-                                                    </span>
-                                                  )}
-                                                </div>
-                                              </div>
-                                            );
-                                          })}
+                                        <div className="text-center py-6 px-4 bg-slate-50/70 rounded-xl border border-dashed border-slate-200">
+                                          <Users className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                                          <p className="text-xs sm:text-sm font-black text-slate-600">
+                                            لا يوجد طلاب مسجلون في هذا الصف/الفصل حالياً
+                                          </p>
+                                          <p className="text-[11px] text-slate-400 mt-1">
+                                            يرجى إضافة الطلاب من تبويب الطلاب أو اختيار صف آخر.
+                                          </p>
                                         </div>
                                       );
-                                    })()
-                                  )}
+                                    }
+
+                                    const searchTrimmed = builderStudentSearch.trim().toLowerCase();
+                                    const filtered = baseStudentsPool.filter((s) => {
+                                      if (!searchTrimmed) return true;
+                                      const nameMatch = (s.name || "").toLowerCase().includes(searchTrimmed);
+                                      const classMatch = (s.semester || "").toLowerCase().includes(searchTrimmed);
+                                      return nameMatch || classMatch;
+                                    });
+
+                                    if (filtered.length === 0) {
+                                      return (
+                                        <div className="text-center py-6 px-4 text-xs font-bold text-slate-500 bg-slate-50 rounded-xl">
+                                          لا توجد نتائج مطابقة لبحثك: "{builderStudentSearch}"
+                                        </div>
+                                      );
+                                    }
+
+                                    // Sort students by class/semester first, then by name within each class
+                                    const sortedStudents = [...filtered].sort((a, b) => {
+                                      const semA = a.semester || "";
+                                      const semB = b.semester || "";
+                                      const semCompare = sortSemestersByNumber(semA, semB);
+                                      if (semCompare !== 0) return semCompare;
+                                      return (a.name || "").localeCompare(b.name || "", "ar");
+                                    });
+
+                                    // Group students by class/semester
+                                    const groupsMap = new Map<string, typeof sortedStudents>();
+                                    sortedStudents.forEach((student) => {
+                                      const semKey = student.semester || "بدون فصل";
+                                      if (!groupsMap.has(semKey)) {
+                                        groupsMap.set(semKey, []);
+                                      }
+                                      groupsMap.get(semKey)!.push(student);
+                                    });
+
+                                    const groups = Array.from(groupsMap.entries());
+
+                                    return (
+                                      <div
+                                        id="builder-students-selection-list"
+                                        className="space-y-3.5 max-h-80 overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-slate-200"
+                                      >
+                                        {groups.map(([semName, groupStudents]) => {
+                                          const groupIds = groupStudents.map((s) => s.id);
+                                          const allGroupSelected = groupIds.length > 0 && groupIds.every((id) => builderSelectedStudentIds.includes(id));
+                                          const someGroupSelected = groupIds.some((id) => builderSelectedStudentIds.includes(id));
+
+                                          return (
+                                            <div
+                                              key={semName}
+                                              className="border border-slate-200/90 rounded-xl overflow-hidden bg-white shadow-2xs"
+                                            >
+                                              {/* Class Group Header */}
+                                              <div className="bg-slate-50/90 px-3.5 py-2 flex items-center justify-between border-b border-slate-150">
+                                                <div className="flex items-center gap-2">
+                                                  <span className="w-2 h-2 rounded-full bg-indigo-500 shrink-0" />
+                                                  <span className="text-xs font-black text-slate-800">
+                                                    فصل {semName}
+                                                  </span>
+                                                  <span className="text-[11px] font-bold text-slate-500 bg-white border border-slate-200 px-2 py-0.5 rounded-full">
+                                                    {groupStudents.length} طلاب
+                                                  </span>
+                                                </div>
+
+                                                <button
+                                                  type="button"
+                                                  onClick={() => {
+                                                    if (allGroupSelected) {
+                                                      setBuilderSelectedStudentIds((prev) =>
+                                                        prev.filter((id) => !groupIds.includes(id))
+                                                      );
+                                                    } else {
+                                                      setBuilderSelectedStudentIds((prev) => {
+                                                        const set = new Set([...prev, ...groupIds]);
+                                                        return Array.from(set);
+                                                      });
+                                                    }
+                                                  }}
+                                                  className="text-[11px] font-black text-indigo-600 hover:text-indigo-800 hover:underline cursor-pointer"
+                                                >
+                                                  {allGroupSelected
+                                                    ? "إلغاء تحديد الفصل"
+                                                    : someGroupSelected
+                                                    ? "تحديد باقي الفصل"
+                                                    : "تحديد كل الفصل"}
+                                                </button>
+                                              </div>
+
+                                              {/* Vertical List of Students in this Class */}
+                                              <div className="divide-y divide-slate-100">
+                                                {groupStudents.map((student, idx) => {
+                                                  const isSelected = builderSelectedStudentIds.includes(student.id);
+                                                  return (
+                                                    <div
+                                                      key={student.id}
+                                                      id={`builder-student-item-${student.id}`}
+                                                      onClick={() => {
+                                                        setBuilderSelectedStudentIds((prev) =>
+                                                          isSelected
+                                                            ? prev.filter((id) => id !== student.id)
+                                                            : [...prev, student.id]
+                                                        );
+                                                      }}
+                                                      className={`flex items-center gap-3 px-3.5 py-2.5 transition-colors cursor-pointer select-none text-right ${
+                                                        isSelected
+                                                          ? "bg-indigo-50/80 hover:bg-indigo-100/70"
+                                                          : "hover:bg-slate-50/80 text-slate-700"
+                                                      }`}
+                                                    >
+                                                      <input
+                                                        type="checkbox"
+                                                        id={`cbx-builder-student-${student.id}`}
+                                                        checked={isSelected}
+                                                        onChange={() => {}}
+                                                        className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer accent-indigo-600 shrink-0"
+                                                      />
+
+                                                      <span className="text-[11px] font-bold text-slate-400 w-5 text-center shrink-0">
+                                                        {idx + 1}
+                                                      </span>
+
+                                                      <div className="w-7 h-7 rounded-lg bg-indigo-100/80 text-indigo-700 flex items-center justify-center font-black text-xs shrink-0">
+                                                        {(student.name || "ط")[0]}
+                                                      </div>
+
+                                                      <div className="min-w-0 flex-1 flex items-center justify-between gap-2">
+                                                        <span
+                                                          className={`text-xs font-black block truncate ${
+                                                            isSelected ? "text-indigo-900 font-black" : "text-slate-800"
+                                                          }`}
+                                                        >
+                                                          {student.name}
+                                                        </span>
+
+                                                        <span className="text-[11px] font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-md shrink-0">
+                                                          {student.semester || "عام"}
+                                                        </span>
+                                                      </div>
+                                                    </div>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    );
+                                  })()}
 
                                   {/* Helper Alert if In Selected Mode but None Selected */}
-                                  {builderClassStudents.length > 0 && builderSelectedStudentIds.length === 0 && (
+                                  {builderGradeAllStudents.length > 0 && builderSelectedStudentIds.length === 0 && (
                                     <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2 text-amber-800 text-xs font-bold animate-fadeIn">
                                       <span>⚠️</span>
                                       <span>يرجى تحديد طالب واحد على الأقل، أو النقر على "جميع طلاب الفصل" لإتاحته للكل.</span>

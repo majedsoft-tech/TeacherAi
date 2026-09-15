@@ -499,10 +499,43 @@ export default function App() {
 
   const isClassAccessDisabled = useCallback(
     (gradeName: string, semesterName: string) => {
-      if (isGradeAccessDisabled(gradeName)) return true;
-      return isClassOnlyAccessDisabled(gradeName, semesterName);
+      if (!gradeName || !semesterName) return false;
+      const normG = normalizeGradeName(gradeName);
+      const normS = normalizeSemesterName(semesterName);
+      const targetKey = `${normG}___${normS}`;
+
+      // 1. Check if this specific class is explicitly listed in disabledClasses
+      const isExplicitlyDisabled = disabledClasses.some((c) => {
+        if (c.includes("___")) {
+          const [cg, cs] = c.split("___");
+          return (
+            normalizeGradeName(cg) === normG &&
+            normalizeSemesterName(cs) === normS
+          );
+        }
+        return c === targetKey;
+      });
+
+      if (isExplicitlyDisabled) return true;
+
+      // 2. Legacy / fallback check: if grade was disabled in disabledGrades,
+      // but no granular classes have been set for this grade yet, all its classes are considered locked.
+      // Once any class for this grade is in disabledClasses, granular overrides take full effect!
+      const hasAnyClassEntryForGrade = disabledClasses.some((c) => {
+        if (c.includes("___")) {
+          const [cg] = c.split("___");
+          return normalizeGradeName(cg) === normG;
+        }
+        return false;
+      });
+
+      if (isGradeAccessDisabled(gradeName) && !hasAnyClassEntryForGrade) {
+        return true;
+      }
+
+      return false;
     },
-    [isGradeAccessDisabled, isClassOnlyAccessDisabled],
+    [disabledClasses, isGradeAccessDisabled],
   );
 
   // Helper function to sort grades by natural numerical value or Arabic word value ascending
@@ -5167,12 +5200,88 @@ export default function App() {
     }
   };
 
+  // Get grade-specific semesters helper and related memoized lists
+  const getSemestersForGrade = useCallback(
+    (gName: string): string[] => {
+      if (!semestersLoaded) return DEFAULT_SEMESTERS;
+      const sortedDocs = [...semesters]
+        .filter((s: any) =>
+          typeof s === "object" && s !== null
+            ? normalizeGradeName(s.gradeName) === normalizeGradeName(gName)
+            : false,
+        )
+        .sort((a, b) => {
+          const numA = typeof a.number === "number" ? a.number : 999;
+          const numB = typeof b.number === "number" ? b.number : 999;
+          if (numA !== numB) return numA - numB;
+          const timeA = typeof a.createdAt === "number" ? a.createdAt : 0;
+          const timeB = typeof b.createdAt === "number" ? b.createdAt : 0;
+          if (timeA !== timeB) return timeA - timeB; // oldest first
+          return (a.name || "").localeCompare(b.name || "", "ar");
+        });
+
+      if (sortedDocs.length > 0) {
+        return Array.from(new Set(sortedDocs.map((s) => s.name)));
+      }
+
+      // Backward compatibility for old-style string values in array
+      const stringSemesters = semesters.filter(
+        (s: any) => typeof s === "string",
+      ) as unknown as string[];
+      if (stringSemesters.length > 0) return stringSemesters;
+
+      return DEFAULT_SEMESTERS;
+    },
+    [semesters, semestersLoaded],
+  );
+
+  // Helper to get all class/semester names for a grade
+  const getAllClassesForGrade = useCallback(
+    (targetGrade: string): string[] => {
+      const normTarget = normalizeGradeName(targetGrade);
+      const fromHelper = getSemestersForGrade(targetGrade);
+      const fromDocs = (Array.isArray(semesters) ? semesters : [])
+        .filter(
+          (s: any) =>
+            typeof s === "object" &&
+            s !== null &&
+            normalizeGradeName(s.gradeName) === normTarget,
+        )
+        .map((s: any) => s.name);
+      const fromStudents = students
+        .filter((st) => {
+          const stGrade =
+            st.grade ||
+            (st.gradeClass && st.gradeClass.includes(" - ")
+              ? st.gradeClass.split(" - ")[0].trim()
+              : "");
+          return normalizeGradeName(stGrade) === normTarget && st.semester;
+        })
+        .map((st) => st.semester as string);
+
+      const combined = Array.from(
+        new Set([...fromHelper, ...fromDocs, ...fromStudents].filter(Boolean)),
+      );
+      return combined.length > 0 ? combined : DEFAULT_SEMESTERS;
+    },
+    [getSemestersForGrade, semesters, students],
+  );
+
   // Toggle student access permissions for an entire grade
+  // When a grade is locked: ALL its classes are locked automatically!
+  // When a grade is unlocked: ALL its classes are unlocked automatically!
   const handleToggleGradeStudentAccess = async (targetGrade: string) => {
     if (!currentUser) return;
     const normTarget = normalizeGradeName(targetGrade);
-    const currentlyDisabled = isGradeAccessDisabled(targetGrade);
-    const newDisabled = !currentlyDisabled;
+    const allClasses = getAllClassesForGrade(targetGrade);
+
+    // Is the grade currently locked or are all its classes locked?
+    const isGradeCurrentlyBlocked = isGradeAccessDisabled(targetGrade);
+    const anyClassBlocked = allClasses.some((c) =>
+      isClassAccessDisabled(targetGrade, c),
+    );
+    const isCurrentlyBlocked = isGradeCurrentlyBlocked || anyClassBlocked;
+    const newDisabled = !isCurrentlyBlocked;
 
     const nextDisabledGrades = newDisabled
       ? [
@@ -5183,7 +5292,26 @@ export default function App() {
         ]
       : disabledGrades.filter((g) => normalizeGradeName(g) !== normTarget);
 
+    // Classes belonging to other grades
+    const otherClasses = disabledClasses.filter((c) => {
+      if (c.includes("___")) {
+        const [cg] = c.split("___");
+        return normalizeGradeName(cg) !== normTarget;
+      }
+      return true;
+    });
+
+    // When locking the grade: lock ALL classes of this grade!
+    // When unlocking the grade: unlock ALL classes of this grade!
+    const nextDisabledClasses = newDisabled
+      ? [
+          ...otherClasses,
+          ...allClasses.map((c) => `${normTarget}___${normalizeSemesterName(c)}`),
+        ]
+      : otherClasses;
+
     setDisabledGrades(nextDisabledGrades);
+    setDisabledClasses(nextDisabledClasses);
 
     try {
       await runWithProgress(
@@ -5192,28 +5320,31 @@ export default function App() {
           const teacherRef = doc(db, "teachers", currentUser.uid);
           await setDoc(
             teacherRef,
-            { disabledStudentGrades: nextDisabledGrades },
+            {
+              disabledStudentGrades: nextDisabledGrades,
+              disabledStudentClasses: nextDisabledClasses,
+            },
             { merge: true },
           );
 
           // 2. Update all matching grade docs in grades collection
-          const q = query(
+          const qGrades = query(
             collection(db, "grades"),
             where("teacherId", "==", currentUser.uid),
           );
-          const snap = await getDocs(q);
+          const snapGrades = await getDocs(qGrades);
           const batch = writeBatch(db);
-          let found = false;
-          snap.forEach((d) => {
+          let gradeFound = false;
+          snapGrades.forEach((d) => {
             const data = d.data();
             if (normalizeGradeName(data.name) === normTarget) {
               batch.update(doc(db, "grades", d.id), {
                 disabledStudentAccess: newDisabled,
               });
-              found = true;
+              gradeFound = true;
             }
           });
-          if (!found && newDisabled) {
+          if (!gradeFound && newDisabled) {
             const newId = `grade-${Math.random().toString(36).substr(2, 9)}`;
             batch.set(doc(db, "grades", newId), {
               id: newId,
@@ -5224,14 +5355,55 @@ export default function App() {
               disabledStudentAccess: true,
             });
           }
+
+          // 3. Update all matching semester docs in semesters collection for this grade
+          const qSemesters = query(
+            collection(db, "semesters"),
+            where("teacherId", "==", currentUser.uid),
+          );
+          const snapSemesters = await getDocs(qSemesters);
+          const existingSemesterNames = new Set<string>();
+
+          snapSemesters.forEach((d) => {
+            const data = d.data();
+            if (normalizeGradeName(data.gradeName) === normTarget) {
+              existingSemesterNames.add(normalizeSemesterName(data.name));
+              batch.update(doc(db, "semesters", d.id), {
+                disabledStudentAccess: newDisabled,
+              });
+            }
+          });
+
+          // If locking and some classes did not have docs yet in Firestore, create them
+          if (newDisabled) {
+            allClasses.forEach((cName) => {
+              const normS = normalizeSemesterName(cName);
+              if (!existingSemesterNames.has(normS)) {
+                const newId = `semester-${Math.random().toString(36).substr(2, 9)}`;
+                const matchNum = cName.match(/\d+/);
+                const semNum = matchNum ? parseInt(matchNum[0], 10) : undefined;
+                batch.set(doc(db, "semesters", newId), {
+                  id: newId,
+                  teacherId: currentUser.uid,
+                  teacherEmail: currentUser.email?.toLowerCase().trim() || "",
+                  name: cName,
+                  gradeName: targetGrade,
+                  number: semNum,
+                  createdAt: Date.now(),
+                  disabledStudentAccess: true,
+                });
+              }
+            });
+          }
+
           await batch.commit();
         },
         newDisabled
-          ? `جاري تعطيل دخول الطلاب لصف "${targetGrade}"...`
-          : `جاري تفعيل دخول الطلاب لصف "${targetGrade}"...`,
+          ? `جاري قفل صف "${targetGrade}" وجميع فصوله التابعة له...`
+          : `جاري تفعيل وفتح صف "${targetGrade}" وجميع فصوله التابعة له...`,
         newDisabled
-          ? `تم تعطيل دخول طلاب صف "${targetGrade}" بنجاح 🔒`
-          : `تم تفعيل دخول طلاب صف "${targetGrade}" بنجاح 🟢`,
+          ? `تم قفل صف "${targetGrade}" وجميع فصوله التابعة له بنجاح 🔒`
+          : `تم تفعيل وفتح صف "${targetGrade}" وجميع فصوله التابعة له بنجاح 🟢`,
       );
     } catch (err) {
       console.error("Error toggling grade student access:", err);
@@ -5240,6 +5412,7 @@ export default function App() {
   };
 
   // Toggle student access permissions for a specific class/semester
+  // When a grade is locked, ANY individual class can be unlocked manually!
   const handleToggleClassStudentAccess = async (
     targetGrade: string,
     targetSemester: string,
@@ -5248,14 +5421,47 @@ export default function App() {
     const normG = normalizeGradeName(targetGrade);
     const normS = normalizeSemesterName(targetSemester);
     const classKey = `${normG}___${normS}`;
-    const currentlyDisabled = isClassOnlyAccessDisabled(
+    const currentlyDisabled = isClassAccessDisabled(
       targetGrade,
       targetSemester,
     );
     const newDisabled = !currentlyDisabled;
+    const allClasses = getAllClassesForGrade(targetGrade);
 
-    const nextDisabledClasses = newDisabled
-      ? [
+    let nextDisabledClasses: string[];
+    if (newDisabled) {
+      // Manually locking this class
+      nextDisabledClasses = [
+        ...disabledClasses.filter((c) => {
+          if (c.includes("___")) {
+            const [cg, cs] = c.split("___");
+            return !(
+              normalizeGradeName(cg) === normG &&
+              normalizeSemesterName(cs) === normS
+            );
+          }
+          return c !== classKey;
+        }),
+        classKey,
+      ];
+    } else {
+      // Manually unlocking this class!
+      // If the grade was locked as a whole in disabledGrades without individual entries in disabledClasses:
+      const hasAnyForGrade = disabledClasses.some((c) => {
+        if (c.includes("___")) {
+          const [cg] = c.split("___");
+          return normalizeGradeName(cg) === normG;
+        }
+        return false;
+      });
+
+      if (!hasAnyForGrade && isGradeAccessDisabled(targetGrade)) {
+        // Populate all other classes of this grade as locked, and unlock this one!
+        const otherClassesOfGrade = allClasses
+          .filter((s) => normalizeSemesterName(s) !== normS)
+          .map((s) => `${normG}___${normalizeSemesterName(s)}`);
+
+        nextDisabledClasses = [
           ...disabledClasses.filter((c) => {
             if (c.includes("___")) {
               const [cg, cs] = c.split("___");
@@ -5266,9 +5472,10 @@ export default function App() {
             }
             return c !== classKey;
           }),
-          classKey,
-        ]
-      : disabledClasses.filter((c) => {
+          ...otherClassesOfGrade,
+        ];
+      } else {
+        nextDisabledClasses = disabledClasses.filter((c) => {
           if (c.includes("___")) {
             const [cg, cs] = c.split("___");
             return !(
@@ -5278,8 +5485,54 @@ export default function App() {
           }
           return c !== classKey;
         });
+      }
+    }
 
     setDisabledClasses(nextDisabledClasses);
+
+    // Recalculate if all classes or no classes of this grade are disabled
+    const anyClassStillDisabled = allClasses.some((c) => {
+      const cKey = `${normG}___${normalizeSemesterName(c)}`;
+      return nextDisabledClasses.some((dc) => {
+        if (dc.includes("___")) {
+          const [cg, cs] = dc.split("___");
+          return (
+            normalizeGradeName(cg) === normG &&
+            normalizeSemesterName(cs) === normalizeSemesterName(c)
+          );
+        }
+        return dc === cKey;
+      });
+    });
+
+    const allClassDisabled =
+      allClasses.length > 0 &&
+      allClasses.every((c) => {
+        const cKey = `${normG}___${normalizeSemesterName(c)}`;
+        return nextDisabledClasses.some((dc) => {
+          if (dc.includes("___")) {
+            const [cg, cs] = dc.split("___");
+            return (
+              normalizeGradeName(cg) === normG &&
+              normalizeSemesterName(cs) === normalizeSemesterName(c)
+            );
+          }
+          return dc === cKey;
+        });
+      });
+
+    let nextDisabledGrades = disabledGrades;
+    if (!anyClassStillDisabled) {
+      nextDisabledGrades = disabledGrades.filter(
+        (g) => normalizeGradeName(g) !== normG,
+      );
+      setDisabledGrades(nextDisabledGrades);
+    } else if (allClassDisabled) {
+      if (!disabledGrades.some((g) => normalizeGradeName(g) === normG)) {
+        nextDisabledGrades = [...disabledGrades, targetGrade];
+        setDisabledGrades(nextDisabledGrades);
+      }
+    }
 
     try {
       await runWithProgress(
@@ -5288,7 +5541,10 @@ export default function App() {
           const teacherRef = doc(db, "teachers", currentUser.uid);
           await setDoc(
             teacherRef,
-            { disabledStudentClasses: nextDisabledClasses },
+            {
+              disabledStudentClasses: nextDisabledClasses,
+              disabledStudentGrades: nextDisabledGrades,
+            },
             { merge: true },
           );
 
@@ -5327,14 +5583,32 @@ export default function App() {
               disabledStudentAccess: true,
             });
           }
+
+          // Also update grade doc if all classes were unlocked
+          if (!anyClassStillDisabled) {
+            const qG = query(
+              collection(db, "grades"),
+              where("teacherId", "==", currentUser.uid),
+            );
+            const snapG = await getDocs(qG);
+            snapG.forEach((d) => {
+              const data = d.data();
+              if (normalizeGradeName(data.name) === normG) {
+                batch.update(doc(db, "grades", d.id), {
+                  disabledStudentAccess: false,
+                });
+              }
+            });
+          }
+
           await batch.commit();
         },
         newDisabled
-          ? `جاري تعطيل دخول طلاب فصل "${targetSemester}" لصف "${targetGrade}"...`
-          : `جاري تفعيل دخول طلاب فصل "${targetSemester}" لصف "${targetGrade}"...`,
+          ? `جاري قفل دخول طلاب فصل "${targetSemester}" لصف "${targetGrade}"...`
+          : `جاري تفعيل وفتح دخول طلاب فصل "${targetSemester}" لصف "${targetGrade}"...`,
         newDisabled
-          ? `تم تعطيل دخول طلاب فصل "${targetSemester}" بنجاح 🔒`
-          : `تم تفعيل دخول طلاب فصل "${targetSemester}" بنجاح 🟢`,
+          ? `تم قفل دخول طلاب فصل "${targetSemester}" بنجاح 🔒`
+          : `تم تفعيل وفتح دخول طلاب فصل "${targetSemester}" بنجاح 🟢`,
       );
     } catch (err) {
       console.error("Error toggling class student access:", err);
@@ -5368,41 +5642,6 @@ export default function App() {
     total: 0,
     studentName: "",
   });
-
-  // Get grade-specific semesters helper and related memoized lists
-  const getSemestersForGrade = useCallback(
-    (gName: string): string[] => {
-      if (!semestersLoaded) return DEFAULT_SEMESTERS;
-      const sortedDocs = [...semesters]
-        .filter((s: any) =>
-          typeof s === "object" && s !== null
-            ? normalizeGradeName(s.gradeName) === normalizeGradeName(gName)
-            : false,
-        )
-        .sort((a, b) => {
-          const numA = typeof a.number === "number" ? a.number : 999;
-          const numB = typeof b.number === "number" ? b.number : 999;
-          if (numA !== numB) return numA - numB;
-          const timeA = typeof a.createdAt === "number" ? a.createdAt : 0;
-          const timeB = typeof b.createdAt === "number" ? b.createdAt : 0;
-          if (timeA !== timeB) return timeA - timeB; // oldest first
-          return (a.name || "").localeCompare(b.name || "", "ar");
-        });
-
-      if (sortedDocs.length > 0) {
-        return Array.from(new Set(sortedDocs.map((s) => s.name)));
-      }
-
-      // Backward compatibility for old-style string values in array
-      const stringSemesters = semesters.filter(
-        (s: any) => typeof s === "string",
-      ) as unknown as string[];
-      if (stringSemesters.length > 0) return stringSemesters;
-
-      return DEFAULT_SEMESTERS;
-    },
-    [semesters, semestersLoaded],
-  );
 
   const builderTeacherGrades = useMemo(() => {
     if (gradesList && gradesList.length > 0) return gradesList;
@@ -14443,7 +14682,11 @@ export default function App() {
                               return <GraduationCap className={iconClass} />;
                             };
 
-                            const isGradeBlocked = isGradeAccessDisabled(g);
+                            const gradeAllClasses = getSemestersForGrade(g);
+                            const gradeBlockedClassesCount = gradeAllClasses.filter((c) => isClassAccessDisabled(g, c)).length;
+                            const isGradeFullyBlocked = isGradeAccessDisabled(g) || (gradeAllClasses.length > 0 && gradeBlockedClassesCount === gradeAllClasses.length);
+                            const isGradePartiallyBlocked = !isGradeFullyBlocked && gradeBlockedClassesCount > 0;
+                            const isAnyBlocked = isGradeFullyBlocked || isGradePartiallyBlocked;
 
                             return (
                               <div
@@ -14451,8 +14694,10 @@ export default function App() {
                                 className={`flex flex-col rounded-xl overflow-hidden border transition-all duration-200 min-w-[130px] ${
                                   isGradeSelected
                                     ? "border-[#5352ed] shadow-md shadow-[#5352ed]/20 ring-2 ring-indigo-500/20 transform scale-[1.01]"
-                                    : isGradeBlocked
+                                    : isGradeFullyBlocked
                                     ? "border-rose-300 bg-white shadow-3xs"
+                                    : isGradePartiallyBlocked
+                                    ? "border-amber-300 bg-white shadow-3xs"
                                     : "border-slate-200 hover:border-indigo-400 bg-white shadow-3xs"
                                 }`}
                               >
@@ -14517,29 +14762,43 @@ export default function App() {
                                     handleToggleGradeStudentAccess(g);
                                   }}
                                   className={`w-full py-1.5 px-2 border-t text-[11px] font-black flex items-center justify-between gap-1.5 transition-all cursor-pointer select-none active:scale-[0.98] ${
-                                    isGradeBlocked
+                                    isGradeFullyBlocked
                                       ? "bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200"
+                                      : isGradePartiallyBlocked
+                                      ? "bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-200"
                                       : "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200"
                                   }`}
                                   title={
-                                    isGradeBlocked
-                                      ? `دخول الطلاب معطل لصف (${g}) كاملاً - اضغط لفتحه والسماح بالدخول`
-                                      : `دخول الطلاب مفتوح لصف (${g}) - اضغط لإغلاقه وتعطيل دخول طلاب الصف`
+                                    isAnyBlocked
+                                      ? `دخول طلاب صف (${g}) مقيد - اضغط لفتحه وتفعيل كافة فصوله التابعة له`
+                                      : `دخول الطلاب مفتوح لصف (${g}) - اضغط لقفله وقفل كافة فصوله التابعة له`
                                   }
                                 >
                                   <span className="flex items-center gap-1">
-                                    {isGradeBlocked ? (
+                                    {isGradeFullyBlocked ? (
                                       <Lock className="w-3 h-3 text-rose-600 shrink-0" />
+                                    ) : isGradePartiallyBlocked ? (
+                                      <Lock className="w-3 h-3 text-amber-700 shrink-0" />
                                     ) : (
                                       <Unlock className="w-3 h-3 text-emerald-600 shrink-0" />
                                     )}
-                                    <span>{isGradeBlocked ? "الدخول: مغلق" : "الدخول: مفتوح"}</span>
+                                    <span>
+                                      {isGradeFullyBlocked 
+                                        ? "الدخول: مغلق" 
+                                        : isGradePartiallyBlocked 
+                                        ? `الدخول: جزئي (${gradeAllClasses.length - gradeBlockedClassesCount} مفتوح)` 
+                                        : "الدخول: مفتوح"}
+                                    </span>
                                   </span>
 
                                   {/* Toggle Switch Pill */}
                                   <div
                                     className={`w-7 h-4 rounded-full flex items-center px-0.5 shrink-0 transition-colors shadow-2xs ${
-                                      isGradeBlocked ? "bg-rose-500 justify-start" : "bg-emerald-500 justify-end"
+                                      isGradeFullyBlocked 
+                                        ? "bg-rose-500 justify-start" 
+                                        : isGradePartiallyBlocked 
+                                        ? "bg-amber-500 justify-center" 
+                                        : "bg-emerald-500 justify-end"
                                     }`}
                                   >
                                     <div className="w-3 h-3 rounded-full bg-white shadow-xs" />
@@ -14676,40 +14935,32 @@ export default function App() {
                                     handleToggleClassStudentAccess(selectedTabGrade, s);
                                   }}
                                   className={`w-full py-1 px-1.5 border-t text-[10px] font-black flex items-center justify-between gap-1 transition-all cursor-pointer select-none active:scale-95 ${
-                                    isClassDirectlyBlocked
+                                    isClassBlocked
                                       ? "bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200"
-                                      : isGradeBlocked
-                                      ? "bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-200"
                                       : "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200"
                                   }`}
                                   title={
-                                    isClassDirectlyBlocked
-                                      ? `دخول الطلاب معطل لفصل (${s}) - اضغط للتفعيل وفتح الدخول`
-                                      : isGradeBlocked
-                                      ? `دخول طلاب هذا الفصل مقيد بسبب تعطيل صف (${selectedTabGrade}) كاملاً`
+                                    isClassBlocked
+                                      ? `دخول الطلاب مغلق لفصل (${s}) - اضغط لفتحه والسماح بالدخول`
                                       : `دخول الطلاب مفتوح لفصل (${s}) - اضغط لإغلاقه وتعطيل الدخول`
                                   }
                                 >
                                   <span className="flex items-center gap-0.5 leading-none">
-                                    {isClassDirectlyBlocked ? (
+                                    {isClassBlocked ? (
                                       <Lock className="w-2.5 h-2.5 text-rose-600 shrink-0" />
-                                    ) : isGradeBlocked ? (
-                                      <Lock className="w-2.5 h-2.5 text-amber-700 shrink-0" />
                                     ) : (
                                       <Unlock className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
                                     )}
                                     <span>
-                                      {isClassDirectlyBlocked ? "مغلق" : isGradeBlocked ? "مقيد" : "مفتوح"}
+                                      {isClassBlocked ? "مغلق" : "مفتوح"}
                                     </span>
                                   </span>
 
                                   {/* Toggle Switch Pill */}
                                   <div
                                     className={`w-5 h-3 rounded-full flex items-center px-0.5 shrink-0 transition-colors shadow-2xs ${
-                                      isClassDirectlyBlocked
+                                      isClassBlocked
                                         ? "bg-rose-500 justify-start"
-                                        : isGradeBlocked
-                                        ? "bg-amber-500 justify-start"
                                         : "bg-emerald-500 justify-end"
                                     }`}
                                   >

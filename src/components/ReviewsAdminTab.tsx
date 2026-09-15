@@ -33,7 +33,8 @@ import {
   UserX,
   XCircle,
   CheckCircle2,
-  Filter
+  Filter,
+  Save
 } from "lucide-react";
 import { Quiz, Question, ReviewChallenge, ReviewScore, BankQuestion } from "../types";
 import { isTrueFalseQuestion, normalizeQuestion } from "../utils/questionUtils";
@@ -1059,9 +1060,11 @@ export default function ReviewsAdminTab({
     };
   }, [selectedChallengeId, reviewChallenges]);
 
-  // Auto-cleanup live game after 20 seconds in podium state on teacher side
+  // Auto-cleanup live game podium view after 20 seconds on teacher side if viewing podium
   React.useEffect(() => {
-    const activeChallenge = reviewChallenges.find(c => c.id === selectedChallengeId) || reviewChallenges.find(c => c.status === "active");
+    if (activeSubTab !== "leaderboard" || !selectedChallengeId) return;
+
+    const activeChallenge = reviewChallenges.find(c => c.id === selectedChallengeId);
     let interval: any = null;
     
     if (
@@ -1081,9 +1084,8 @@ export default function ReviewsAdminTab({
           setSelectedChallengeId(null);
           setActiveSubTab("list");
           try {
-            // Reset the challenge state
+            // Reset the challenge liveState but keep status intact
             await updateDoc(doc(db, "reviewChallenges", activeChallenge.id), {
-              status: "completed",
               liveState: "waiting",
               podiumAt: deleteField()
             });
@@ -1102,7 +1104,7 @@ export default function ReviewsAdminTab({
               batch.delete(docSnap.ref);
             });
             await batch.commit();
-            triggerToast("اكتمل التحدي وتم إغلاق ساحة المعركة التنافسية وتصفير النقاط للجولة الجديدة بنجاح 👍", "info");
+            triggerToast("اكتملت الجولة وتم العودة لشاشة الألعاب بنجاح 👍", "info");
           } catch (err) {
             console.warn("Failed to auto-cleanup live challenge:", err);
           }
@@ -1115,7 +1117,7 @@ export default function ReviewsAdminTab({
         if (interval) clearInterval(interval);
       };
     }
-  }, [selectedChallengeId, reviewChallenges]);
+  }, [activeSubTab, selectedChallengeId, reviewChallenges]);
 
   // Sync Basic Data (البيانات الأساسية) fields in Step 2 automatically whenever Step 1 selections/lessons change
   React.useEffect(() => {
@@ -1184,21 +1186,21 @@ export default function ReviewsAdminTab({
     setIsAutoModalOpen(true);
   };
 
+  const shuffleArray = <T,>(arr: T[]): T[] => {
+    const copy = [...arr];
+    for (let i = copy.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
+  };
+
   // Generate auto test questions based on selected counts (random sampling) and automatically save & launch challenge
   const handleGenerateAutoTest = async () => {
     if (!isAutoTargetAudienceEnabled) {
       triggerToast("يرجى تفعيل مربع الاختيار لتحديد الفئة المستهدفة (الصف والفصل) لتوليد الاختبار.", "error");
       return;
     }
-
-    const shuffleArray = <T,>(arr: T[]): T[] => {
-      const copy = [...arr];
-      for (let i = copy.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [copy[i], copy[j]] = [copy[j], copy[i]];
-      }
-      return copy;
-    };
 
     const mcqs = filteredBankQuestions.filter(q => !isTfQuestion(q));
     const tfs = filteredBankQuestions.filter(q => isTfQuestion(q));
@@ -1259,40 +1261,150 @@ export default function ReviewsAdminTab({
     // Auto-fill subject if empty
     const autoSubject = newSubject.trim() || (bqFilterSubject !== "all" ? bqFilterSubject : "مراجعة عامة");
 
+    const isAllGames = (newGameType as string) === "all";
     setIsSubmitting(true);
-    const fixedId = `fixed_game_${currentUser.uid}_${newGameType}`;
-    const fg = FIXED_GAMES.find(g => g.gameType === newGameType) || FIXED_GAMES[0];
-    const existing = reviewChallenges.find(c => c.id === fixedId || c.gameType === newGameType);
-
-    const challengeData = {
-      id: fixedId,
-      title: autoTitle || fg.title,
-      subject: autoSubject,
-      grade: newGrade,
-      semester: newSemester,
-      questions: finalQuestions,
-      status: "draft" as const,
-      teacherId: currentUser.uid,
-      createdAt: existing?.createdAt || new Date().toISOString(),
-      gameType: newGameType
-    };
 
     try {
-      await setDoc(doc(db, "reviewChallenges", fixedId), challengeData, { merge: true });
-      triggerToast(`تم توليد وحفظ أسئلة لعبة ${autoTitle || fg.title} بـ ${finalQuestions.length} سؤالاً بنجاح (مسودة دون تفعيل) 💾✨`, "success");
-      
+      if (isAllGames) {
+        for (const game of FIXED_GAMES) {
+          const gameTitle = autoTitle ? `${autoTitle} - ${game.title}` : game.title;
+          const fixedId = `fixed_game_${currentUser.uid}_${game.gameType}`;
+          const defaultFixedId = `fixed_game_${game.gameType}`;
+          const matchingChallenges = reviewChallenges.filter(c => c.id === fixedId || c.id === defaultFixedId || c.gameType === game.gameType);
+          const existing = reviewChallenges.find(c => c.id === fixedId || c.id === defaultFixedId) || matchingChallenges[0];
+
+          const challengeData = {
+            id: fixedId,
+            title: gameTitle,
+            subject: autoSubject,
+            grade: newGrade,
+            semester: newSemester,
+            questions: finalQuestions,
+            status: "draft" as const,
+            teacherId: currentUser.uid,
+            createdAt: existing?.createdAt || new Date().toISOString(),
+            gameType: game.gameType
+          };
+
+          await setDoc(doc(db, "reviewChallenges", fixedId), challengeData, { merge: true });
+          await setDoc(doc(db, "reviewChallenges", defaultFixedId), {
+            ...challengeData,
+            id: defaultFixedId
+          }, { merge: true });
+
+          for (const ch of matchingChallenges) {
+            if (ch.id && ch.id !== fixedId && ch.id !== defaultFixedId) {
+              await setDoc(doc(db, "reviewChallenges", ch.id), {
+                questions: finalQuestions,
+                title: gameTitle,
+                subject: autoSubject,
+                grade: newGrade,
+                semester: newSemester,
+                status: "draft"
+              }, { merge: true }).catch(() => {});
+            }
+          }
+        }
+        triggerToast(`تم توليد وتحديث أسئلة جميع الألعاب (${FIXED_GAMES.length} ألعاب) بـ ${finalQuestions.length} سؤالاً بنجاح (مسودة دون تفعيل مباشر) 💾✨`, "success");
+      } else {
+        const fg = FIXED_GAMES.find(g => g.gameType === newGameType) || FIXED_GAMES[0];
+        const fixedId = `fixed_game_${currentUser.uid}_${newGameType}`;
+        const defaultFixedId = `fixed_game_${newGameType}`;
+        const matchingChallenges = reviewChallenges.filter(c => c.id === fixedId || c.id === defaultFixedId || c.gameType === newGameType);
+        const existing = reviewChallenges.find(c => c.id === fixedId || c.id === defaultFixedId) || matchingChallenges[0];
+
+        const challengeData = {
+          id: fixedId,
+          title: autoTitle || fg.title,
+          subject: autoSubject,
+          grade: newGrade,
+          semester: newSemester,
+          questions: finalQuestions,
+          status: "draft" as const,
+          teacherId: currentUser.uid,
+          createdAt: existing?.createdAt || new Date().toISOString(),
+          gameType: newGameType
+        };
+
+        await setDoc(doc(db, "reviewChallenges", fixedId), challengeData, { merge: true });
+        await setDoc(doc(db, "reviewChallenges", defaultFixedId), {
+          ...challengeData,
+          id: defaultFixedId
+        }, { merge: true });
+
+        for (const ch of matchingChallenges) {
+          if (ch.id && ch.id !== fixedId && ch.id !== defaultFixedId) {
+            await setDoc(doc(db, "reviewChallenges", ch.id), {
+              questions: finalQuestions,
+              title: autoTitle || fg.title,
+              subject: autoSubject,
+              grade: newGrade,
+              semester: newSemester,
+              status: "draft"
+            }, { merge: true }).catch(() => {});
+          }
+        }
+        triggerToast(`تم توليد وحفظ أسئلة لعبة ${autoTitle || fg.title} بـ ${finalQuestions.length} سؤالاً بنجاح (مسودة دون تفعيل) 💾✨`, "success");
+      }
+
       // Reset form states and switch to active challenges list
+      setSelectedQuestions(finalQuestions);
       setNewTitle("");
-      setSelectedQuestions([]);
       setSelectedQuizIdForImport("");
       setIsAutoModalOpen(false);
       setIsEditModalOpen(false);
       setActiveSubTab("list");
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, `reviewChallenges/${fixedId}`);
+      console.error(err);
+      triggerToast("حدث خطأ أثناء حفظ الأسئلة المولدة تلقائياً", "error");
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleAutoInsertQuestions = () => {
+    if (!currentUser) return;
+    const mcqs = filteredBankQuestions.filter(q => !isTfQuestion(q));
+    const tfs = filteredBankQuestions.filter(q => isTfQuestion(q));
+
+    const selectedMcqs = shuffleArray(mcqs).slice(0, autoMcqCount);
+    const selectedTfs = shuffleArray(tfs).slice(0, autoTfCount);
+
+    const generatedPool = [...selectedMcqs, ...selectedTfs];
+
+    if (generatedPool.length === 0) {
+      triggerToast("يرجى اختيار عدد أكبر من 0 للأسئلة أو التأكد من توفر أسئلة في التصنيف الحالي", "error");
+      return;
+    }
+
+    const formattedQuestions: Question[] = generatedPool.map(bq => {
+      const isTf = isTfQuestion(bq);
+      let normAnswer = bq.correctAnswer;
+      if (isTf) {
+        let ansText = String(bq.correctAnswer).trim();
+        if (ansText === '0' || ansText === 'true' || ansText === 'صح' || ansText === 'صحيح' || ansText === 'صواب') {
+          normAnswer = '0';
+        } else {
+          normAnswer = '1';
+        }
+      }
+      return {
+        id: bq.id,
+        text: bq.text,
+        type: isTf ? 'true_false' : 'multiple_choice',
+        options: isTf ? (bq.options && bq.options.length === 2 ? bq.options : ['صحيح', 'خطأ']) : (bq.options || []),
+        correctAnswer: normAnswer,
+        points: bq.points || 10
+      };
+    });
+
+    const existingIds = new Set(selectedQuestions.map(q => q.id));
+    const newQuestions = formattedQuestions.filter(q => !existingIds.has(q.id));
+    const finalQuestions = [...selectedQuestions, ...newQuestions];
+
+    setSelectedQuestions(finalQuestions);
+    setIsAutoModalOpen(false);
+    triggerToast(`تم توليد وإدراج ${finalQuestions.length} سؤالاً في قائمة الأسئلة بنجاح! 🪄 يمكنك مراجعتها ثم الضغط على "حفظ وتحديث الأسئلة لجميع الألعاب"`, "success");
   };
 
   const toggleQuestionSelection = (bq: BankQuestion) => {
@@ -1453,8 +1565,8 @@ export default function ReviewsAdminTab({
     setIsEditModalOpen(true);
   };
 
-  // Save/Update Game Questions & Optionally Activate
-  const handleSaveGameQuestions = async (isActivating: boolean = true) => {
+  // Save/Update Game Questions & Optionally Activate (Defaults to FALSE - only change questions without direct student activation)
+  const handleSaveGameQuestions = async (isActivating: boolean = false) => {
     const isAllGames = (newGameType as string) === "all";
     const fg = FIXED_GAMES.find(g => g.gameType === newGameType) || FIXED_GAMES[0];
     const targetTitle = newTitle.trim() || (isAllGames ? "تحدي المراجعة لجميع الألعاب" : fg.title);
@@ -1491,7 +1603,7 @@ export default function ReviewsAdminTab({
     setIsSubmitting(true);
 
     if (isAllGames) {
-      // Apply and save questions to ALL fixed games at once
+      // Apply and save questions to ALL fixed games at once without activating directly for students
       try {
         for (const game of FIXED_GAMES) {
           const gameTitle = newTitle.trim() ? `${newTitle.trim()} - ${game.title}` : game.title;
@@ -1540,7 +1652,7 @@ export default function ReviewsAdminTab({
         triggerToast(
           isActivating
             ? `تم تحديث واستبدال الأسئلة لجميع الألعاب (${FIXED_GAMES.length} ألعاب) وتفعيلها فوراً للطلاب بنجاح! ⚡🟢🎮`
-            : `تم استبدال الأسئلة وحفظ جميع الألعاب كمسودة بنجاح! 💾`,
+            : `تم حفظ وتحديث الأسئلة لجميع الألعاب بنجاح دون تفعيل مباشر للطلاب 💾🎮 (يمكنك تفعيل أي لعبة عند بدء الحصة)`,
           "success"
         );
 
@@ -1603,7 +1715,7 @@ export default function ReviewsAdminTab({
       triggerToast(
         isActivating
           ? `تم استبدال الأسئلة القديمة بالأسئلة الجديدة وتفعيل لعبة (${targetTitle}) للطلاب بنجاح! ⚡🟢`
-          : `تم استبدال الأسئلة القديمة بالأسئلة الجديدة وحفظ لعبة (${targetTitle}) كمسودة 💾`,
+          : `تم حفظ وتحديث أسئلة لعبة (${targetTitle}) بنجاح دون تفعيل مباشر للطلاب 💾 (يمكنك تفعيلها لاحقاً)`,
         "success"
       );
       
@@ -1677,10 +1789,7 @@ export default function ReviewsAdminTab({
     const newStatus = isCurrentlyActive ? "completed" : "active";
     const initialLiveState = newStatus === "active" ? "playing" : "waiting";
     try {
-      if (newStatus === "active") {
-        setSelectedChallengeId(docId);
-        setActiveSubTab("leaderboard");
-      } else {
+      if (newStatus !== "active") {
         setSelectedChallengeId(null);
         setSelectedLeaderboardChallengeId(null);
       }
@@ -2569,7 +2678,7 @@ export default function ReviewsAdminTab({
               initial={{ opacity: 0, scale: 0.95, y: 15 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 15 }}
-              className="bg-white w-full max-w-4xl rounded-3xl p-5 md:p-8 border border-slate-200 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto my-auto relative"
+              className="bg-white w-full max-w-6xl xl:max-w-7xl rounded-3xl p-5 md:p-8 border border-slate-200 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto my-auto relative"
             >
               <div className="flex justify-between items-center pb-4 border-b border-slate-150 sticky -top-5 md:-top-8 bg-white/95 backdrop-blur-md z-30 pt-2 -mx-5 -mt-5 px-5 md:-mx-8 md:-mt-8 md:px-8">
                 <div className="flex items-center gap-2.5">
@@ -2586,8 +2695,8 @@ export default function ReviewsAdminTab({
                     </h3>
                     <p className="text-xs text-slate-500 font-bold">
                       {(newGameType as string) === "all"
-                        ? "سيتم تطبيق الأسئلة المختارة على جميع الألعاب الأربعة وتفعيلها للطلاب فوراً بنفس الوقت"
-                        : "إضافة وتعديل الأسئلة وإدارتها وتفعيلها فوراً للطلاب بالمعمل"}
+                        ? "سيتم حفظ واستبدال الأسئلة لجميع الألعاب دون تفعيلها مباشرة للطلاب (يمكن تفعيل أي لعبة عند بدء الحصة)"
+                        : "حفظ وتحديث الأسئلة دون تفعيل مباشر للطلاب (يمكن تفعيل اللعبة في أي وقت)"}
                     </p>
                   </div>
                 </div>
@@ -2606,13 +2715,15 @@ export default function ReviewsAdminTab({
                 </button>
               </div>
 
-              <form onSubmit={(e) => { e.preventDefault(); handleSaveGameQuestions(true); }} className="space-y-8">
+              <form onSubmit={(e) => { e.preventDefault(); handleSaveGameQuestions(false); }} className="space-y-8">
               {/* Question Selection Section */}
               <div className="bg-slate-50/80 border border-slate-200/90 rounded-2xl p-5 md:p-6 space-y-4">
                 <div className="flex items-center justify-between pb-3 border-b border-slate-200">
                   <div className="flex items-center gap-2">
-                    <span className="w-6 h-6 rounded-full bg-indigo-600 text-white text-xs font-black flex items-center justify-center">١</span>
-                    <h4 className="text-xs md:text-sm font-black text-slate-800">تحديد اختيار أسئلة التحدي من بنك الأسئلة 📚</h4>
+                    <h4 className="text-xs md:text-sm font-black text-slate-800 flex items-center gap-2">
+                      <Database className="w-4 h-4 text-indigo-600" />
+                      <span>اختيار وتحديد أسئلة التحدي من بنك الأسئلة 📚</span>
+                    </h4>
                   </div>
                   <span className={`text-xs font-black px-3 py-1 rounded-full border ${
                     (newGameType as string) === "all"
@@ -3083,68 +3194,6 @@ export default function ReviewsAdminTab({
                   </div>
               </div>
 
-              {/* STEP 2: Basic Information */}
-              <div className="bg-slate-50/80 border border-slate-200/90 rounded-2xl p-5 md:p-6 space-y-4">
-                <div className="flex items-center gap-2 pb-3 border-b border-slate-200">
-                  <span className="w-6 h-6 rounded-full bg-indigo-600 text-white text-xs font-black flex items-center justify-center">٢</span>
-                  <h4 className="text-xs md:text-sm font-black text-slate-800">البيانات الأساسية للتحدي والمادة 📝</h4>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-black text-slate-700 block text-right">عنوان المراجعة (مثال: مراجعة الوحدة الأولى)</label>
-                    <input
-                      type="text"
-                      required
-                      value={newTitle}
-                      onChange={(e) => setNewTitle(e.target.value)}
-                      placeholder="أدخل اسماً شيقاً للمراجعة..."
-                      className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-                    />
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-black text-slate-700 block text-right">المادة العلمية</label>
-                    <input
-                      type="text"
-                      required
-                      value={newSubject}
-                      onChange={(e) => setNewSubject(e.target.value)}
-                      placeholder="مثال: مهارات رقمية، كيمياء، اجتماعيات..."
-                      className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-                    />
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-black text-slate-700 block text-right">الصف المستهدف للتحفيز</label>
-                    <select
-                      value={newGrade}
-                      onChange={(e) => setNewGrade(e.target.value)}
-                      className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-                    >
-                      <option value="جميع الفصول (عام)">جميع الفصول (عام)</option>
-                      {Object.values(GRADE_PRESETS).flat().map((grd) => (
-                        <option key={grd} value={grd}>{grd}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-black text-slate-700 block text-right">الفصل الدراسي</label>
-                    <select
-                      value={newSemester}
-                      onChange={(e) => setNewSemester(e.target.value)}
-                      className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-                    >
-                      <option value="عام">عام / كل الفصول</option>
-                      {SEMESTER_PRESETS.map((sem) => (
-                        <option key={sem} value={sem}>{sem}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              </div>
-
               <div className="pt-3 flex flex-col sm:flex-row items-center gap-3">
                 <button
                   type="button"
@@ -3161,15 +3210,15 @@ export default function ReviewsAdminTab({
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="flex-1 w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 disabled:bg-slate-300 text-white rounded-xl text-xs sm:text-sm font-black transition duration-200 shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                  className="flex-1 w-full py-3.5 bg-gradient-to-r from-indigo-600 via-indigo-700 to-blue-700 hover:from-indigo-700 hover:to-blue-800 disabled:bg-slate-300 text-white rounded-xl text-xs sm:text-sm font-black transition duration-200 shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-[0.99]"
                 >
-                  <Sparkles className="w-4 h-4 text-yellow-300" />
+                  <Save className="w-4 h-4 text-white" />
                   <span>
                     {isSubmitting
-                      ? "جاري الحفظ واستبدال الأسئلة..."
+                      ? "جاري حفظ وتحديث الأسئلة..."
                       : (newGameType as string) === "all"
-                        ? "حفظ وتحديث الأسئلة لجميع الألعاب الأربعة وتفعيلها فوراً للطلاب ⚡🟢🎮"
-                        : "حفظ واستبدال الأسئلة وتفعيل اللعبة للطلاب فوراً ⚡🟢"}
+                        ? "حفظ وتحديث الأسئلة لجميع الألعاب الأربعة (تغيير الأسئلة فقط دون تفعيل) 💾🎮"
+                        : "حفظ وتحديث الأسئلة (تغيير الأسئلة فقط دون تفعيل) 💾"}
                   </span>
                 </button>
               </div>
@@ -4132,25 +4181,45 @@ export default function ReviewsAdminTab({
                     </div>
 
                     {/* Modal Action Footer */}
-                    <div className="flex items-center justify-between gap-3 pt-2 border-t border-slate-100">
-                      <button
-                        type="button"
-                        disabled={isSubmitting || !isAutoTargetAudienceEnabled || (autoMcqCount + autoTfCount <= 0)}
-                        onClick={handleGenerateAutoTest}
-                        className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none disabled:cursor-not-allowed text-white rounded-2xl font-black text-xs shadow-md shadow-indigo-200 transition hover:scale-[1.02] active:scale-95 cursor-pointer flex items-center gap-2"
-                      >
-                        {isSubmitting ? (
-                          <Loader2 className="w-4 h-4 animate-spin text-white" />
-                        ) : (
-                          <Sparkles className="w-4 h-4 text-white" />
-                        )}
-                        <span>{isSubmitting ? "جاري التوليد..." : "توليد الأسئلة وحفظها ✨"}</span>
-                      </button>
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-slate-100">
+                      <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                        <button
+                          type="button"
+                          disabled={isSubmitting || (autoMcqCount + autoTfCount <= 0)}
+                          onClick={handleAutoInsertQuestions}
+                          className="flex-1 sm:flex-none px-4 py-2.5 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-900 rounded-2xl font-black text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs"
+                          title="توليد الأسئلة وإدراجها في قائمة الأسئلة لمراجعتها وتعديلها"
+                        >
+                          <Wand2 className="w-3.5 h-3.5 text-amber-600" />
+                          <span>إدراج في الأسئلة المختارة 🪄</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={isSubmitting || !isAutoTargetAudienceEnabled || (autoMcqCount + autoTfCount <= 0)}
+                          onClick={handleGenerateAutoTest}
+                          className="flex-1 sm:flex-none px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none disabled:cursor-not-allowed text-white rounded-2xl font-black text-xs shadow-md shadow-indigo-200 transition hover:scale-[1.02] active:scale-95 cursor-pointer flex items-center justify-center gap-2"
+                        >
+                          {isSubmitting ? (
+                            <Loader2 className="w-4 h-4 animate-spin text-white" />
+                          ) : (
+                            <Sparkles className="w-4 h-4 text-white" />
+                          )}
+                          <span>
+                            {isSubmitting 
+                              ? "جاري الحفظ والتحديث..." 
+                              : (newGameType as string) === "all" 
+                              ? "توليد وحفظ لجميع الألعاب 💾✨" 
+                              : "توليد الأسئلة وحفظها 💾✨"}
+                          </span>
+                        </button>
+                      </div>
+
                       <button
                         type="button"
                         disabled={isSubmitting}
                         onClick={() => setIsAutoModalOpen(false)}
-                        className="px-6 py-3 bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 rounded-2xl font-black text-xs transition cursor-pointer"
+                        className="w-full sm:w-auto px-5 py-2.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 rounded-2xl font-black text-xs transition cursor-pointer"
                       >
                         إلغاء
                       </button>

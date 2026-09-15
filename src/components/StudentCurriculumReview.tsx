@@ -1095,7 +1095,18 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
       });
       return unsub;
     } else {
-      setLessonStats({});
+      // In standalone / anonymous mode, keep local stats from localStorage
+      const key = "curriculum_stats_anonymous";
+      const saved = localStorage.getItem(key);
+      if (saved) {
+        try {
+          setLessonStats(JSON.parse(saved));
+        } catch {
+          setLessonStats({});
+        }
+      } else {
+        setLessonStats({});
+      }
     }
   }, [activeStudent?.id]);
 

@@ -1134,6 +1134,48 @@ ${JSON.stringify(questionsPayload, null, 2)}`;
       let totalPoints = 0;
       const detailedQuestionResults: any[] = [];
 
+      // Arabic text normalization helper for robust answer comparison
+      const normalizeText = (val: any): string => {
+        if (val === undefined || val === null) return "";
+        let str = String(val).trim();
+        // Remove trailing dot/period or punctuation
+        str = str.replace(/[.\u06D4]+$/g, "").trim();
+        // Normalize Arabic characters: alef forms to bare alef, teh marbuta to heh, alif maqsura to ya
+        str = str
+          .replace(/[إأآا]/g, "ا")
+          .replace(/ة/g, "ه")
+          .replace(/ى/g, "ي")
+          .replace(/[\u064B-\u065F\u0670]/g, "") // remove tashkeel/diacritics
+          .replace(/\s+/g, " ")
+          .toLowerCase();
+        return str;
+      };
+
+      const isTruthyArabic = (val: any): boolean => {
+        const norm = normalizeText(val);
+        return (
+          norm === "true" ||
+          norm === "صح" ||
+          norm === "صحيح" ||
+          norm === "صواب" ||
+          norm === "نعم" ||
+          norm === "1" ||
+          norm === "0"
+        );
+      };
+
+      const isFalsyArabic = (val: any): boolean => {
+        const norm = normalizeText(val);
+        return (
+          norm === "false" ||
+          norm === "خطا" ||
+          norm === "خاطي" ||
+          norm === "خاطيه" ||
+          norm === "لا" ||
+          norm === "1"
+        );
+      };
+
       questions.forEach((q: any) => {
         const qPoints = typeof q.points === "number" ? q.points : 1;
         totalPoints += qPoints;
@@ -1142,51 +1184,110 @@ ${JSON.stringify(questionsPayload, null, 2)}`;
         let isCorrect = false;
         let resolvedCorrectText = "";
 
-        if (q.type === "multiple_choice" && Array.isArray(q.options)) {
+        // Check if question is True/False by type or by structure
+        const isTf =
+          q.type === "true_false" ||
+          q.type === "tf" ||
+          q.type === "boolean" ||
+          q.type === "صح_خطأ" ||
+          q.type === "صح_و_خطأ" ||
+          (Array.isArray(q.options) &&
+            q.options.filter((o: any) => {
+              const str = String(o || "").trim();
+              return (
+                str &&
+                !str.includes("الخيار الثالث") &&
+                !str.includes("الخيار الرابع") &&
+                !str.toLowerCase().includes("option 3") &&
+                !str.toLowerCase().includes("option 4")
+              );
+            }).length <= 2 &&
+            q.options.some((o: any) => {
+              const n = normalizeText(o);
+              return n === "صح" || n === "صحيح" || n === "صواب" || n === "خطا" || n === "خاطي";
+            }));
+
+        if (isTf) {
+          const cRaw = String(q.correctAnswer ?? "").trim();
+          const isCorrectTrue =
+            cRaw === "true" ||
+            cRaw === "0" ||
+            cRaw === "صح" ||
+            cRaw === "صحيح" ||
+            cRaw === "صواب" ||
+            isTruthyArabic(cRaw);
+
+          resolvedCorrectText = isCorrectTrue ? "صحيح" : "خطأ";
+
+          if (studentAns !== undefined && studentAns !== null && String(studentAns).trim() !== "") {
+            const sRaw = String(studentAns).trim();
+            // Handle numeric index submission (0 = first option "صحيح", 1 = second option "خطأ")
+            let isStudentTrue = false;
+            if (sRaw === "0") {
+              isStudentTrue = true;
+            } else if (sRaw === "1") {
+              isStudentTrue = false;
+            } else {
+              isStudentTrue = isTruthyArabic(sRaw);
+            }
+
+            if (isStudentTrue === isCorrectTrue) {
+              isCorrect = true;
+            }
+          }
+        } else if (q.type === "multiple_choice" && Array.isArray(q.options)) {
           const cRaw = String(q.correctAnswer ?? "").trim();
           const cIdx = parseInt(cRaw, 10);
+
+          // Find correct option text
           if (!isNaN(cIdx) && cIdx >= 0 && cIdx < q.options.length) {
             resolvedCorrectText = String(q.options[cIdx]).trim();
           } else {
             resolvedCorrectText = cRaw;
           }
 
-          if (studentAns !== undefined && studentAns !== null) {
+          if (studentAns !== undefined && studentAns !== null && String(studentAns).trim() !== "") {
             const sRaw = String(studentAns).trim();
             const sIdx = parseInt(sRaw, 10);
 
-            // Match if student answer equals correct text directly
-            if (resolvedCorrectText && sRaw.toLowerCase() === resolvedCorrectText.toLowerCase()) {
+            const normCorrect = normalizeText(resolvedCorrectText);
+            const normRawCorrect = normalizeText(cRaw);
+            const normStudent = normalizeText(sRaw);
+
+            // 1. Direct text equality with Arabic normalization
+            if (normCorrect && normStudent === normCorrect) {
+              isCorrect = true;
+            } else if (normRawCorrect && normStudent === normRawCorrect) {
               isCorrect = true;
             } else if (sRaw === cRaw) {
-              // Direct string match (e.g. "0" === "0")
               isCorrect = true;
             } else if (!isNaN(sIdx) && sIdx >= 0 && sIdx < q.options.length) {
-              // Student submitted an index, check if that option's text matches the correct option's text
+              // Student submitted an index, check against options[sIdx]
               const studentOptText = String(q.options[sIdx]).trim();
-              if (resolvedCorrectText && studentOptText.toLowerCase() === resolvedCorrectText.toLowerCase()) {
+              if (normCorrect && normalizeText(studentOptText) === normCorrect) {
+                isCorrect = true;
+              } else if (sIdx === cIdx) {
+                isCorrect = true;
+              }
+            } else if (!isNaN(cIdx) && cIdx >= 0 && cIdx < q.options.length) {
+              // Student submitted option text, check against q.options[cIdx]
+              const correctOptText = String(q.options[cIdx]).trim();
+              if (normalizeText(correctOptText) === normStudent) {
                 isCorrect = true;
               }
             }
           }
-        } else if (q.type === "true_false") {
-          const cRaw = String(q.correctAnswer ?? "").toLowerCase().trim();
-          const isCorrectTrue = cRaw === "true" || cRaw === "صحيح" || cRaw === "1";
-          resolvedCorrectText = isCorrectTrue ? "صحيح" : "خطأ";
-
-          if (studentAns !== undefined && studentAns !== null) {
-            const sRaw = String(studentAns).toLowerCase().trim();
-            const isStudentTrue = sRaw === "true" || sRaw === "صحيح" || sRaw === "1";
-            if (isStudentTrue === isCorrectTrue) {
+        } else {
+          // Fallback direct match
+          const cRaw = String(q.correctAnswer ?? "").trim();
+          resolvedCorrectText = cRaw;
+          if (studentAns !== undefined && studentAns !== null && String(studentAns).trim() !== "") {
+            const normStudent = normalizeText(studentAns);
+            const normCorrect = normalizeText(cRaw);
+            if (normStudent === normCorrect || String(studentAns).trim() === cRaw) {
               isCorrect = true;
             }
           }
-        } else {
-          // Fallback direct match
-          if (studentAns !== undefined && studentAns !== null) {
-            isCorrect = String(studentAns).trim().toLowerCase() === String(q.correctAnswer ?? "").trim().toLowerCase();
-          }
-          resolvedCorrectText = String(q.correctAnswer ?? "");
         }
 
         if (isCorrect) {

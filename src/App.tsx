@@ -2381,35 +2381,125 @@ export default function App() {
       let earnedPoints = 0;
       let totalPoints = 0;
 
-      studentQuiz.questions.forEach((q) => {
-        totalPoints += q.points;
+      const normArabicText = (val: any): string => {
+        if (val === undefined || val === null) return "";
+        let str = String(val).trim();
+        str = str.replace(/[.\u06D4]+$/g, "").trim();
+        return str
+          .replace(/[إأآا]/g, "ا")
+          .replace(/ة/g, "ه")
+          .replace(/ى/g, "ي")
+          .replace(/[\u064B-\u065F\u0670]/g, "")
+          .replace(/\s+/g, " ")
+          .toLowerCase();
+      };
+
+      const isTrueArabic = (val: any): boolean => {
+        const norm = normArabicText(val);
+        return (
+          norm === "true" ||
+          norm === "صح" ||
+          norm === "صحيح" ||
+          norm === "صواب" ||
+          norm === "نعم" ||
+          norm === "1" ||
+          norm === "0"
+        );
+      };
+
+      const updatedQsWithResults = studentQuiz.questions.map((q) => {
+        const qPoints = typeof q.points === "number" ? q.points : 1;
+        totalPoints += qPoints;
         const ans = quizAnswers[q.id];
-        if (ans !== undefined && ans !== null) {
+        let isMatch = false;
+        let resolvedAnsText = String(q.correctAnswer ?? "");
+
+        if (ans !== undefined && ans !== null && String(ans).trim() !== "") {
           const sAns = String(ans).trim();
-          let isMatch = false;
-          if (q.correctAnswer !== undefined) {
-            const cAns = String(q.correctAnswer).trim();
-            if (sAns.toLowerCase() === cAns.toLowerCase()) {
+
+          const isTf =
+            q.type === "true_false" ||
+            (Array.isArray(q.options) &&
+              q.options.some((o) => {
+                const n = normArabicText(o);
+                return n === "صح" || n === "صحيح" || n === "صواب" || n === "خطا" || n === "خاطي";
+              }));
+
+          if (isTf) {
+            const cAns = String(q.correctAnswer ?? "").trim();
+            const isCorrectTrue =
+              cAns === "true" ||
+              cAns === "0" ||
+              cAns === "صح" ||
+              cAns === "صحيح" ||
+              cAns === "صواب" ||
+              isTrueArabic(cAns);
+
+            resolvedAnsText = isCorrectTrue ? "صحيح" : "خطأ";
+
+            let isStudentTrue = false;
+            if (sAns === "0") {
+              isStudentTrue = true;
+            } else if (sAns === "1") {
+              isStudentTrue = false;
+            } else {
+              isStudentTrue = isTrueArabic(sAns);
+            }
+
+            if (isStudentTrue === isCorrectTrue) {
               isMatch = true;
-            } else if (q.type === "multiple_choice" && Array.isArray(q.options)) {
-              const cIdx = parseInt(cAns, 10);
-              const correctOptText = !isNaN(cIdx) && q.options[cIdx] ? String(q.options[cIdx]).trim() : cAns;
-              if (correctOptText && sAns.toLowerCase() === correctOptText.toLowerCase()) {
+            }
+          } else if (q.type === "multiple_choice" && Array.isArray(q.options)) {
+            const cAns = String(q.correctAnswer ?? "").trim();
+            const cIdx = parseInt(cAns, 10);
+            const correctOptText =
+              !isNaN(cIdx) && cIdx >= 0 && cIdx < q.options.length ? String(q.options[cIdx]).trim() : cAns;
+            resolvedAnsText = correctOptText;
+
+            const normCorrect = normArabicText(correctOptText);
+            const normRawCorrect = normArabicText(cAns);
+            const normStudent = normArabicText(sAns);
+            const sIdx = parseInt(sAns, 10);
+
+            if (normCorrect && normStudent === normCorrect) {
+              isMatch = true;
+            } else if (normRawCorrect && normStudent === normRawCorrect) {
+              isMatch = true;
+            } else if (sAns === cAns) {
+              isMatch = true;
+            } else if (!isNaN(sIdx) && sIdx >= 0 && sIdx < q.options.length) {
+              const studentOptText = String(q.options[sIdx]).trim();
+              if (normCorrect && normArabicText(studentOptText) === normCorrect) {
+                isMatch = true;
+              } else if (sIdx === cIdx) {
                 isMatch = true;
               }
-            } else if (q.type === "true_false") {
-              const isStudentTrue = sAns === "true" || sAns === "صحيح" || sAns === "1";
-              const isCorrectTrue = cAns.toLowerCase() === "true" || cAns === "صحيح" || cAns === "1";
-              if (isStudentTrue === isCorrectTrue) {
+            } else if (!isNaN(cIdx) && cIdx >= 0 && cIdx < q.options.length) {
+              if (normArabicText(q.options[cIdx]) === normStudent) {
                 isMatch = true;
               }
             }
-          }
-          if (isMatch) {
-            earnedPoints += q.points;
+          } else if (q.correctAnswer !== undefined) {
+            const cAns = String(q.correctAnswer).trim();
+            resolvedAnsText = cAns;
+            if (normArabicText(sAns) === normArabicText(cAns) || sAns === cAns) {
+              isMatch = true;
+            }
           }
         }
+
+        if (isMatch) {
+          earnedPoints += qPoints;
+        }
+
+        return {
+          ...q,
+          correctAnswer: resolvedAnsText || q.correctAnswer,
+          isResultCorrect: isMatch,
+        };
       });
+
+      setStudentQuiz((prev) => (prev ? { ...prev, questions: updatedQsWithResults } : prev));
 
       const pct = Math.round((earnedPoints / (totalPoints || 1)) * 100);
       setQuizScore(earnedPoints);
@@ -9715,13 +9805,16 @@ export default function App() {
               {studentQuiz.questions.map((q, idx) => {
                 const isCurrent = idx === reviewResultQuestionIdx;
                 const studentAns = quizAnswers[q.id];
-                const isAnswered = studentAns !== undefined;
+                const isAnswered = studentAns !== undefined && studentAns !== null && String(studentAns).trim() !== "";
                 const isCorrect = (q as any).isResultCorrect !== undefined
-                  ? (q as any).isResultCorrect
+                  ? Boolean((q as any).isResultCorrect)
                   : (isAnswered && (
                       studentAns === q.correctAnswer ||
                       (Array.isArray(q.options) && !isNaN(parseInt(q.correctAnswer, 10)) && q.options[parseInt(q.correctAnswer, 10)] === studentAns) ||
-                      (q.type === "true_false" && ((studentAns === "true" || studentAns === "صحيح") === (q.correctAnswer === "true" || q.correctAnswer === "صحيح")))
+                      (q.type === "true_false" && (
+                        (studentAns === "true" || studentAns === "صحيح" || studentAns === "0" || studentAns === "صح") ===
+                        (q.correctAnswer === "true" || q.correctAnswer === "صحيح" || q.correctAnswer === "0" || q.correctAnswer === "صح")
+                      ))
                     ));
 
                 return (
@@ -9760,14 +9853,31 @@ export default function App() {
               studentQuiz.questions[0];
             if (!currentQ) return null;
             const studentAns = quizAnswers[currentQ.id];
-            const isAnswered = studentAns !== undefined;
+            const isAnswered = studentAns !== undefined && studentAns !== null && String(studentAns).trim() !== "";
             const isCorrect = (currentQ as any).isResultCorrect !== undefined
-              ? (currentQ as any).isResultCorrect
+              ? Boolean((currentQ as any).isResultCorrect)
               : (isAnswered && (
                   studentAns === currentQ.correctAnswer ||
                   (Array.isArray(currentQ.options) && !isNaN(parseInt(currentQ.correctAnswer, 10)) && currentQ.options[parseInt(currentQ.correctAnswer, 10)] === studentAns) ||
-                  (currentQ.type === "true_false" && ((studentAns === "true" || studentAns === "صحيح") === (currentQ.correctAnswer === "true" || currentQ.correctAnswer === "صحيح")))
+                  (currentQ.type === "true_false" && (
+                    (studentAns === "true" || studentAns === "صحيح" || studentAns === "0" || studentAns === "صح") ===
+                    (currentQ.correctAnswer === "true" || currentQ.correctAnswer === "صحيح" || currentQ.correctAnswer === "0" || currentQ.correctAnswer === "صح")
+                  ))
                 ));
+
+            const isStudentTrueSelected =
+              studentAns === "true" ||
+              studentAns === "صحيح" ||
+              studentAns === "0" ||
+              studentAns === "صح" ||
+              studentAns === "صواب";
+
+            const isStudentFalseSelected =
+              studentAns === "false" ||
+              studentAns === "خطأ" ||
+              studentAns === "1" ||
+              studentAns === "خاطئ" ||
+              studentAns === "خاطئة";
 
             return (
               <div className="space-y-4">
@@ -9895,7 +10005,7 @@ export default function App() {
                     <div className="flex flex-col sm:flex-row gap-4 pt-2">
                       <div
                         className={`flex-1 p-3.5 rounded-xl border text-center text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-                          studentAns === "true" || studentAns === "صحيح"
+                          isStudentTrueSelected
                             ? isCorrect
                               ? "bg-emerald-50 border-emerald-400 text-emerald-950 ring-2 ring-emerald-300 font-extrabold"
                               : "bg-red-50 border-red-300 text-red-950 ring-2 ring-red-300 font-extrabold"
@@ -9903,7 +10013,7 @@ export default function App() {
                         }`}
                       >
                         <span>صحيح (True)</span>
-                        {(studentAns === "true" || studentAns === "صحيح") && (
+                        {isStudentTrueSelected && (
                           <span
                             className={`text-[10px] font-black px-2 py-0.5 rounded-md flex items-center gap-1 ${
                               isCorrect
@@ -9927,7 +10037,7 @@ export default function App() {
                       </div>
                       <div
                         className={`flex-1 p-3.5 rounded-xl border text-center text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-                          studentAns === "false" || studentAns === "خطأ"
+                          isStudentFalseSelected
                             ? isCorrect
                               ? "bg-emerald-50 border-emerald-400 text-emerald-950 ring-2 ring-emerald-300 font-extrabold"
                               : "bg-red-50 border-red-300 text-red-950 ring-2 ring-red-300 font-extrabold"
@@ -9935,7 +10045,7 @@ export default function App() {
                         }`}
                       >
                         <span>خطأ (False)</span>
-                        {(studentAns === "false" || studentAns === "خطأ") && (
+                        {isStudentFalseSelected && (
                           <span
                             className={`text-[10px] font-black px-2 py-0.5 rounded-md flex items-center gap-1 ${
                               isCorrect

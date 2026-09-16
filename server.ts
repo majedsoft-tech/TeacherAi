@@ -1335,35 +1335,41 @@ ${JSON.stringify(questionsPayload, null, 2)}`;
       const passed = pct >= 60;
 
       const gRecord = {
+        quizId: quizData.id || quizId,
         quizTitle: quizData.title || "اختبار مدرسي",
         score: earnedPoints,
         maxScore: totalPoints,
         date: new Date().toISOString().split("T")[0],
         passed,
+        answers: answers || {},
+        detailedQuestionResults: detailedQuestionResults || [],
       };
 
       const targetStudentId = studentInfo.studentId || `s-${Date.now()}`;
       const teacherUid = quizData.teacherId || "";
 
-      // Store in standalone_results if quiz is marked standalone or submission is standalone
-      if (quizData.isStandalone || studentInfo.isStandalone) {
-        const submissionId = `sub-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-        const standaloneDoc = {
-          id: submissionId,
-          quizId: quizId,
-          quizTitle: quizData.title || "اختبار برابط مستقل",
-          studentName: studentInfo.name || "طالب زائر",
-          gradeClass: studentInfo.gradeClass || studentInfo.grade || "عام",
-          score: earnedPoints,
-          maxScore: totalPoints,
-          percentage: pct,
-          passed,
-          submittedAt: new Date().toISOString(),
-          teacherId: teacherUid,
-          answers: answers,
-          detailedQuestionResults: detailedQuestionResults
-        };
+      // Store in standalone_results to archive full student answers
+      const submissionId = `sub-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      const standaloneDoc = {
+        id: submissionId,
+        quizId: quizId,
+        quizTitle: quizData.title || "اختبار مدرسي",
+        studentId: targetStudentId,
+        studentName: studentInfo.name || "طالب",
+        gradeClass: studentInfo.gradeClass || studentInfo.grade || "عام",
+        score: earnedPoints,
+        maxScore: totalPoints,
+        percentage: pct,
+        passed,
+        submittedAt: new Date().toISOString(),
+        teacherId: teacherUid,
+        answers: answers || {},
+        detailedQuestionResults: detailedQuestionResults || []
+      };
+      try {
         await setDoc(doc(firestoreDb, "standalone_results", submissionId), standaloneDoc);
+      } catch (subErr) {
+        console.warn("Failed to archive submission in standalone_results:", subErr);
       }
 
       if (studentInfo.isNewStudent || !studentInfo.studentId) {

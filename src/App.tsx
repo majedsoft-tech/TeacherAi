@@ -66,12 +66,14 @@ import {
   Hourglass,
   ShieldAlert,
   ExternalLink,
+  FileCheck,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import * as XLSX from "xlsx";
 import {
   Quiz,
   Student,
+  StudentGrade,
   Question,
   QuestionType,
   TeacherStats,
@@ -107,6 +109,8 @@ import StudentReviewsTab from "./components/StudentReviewsTab";
 import StudentCurriculumReview from "./components/StudentCurriculumReview";
 import CurriculumReviewAdminTab from "./components/CurriculumReviewAdminTab";
 import { RegisteredTeachersTab } from "./components/RegisteredTeachersTab";
+import { StudentQuizAnswerReviewModal } from "./components/StudentQuizAnswerReviewModal";
+import { StudentCertificateModal } from "./components/StudentCertificateModal";
 import { getOngoingQuizzesForStudent, getLockingQuizForSubject } from "./utils/quizLockUtils";
 import { UnitLessonMultiSelect } from "./components/UnitLessonMultiSelect";
 import { QuestionBankSmartFilters } from "./components/QuestionBankSmartFilters";
@@ -1382,6 +1386,8 @@ export default function App() {
   const [students, setStudents] = useState<Student[]>(initialStudents);
   const [trashStudents, setTrashStudents] = useState<Student[]>([]);
   const [showTrashModal, setShowTrashModal] = useState(false);
+  const [showRegradeModal, setShowRegradeModal] = useState(false);
+  const [selectedRegradeQuizId, setSelectedRegradeQuizId] = useState<string>("");
   const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(null);
   const [selectedDeleteStudentIds, setSelectedDeleteStudentIds] = useState<
     Record<string, boolean>
@@ -3276,6 +3282,12 @@ export default function App() {
   // Selected items for Details Modal
   const [selectedQuiz, setSelectedQuiz] = useState<Quiz | null>(null);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
+  const [viewingQuizModelComparison, setViewingQuizModelComparison] = useState<{
+    student: Student;
+    grade: StudentGrade;
+    quiz?: Quiz | null;
+  } | null>(null);
+  const [viewingOfficialCertificateStudent, setViewingOfficialCertificateStudent] = useState<Student | null>(null);
   const [selectedManageStudent, setSelectedManageStudent] =
     useState<Student | null>(null);
 
@@ -6661,6 +6673,324 @@ export default function App() {
       studentIds.length === 1
         ? "تم حذف نتيجة الاختبار بنجاح وإتاحته للطالب لإعادة الاختبار 🔄"
         : `تم حذف نتيجة الاختبار لعدد (${studentIds.length}) طلاب بنجاح وإتاحته لإعادة الاختبار 🔄`
+    );
+  };
+
+  // Re-grade quiz scores for specified students based on the current quiz answer key
+  const handleRegradeQuizForStudents = async (
+    studentIds: string[],
+    quizTitleOrId: string
+  ) => {
+    if (!studentIds || studentIds.length === 0) return;
+
+    // 1. Locate the quiz object
+    let targetQuiz = quizzes.find(
+      (q) => q.id === quizTitleOrId || q.title === quizTitleOrId
+    );
+
+    // Try to get freshest version from Firestore if possible
+    try {
+      if (targetQuiz?.id) {
+        const qDoc = await getDoc(doc(db, "quizzes", targetQuiz.id));
+        if (qDoc.exists()) {
+          targetQuiz = { id: qDoc.id, ...qDoc.data() } as Quiz;
+        }
+      }
+    } catch (e) {
+      console.warn("Using in-memory quiz for re-grading:", e);
+    }
+
+    if (!targetQuiz || !Array.isArray(targetQuiz.questions) || targetQuiz.questions.length === 0) {
+      triggerToast("لم يتم العثور على نموذج أسئلة هذا الاختبار لإعادة التصحيح بموجبه", "error");
+      return;
+    }
+
+    const currentQuizQuestions = targetQuiz.questions;
+
+    await runWithProgress(
+      async () => {
+        // Query archived submissions from standalone_results in Firestore to retrieve answers if not on grade
+        let archivedSubmissions: any[] = [];
+        try {
+          const qCol = collection(db, "standalone_results");
+          const qQuery = query(
+            qCol,
+            where("quizTitle", "==", targetQuiz.title)
+          );
+          const snap = await getDocs(qQuery);
+          archivedSubmissions = snap.docs.map((d) => d.data());
+        } catch (err) {
+          console.warn("Could not query standalone_results for regrading:", err);
+        }
+
+        let updatedCount = 0;
+        let scoreChangedCount = 0;
+        const changesSummary: string[] = [];
+
+        const studentUpdates = studentIds.map(async (sId) => {
+          const studentObj = students.find((s) => s.id === sId);
+          if (!studentObj) return;
+
+          const gradesArray = studentObj.detailedGrades || [];
+          const existingGradeIdx = gradesArray.findIndex(
+            (g) => g.quizTitle === targetQuiz.title || (g.quizId && g.quizId === targetQuiz.id)
+          );
+          if (existingGradeIdx === -1) return; // Student hasn't taken this quiz
+
+          const existingGrade = gradesArray[existingGradeIdx];
+          const oldScore = existingGrade.score;
+
+          // 1. Recover student answers map
+          let studentAnswers: Record<string, any> = existingGrade.answers ? { ...existingGrade.answers } : {};
+          let priorDetailedResults = Array.isArray(existingGrade.detailedQuestionResults)
+            ? existingGrade.detailedQuestionResults
+            : [];
+
+          // If answers map is empty, extract from priorDetailedResults
+          if (Object.keys(studentAnswers).length === 0 && priorDetailedResults.length > 0) {
+            priorDetailedResults.forEach((dr) => {
+              const qKey = dr.questionId || dr.id;
+              if (qKey && dr.studentAnswer !== undefined && dr.studentAnswer !== null) {
+                studentAnswers[qKey] = dr.studentAnswer;
+              }
+            });
+          }
+
+          // If still empty, check Firestore standalone_results archive
+          if (Object.keys(studentAnswers).length === 0 && archivedSubmissions.length > 0) {
+            const normStudentName = normalizeArabicText(studentObj.name);
+            const subMatch = archivedSubmissions.find(
+              (sub) =>
+                sub.studentId === sId ||
+                (sub.studentName && normalizeArabicText(sub.studentName) === normStudentName)
+            );
+            if (subMatch) {
+              if (subMatch.answers && typeof subMatch.answers === "object") {
+                studentAnswers = { ...subMatch.answers };
+              }
+              if (Array.isArray(subMatch.detailedQuestionResults) && subMatch.detailedQuestionResults.length > 0) {
+                priorDetailedResults = subMatch.detailedQuestionResults;
+                if (Object.keys(studentAnswers).length === 0) {
+                  priorDetailedResults.forEach((dr) => {
+                    const qKey = dr.questionId || dr.id;
+                    if (qKey && dr.studentAnswer !== undefined && dr.studentAnswer !== null) {
+                      studentAnswers[qKey] = dr.studentAnswer;
+                    }
+                  });
+                }
+              }
+            }
+          }
+
+          // If still empty, check localStorage
+          if (Object.keys(studentAnswers).length === 0) {
+            const lsKeys = [
+              `seb_student_${sId}_quiz_${targetQuiz.id}_answers`,
+              `seb_student_${sId}_quiz_${targetQuiz.title}_answers`,
+            ];
+            for (const k of lsKeys) {
+              const saved = localStorage.getItem(k);
+              if (saved) {
+                try {
+                  const parsed = JSON.parse(saved);
+                  if (parsed && typeof parsed === "object") {
+                    studentAnswers = parsed;
+                    break;
+                  }
+                } catch (e) {}
+              }
+            }
+          }
+
+          if (priorDetailedResults.length === 0) {
+            const lsDRKeys = [
+              `seb_student_${sId}_quiz_${targetQuiz.id}_detailedResults`,
+              `seb_student_${sId}_quiz_${targetQuiz.title}_detailedResults`,
+            ];
+            for (const k of lsDRKeys) {
+              const saved = localStorage.getItem(k);
+              if (saved) {
+                try {
+                  const parsed = JSON.parse(saved);
+                  if (Array.isArray(parsed) && parsed.length > 0) {
+                    priorDetailedResults = parsed;
+                    break;
+                  }
+                } catch (e) {}
+              }
+            }
+          }
+
+          // 2. Re-evaluate each question in current targetQuiz against student's answers
+          let newEarnedPoints = 0;
+          let newTotalPoints = 0;
+          const newDetailedResults: any[] = [];
+
+          currentQuizQuestions.forEach((q) => {
+            const qPoints = typeof q.points === "number" && q.points > 0 ? q.points : 1;
+            newTotalPoints += qPoints;
+
+            // Find student's answer
+            let sAns = studentAnswers[q.id];
+
+            // If not found by q.id directly, match using findMatchingQuestionItem against prior detailed results
+            if (sAns === undefined || sAns === null) {
+              const matchedDR = findMatchingQuestionItem(q, priorDetailedResults);
+              if (matchedDR && matchedDR.studentAnswer !== undefined && matchedDR.studentAnswer !== null) {
+                sAns = matchedDR.studentAnswer;
+              }
+            }
+
+            // If still not found, try matching by question text in studentAnswers
+            if (sAns === undefined || sAns === null) {
+              const textKey = Object.keys(studentAnswers).find((k) => {
+                return normalizeQuestionText(k) === normalizeQuestionText(q.text);
+              });
+              if (textKey) {
+                sAns = studentAnswers[textKey];
+              }
+            }
+
+            // Check correctness against current question model
+            const isCorrect = sAns !== undefined && sAns !== null && checkAnswerCorrectness(q, sAns);
+            if (isCorrect) {
+              newEarnedPoints += qPoints;
+            }
+
+            const resolvedCorrect = resolveQuestionCorrectText(q);
+
+            newDetailedResults.push({
+              questionId: q.id,
+              text: q.text,
+              type: q.type,
+              options: q.options,
+              points: qPoints,
+              isCorrect,
+              studentAnswer: sAns ?? null,
+              correctAnswer: resolvedCorrect || q.correctAnswer,
+              correctOptionText: resolvedCorrect,
+            });
+
+            if (sAns !== undefined && sAns !== null) {
+              studentAnswers[q.id] = sAns;
+            }
+          });
+
+          // 3. Compute percentage and update student record
+          const pct = Math.round((newEarnedPoints / (newTotalPoints || 1)) * 100);
+          const passed = pct >= 60;
+
+          const updatedGrade: StudentGrade = {
+            ...existingGrade,
+            quizId: targetQuiz.id,
+            quizTitle: targetQuiz.title,
+            score: newEarnedPoints,
+            maxScore: newTotalPoints,
+            passed,
+            answers: studentAnswers,
+            detailedQuestionResults: newDetailedResults,
+          };
+
+          const updatedGrades = [...gradesArray];
+          updatedGrades[existingGradeIdx] = updatedGrade;
+
+          let sumEarned = 0;
+          let sumMax = 0;
+          updatedGrades.forEach((g) => {
+            sumEarned += Number(g.score) || 0;
+            sumMax += Number(g.maxScore) || 0;
+          });
+
+          const newAvg = updatedGrades.length > 0 ? Math.round((sumEarned / (sumMax || 1)) * 100) : 0;
+          const newStatus =
+            newAvg >= 90
+              ? "excellent"
+              : newAvg >= 75
+                ? "good"
+                : newAvg >= 60
+                  ? "average"
+                  : "needs_improvement";
+
+          // Update local state
+          setStudents((prev) =>
+            prev.map((s) =>
+              s.id === sId
+                ? {
+                    ...s,
+                    detailedGrades: updatedGrades,
+                    averageScore: newAvg,
+                    status: newStatus,
+                  }
+                : s
+            )
+          );
+
+          if (selectedStudent && selectedStudent.id === sId) {
+            setSelectedStudent((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    detailedGrades: updatedGrades,
+                    averageScore: newAvg,
+                    status: newStatus,
+                  }
+                : null
+            );
+          }
+
+          if (selectedManageStudent && selectedManageStudent.id === sId) {
+            setSelectedManageStudent((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    detailedGrades: updatedGrades,
+                    averageScore: newAvg,
+                    status: newStatus,
+                  }
+                : null
+            );
+          }
+
+          // Persist to Firestore
+          try {
+            const sRef = doc(db, "students", sId);
+            await updateDoc(sRef, {
+              detailedGrades: updatedGrades,
+              averageScore: newAvg,
+              status: newStatus,
+            });
+          } catch (err) {
+            console.error("Failed to update student grades in Firestore:", sId, err);
+          }
+
+          // Update localStorage cache
+          try {
+            const qKey = targetQuiz.id || targetQuiz.title;
+            localStorage.setItem(`seb_student_${sId}_quiz_${qKey}_score`, String(newEarnedPoints));
+            localStorage.setItem(`seb_student_${sId}_quiz_${qKey}_totalPoints`, String(newTotalPoints));
+            localStorage.setItem(`seb_student_${sId}_quiz_${qKey}_percentage`, String(pct));
+            localStorage.setItem(`seb_student_${sId}_quiz_${qKey}_answers`, JSON.stringify(studentAnswers));
+            localStorage.setItem(`seb_student_${sId}_quiz_${qKey}_detailedResults`, JSON.stringify(newDetailedResults));
+          } catch (e) {}
+
+          updatedCount++;
+          if (newEarnedPoints !== oldScore) {
+            scoreChangedCount++;
+            changesSummary.push(`${studentObj.name}: (${oldScore} ⬅️ ${newEarnedPoints})`);
+          }
+        });
+
+        await Promise.all(studentUpdates);
+
+        let successMsg = `تمت إعادة تصحيح اختبار "${targetQuiz.title}" لعدد (${updatedCount}) طالب بنجاح وفق نموذج الإجابة الحالي!`;
+        if (scoreChangedCount > 0) {
+          successMsg += ` تم تعديل درجات (${scoreChangedCount}) طالب وتحديث معدلاتهم التراكمية.`;
+        } else {
+          successMsg += ` درجات الطلاب مطابقة لنموذج الإجابة الحالي.`;
+        }
+        triggerToast(successMsg, "success");
+      },
+      `جاري إعادة تصحيح اختبار "${targetQuiz.title}" وفق نموذج الإجابات الحالي...`
     );
   };
 
@@ -15164,6 +15494,21 @@ export default function App() {
                               <div className="flex flex-wrap items-center gap-2 font-sans">
                                 <button
                                   type="button"
+                                  onClick={() => {
+                                    if (activeClassQuizzes.length > 0 && !selectedRegradeQuizId) {
+                                      setSelectedRegradeQuizId(activeClassQuizzes[0].id);
+                                    }
+                                    setShowRegradeModal(true);
+                                  }}
+                                  className="bg-amber-100 hover:bg-amber-200/90 border border-amber-300 text-amber-950 font-black text-[11px] px-3 py-2 rounded-xl transition-all duration-200 flex items-center gap-1.5 cursor-pointer shadow-3xs active:scale-95"
+                                  title="إعادة تصحيح اختبارات سابقة للطلاب وفق نموذج الإجابات وتوزيع الدرجات الحالي"
+                                >
+                                  <RefreshCw className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                                  <span>إعادة تصحيح الاختبارات 🔄</span>
+                                </button>
+
+                                <button
+                                  type="button"
                                   onClick={() => triggerExport("copy")}
                                   className="bg-amber-50 hover:bg-amber-100/80 border border-amber-200/80 text-amber-900 font-extrabold text-[11px] px-3 py-2 rounded-xl transition-all duration-200 flex items-center gap-2 cursor-pointer shadow-3xs active:scale-95"
                                   title="نسخ درجات جميع الطلاب لجميع الاختبارات للدردشة أو للصقها في ملف Excel (Ctrl+V)"
@@ -15612,6 +15957,37 @@ export default function App() {
                                                   <button
                                                     type="button"
                                                     onClick={() => {
+                                                      setViewingQuizModelComparison({
+                                                        student,
+                                                        grade: gradeObj,
+                                                        quiz: q,
+                                                      });
+                                                    }}
+                                                    className="text-indigo-600 hover:text-indigo-800 p-0.5 cursor-pointer"
+                                                    title="استعراض نموذج الإجابة ومقارنة حل الطالب للتأكد من الدرجة"
+                                                  >
+                                                    <FileCheck className="w-3 h-3" />
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                      triggerConfirm(
+                                                        "إعادة تصحيح الاختبار للطالب",
+                                                        `هل تريد إعادة تصحيح اختبار "${q.title}" للطالب "${student.name}" (الدرجة الحالية: ${gradeObj.score}) وفق نموذج الإجابة وتوزيع الدرجات الحالي؟`,
+                                                        () => handleRegradeQuizForStudents([student.id], q.title),
+                                                        undefined,
+                                                        "نعم، أعد التصحيح",
+                                                        "إلغاء"
+                                                      );
+                                                    }}
+                                                    className="text-amber-600 hover:text-amber-800 p-0.5 cursor-pointer"
+                                                    title="إعادة تصحيح هذا الاختبار وفق نموذج الإجابة الحالي"
+                                                  >
+                                                    <RefreshCw className="w-3 h-3" />
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => {
                                                       triggerConfirm(
                                                         "إعادة الاختبار للطالب",
                                                         `هل تريد حذف نتيجة "${q.title}" للطالب "${student.name}"؟`,
@@ -15889,6 +16265,52 @@ export default function App() {
                                                   .filter((s) => selectedDeleteStudentIds[s.id])
                                                   .map((s) => s.id);
 
+                                                const targetStudents = selectedIds.length > 0
+                                                  ? filteredStudents.filter((s) => selectedIds.includes(s.id))
+                                                  : filteredStudents.filter((s) =>
+                                                      (s.detailedGrades || []).some(
+                                                        (g) => g.quizTitle === q.title
+                                                      )
+                                                    );
+
+                                                if (targetStudents.length === 0) {
+                                                  triggerToast(
+                                                    "لا يوجد طلاب لديهم درجات مسجلة في هذا الاختبار لإعادة تصحيحه",
+                                                    "info"
+                                                  );
+                                                  return;
+                                                }
+
+                                                triggerConfirm(
+                                                  "إعادة تصحيح الاختبار حسب النموذج الحالي",
+                                                  selectedIds.length > 0
+                                                    ? `هل تريد إعادة تصحيح اختبار "${q.title}" للطلاب المحددين (${selectedIds.length} طالب) بموجب نموذج الإجابات والدرجات المعتمد حالياً؟`
+                                                    : `هل تريد إعادة تصحيح اختبار "${q.title}" لجميع طلاب هذا الفصل المتقدمين (${targetStudents.length} طالب) بموجب نموذج الإجابات والدرجات المعتمد حالياً؟\n\nسيتم احتساب الدرجات والمعدلات التراكمية تلقائياً وتحديث الكشف فوراً.`,
+                                                  () => handleRegradeQuizForStudents(targetStudents.map((s) => s.id), q.title),
+                                                  undefined,
+                                                  "نعم، إعادة التصحيح الآن",
+                                                  "إلغاء"
+                                                );
+                                              }}
+                                              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-extrabold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200/80 rounded-md transition-all cursor-pointer shadow-3xs active:scale-95"
+                                              title={
+                                                selectedCount > 0
+                                                  ? `إعادة تصحيح هذا الاختبار للطلاب المحددين (${selectedCount}) وفق نموذج الإجابة الحالي`
+                                                  : "إعادة تصحيح هذا الاختبار لجميع طلاب الفصل وفق نموذج الإجابة الحالي"
+                                              }
+                                            >
+                                              <RefreshCw className="w-2.5 h-2.5 text-amber-600 shrink-0" />
+                                              <span>{selectedCount > 0 ? `إعادة تصحيح (${selectedCount})` : "إعادة تصحيح"}</span>
+                                            </button>
+
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                const selectedIds = filteredStudents
+                                                  .filter((s) => selectedDeleteStudentIds[s.id])
+                                                  .map((s) => s.id);
+
                                                 if (selectedIds.length > 0) {
                                                   triggerConfirm(
                                                     "حذف نتيجة الاختبار للمحددين",
@@ -16137,6 +16559,39 @@ export default function App() {
                                               {gradeObj ? (
                                                 <div className="inline-flex items-center justify-center gap-1.5 group">
                                                   <span className="font-extrabold text-slate-800 text-xs">{gradeObj.score}</span>
+                                                  <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      setViewingQuizModelComparison({
+                                                        student,
+                                                        grade: gradeObj,
+                                                        quiz: q,
+                                                      });
+                                                    }}
+                                                    className="p-1 rounded-md text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 border border-transparent hover:border-indigo-200 transition-all cursor-pointer opacity-70 group-hover:opacity-100"
+                                                    title={`استعراض نموذج الإجابة ومقارنة حل الطالب (${student.name}) للتأكد من الدرجة`}
+                                                  >
+                                                    <FileCheck className="w-3 h-3 text-indigo-600 shrink-0" />
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      triggerConfirm(
+                                                        "إعادة تصحيح الاختبار للطالب",
+                                                        `هل تريد إعادة تصحيح اختبار "${q.title}" للطالب "${student.name}" (الدرجة الحالية: ${gradeObj.score}) وفق نموذج الإجابات وتوزيع الدرجات الحالي؟`,
+                                                        () => handleRegradeQuizForStudents([student.id], q.title),
+                                                        undefined,
+                                                        "نعم، أعد التصحيح",
+                                                        "إلغاء"
+                                                      );
+                                                    }}
+                                                    className="p-1 rounded-md text-amber-600 hover:text-amber-800 hover:bg-amber-50 border border-transparent hover:border-amber-200 transition-all cursor-pointer opacity-70 group-hover:opacity-100"
+                                                    title={`إعادة تصحيح اختبار "${q.title}" للطالب (${student.name}) وفق نموذج الإجابة الحالي`}
+                                                  >
+                                                    <RefreshCw className="w-3 h-3 text-amber-600 shrink-0" />
+                                                  </button>
                                                   <button
                                                     type="button"
                                                     onClick={(e) => {
@@ -18331,6 +18786,164 @@ export default function App() {
             )}
           </AnimatePresence>
 
+          {/* --- MODAL: RE-GRADE QUIZZES MODAL --- */}
+          <AnimatePresence>
+            {showRegradeModal && (
+              <div className="fixed inset-0 bg-slate-900/60 z-50 backdrop-blur-xs flex items-center justify-center p-4">
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  className="bg-white rounded-3xl w-full max-w-xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
+                >
+                  {/* Header */}
+                  <div className="p-5 border-b border-slate-100 bg-amber-50/50 flex justify-between items-center">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-10 h-10 rounded-2xl bg-amber-100 border border-amber-200 text-amber-800 flex items-center justify-center shadow-3xs">
+                        <RefreshCw className="w-5 h-5 text-amber-700" />
+                      </div>
+                      <div>
+                        <h3 className="font-black text-slate-900 text-base">
+                          إعادة تصحيح الاختبارات السابقة
+                        </h3>
+                        <p className="text-xs text-slate-500 font-medium mt-0.5">
+                          تحديث واحتساب درجات ومعدلات الطلاب وفق نموذج الإجابة الحالي للأسئلة
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setShowRegradeModal(false)}
+                      className="p-1.5 hover:bg-slate-200 rounded-full transition-colors text-slate-400 hover:text-slate-700"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  {/* Body */}
+                  <div className="p-6 overflow-y-auto space-y-5 flex-1 text-right">
+                    {/* Information banner */}
+                    <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-200 text-amber-950 text-xs leading-relaxed space-y-2">
+                      <div className="flex items-center gap-2 font-black text-amber-900 text-sm">
+                        <span>💡</span>
+                        <span>كيف تعمل ميزة إعادة التصحيح؟</span>
+                      </div>
+                      <p className="text-slate-700">
+                        إذا قمت بتعديل نموذج الإجابة الصحيحة لأي سؤال، أو قمت بتعديل توزيع الدرجات بعد أن قدم الطلاب اختباراتهم؛
+                        يمكنك استخدام هذه الأداة لإعادة تقييم إجابات الطلاب ومقارنتها بالنموذج المعتمد حالياً واحتساب الدرجة الصحيحة والمعدل التراكمي تلقائياً.
+                      </p>
+                    </div>
+
+                    {/* Quiz Selector */}
+                    <div>
+                      <label className="block text-xs font-black text-slate-800 mb-2">
+                        اختر الاختبار المراد إعادة تصحيحه:
+                      </label>
+                      <select
+                        value={selectedRegradeQuizId}
+                        onChange={(e) => setSelectedRegradeQuizId(e.target.value)}
+                        className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                      >
+                        <option value="">-- اختر اختباراً من القائمة --</option>
+                        {quizzes.map((qz) => {
+                          const takers = filteredStudents.filter((s) =>
+                            (s.detailedGrades || []).some((g) => g.quizTitle === qz.title || g.quizId === qz.id)
+                          ).length;
+                          return (
+                            <option key={qz.id} value={qz.id}>
+                              {qz.title} ({qz.subject}) - {takers} طلاب متقدمين
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+
+                    {/* Selected Quiz Details Card */}
+                    {(() => {
+                      const currentQz = quizzes.find((q) => q.id === selectedRegradeQuizId);
+                      if (!currentQz) return null;
+
+                      const takersInClass = filteredStudents.filter((s) =>
+                        (s.detailedGrades || []).some((g) => g.quizTitle === currentQz.title || g.quizId === currentQz.id)
+                      );
+                      const selectedCount = filteredStudents.filter(
+                        (s) => selectedDeleteStudentIds[s.id] && (s.detailedGrades || []).some((g) => g.quizTitle === currentQz.title || g.quizId === currentQz.id)
+                      ).length;
+                      const totalPoints = (currentQz.questions || []).reduce(
+                        (sum, q) => sum + Number(q.points || 1),
+                        0
+                      );
+
+                      return (
+                        <div className="space-y-4">
+                          <div className="grid grid-cols-3 gap-3 p-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-center">
+                            <div>
+                              <span className="text-[10px] font-bold text-slate-400 block">عدد الأسئلة</span>
+                              <span className="text-sm font-extrabold text-slate-800">{currentQz.questions?.length || 0}</span>
+                            </div>
+                            <div>
+                              <span className="text-[10px] font-bold text-slate-400 block">مجموع الدرجات</span>
+                              <span className="text-sm font-extrabold text-amber-700">{totalPoints} درجة</span>
+                            </div>
+                            <div>
+                              <span className="text-[10px] font-bold text-slate-400 block">الطلاب المتقدمون</span>
+                              <span className="text-sm font-extrabold text-indigo-700">{takersInClass.length} طالب</span>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-col gap-2 pt-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowRegradeModal(false);
+                                handleRegradeQuizForStudents(takersInClass.map((s) => s.id), currentQz.title);
+                              }}
+                              disabled={takersInClass.length === 0}
+                              className={`w-full py-3 px-4 rounded-xl text-xs font-black flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm ${
+                                takersInClass.length === 0
+                                  ? "bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
+                                  : "bg-amber-600 hover:bg-amber-700 text-white shadow-amber-200 active:scale-98"
+                              }`}
+                            >
+                              <RefreshCw className="w-4 h-4 text-white" />
+                              <span>إعادة تصحيح لجميع طلاب الفصل المتقدمين ({takersInClass.length} طالب)</span>
+                            </button>
+
+                            {selectedCount > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setShowRegradeModal(false);
+                                  const targetIds = filteredStudents
+                                    .filter((s) => selectedDeleteStudentIds[s.id])
+                                    .map((s) => s.id);
+                                  handleRegradeQuizForStudents(targetIds, currentQz.title);
+                                }}
+                                className="w-full py-2.5 px-4 rounded-xl text-xs font-black bg-white hover:bg-amber-50 text-amber-900 border border-amber-300 transition-all cursor-pointer shadow-3xs flex items-center justify-center gap-2"
+                              >
+                                <span>إعادة تصحيح للطلاب المحددين فقط ({selectedCount} طالب)</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Footer */}
+                  <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setShowRegradeModal(false)}
+                      className="px-5 py-2 hover:bg-slate-200 border border-transparent rounded-xl text-xs font-bold text-slate-600 transition-colors"
+                    >
+                      إلغاء
+                    </button>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
+
           {/* --- MODAL 1: QUIZ DETAIL VIEW --- */}
           <AnimatePresence>
             {selectedQuiz && (
@@ -18591,9 +19204,20 @@ export default function App() {
 
                     {/* List of QuizzesTaken and Grades */}
                     <div className="space-y-4">
-                      <h4 className="font-bold text-sm text-slate-850">
-                        كشف نتائج الكشوفات والاختبارات الفردية:
-                      </h4>
+                      <div className="flex items-center justify-between gap-2 pb-1">
+                        <h4 className="font-bold text-sm text-slate-850">
+                          كشف نتائج الكشوفات والاختبارات الفردية:
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={() => setViewingOfficialCertificateStudent(selectedStudent)}
+                          className="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 text-xs font-bold flex items-center gap-1.5 transition-all shadow-3xs cursor-pointer active:scale-95"
+                          title="عرض وطباعة شهادة شكر وتقدير واجتياز دراسي رسمية للطالب"
+                        >
+                          <Award className="w-4 h-4 text-indigo-600" />
+                          <span>عرض وطباعة الشهادة 🎓</span>
+                        </button>
+                      </div>
 
                       <div className="space-y-2.5">
                         {(selectedStudent.detailedGrades || []).map((grade, idx) => (
@@ -18610,24 +19234,64 @@ export default function App() {
                               </div>
                             </div>
 
-                            <div className="text-left space-y-1">
-                              <div className="text-sm font-extrabold text-slate-700 font-sans">
-                                {grade.score} / {grade.maxScore}{" "}
-                                <span className="text-[10px] text-slate-400">
-                                  نقطة
-                                </span>
-                              </div>
-                              <div>
-                                {grade.passed ? (
-                                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-100 rounded-sm px-1.5 py-0.5">
-                                    تم الاجتياز
+                            <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap justify-end">
+                              <div className="text-left space-y-1">
+                                <div className="text-sm font-extrabold text-slate-700 font-sans">
+                                  {grade.score} / {grade.maxScore}{" "}
+                                  <span className="text-[10px] text-slate-400">
+                                    نقطة
                                   </span>
-                                ) : (
-                                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-500 bg-rose-50 border border-rose-100 rounded-sm px-1.5 py-0.5">
-                                    يحتاج متابعة
-                                  </span>
-                                )}
+                                </div>
+                                <div>
+                                  {grade.passed ? (
+                                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-100 rounded-sm px-1.5 py-0.5">
+                                      تم الاجتياز
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-500 bg-rose-50 border border-rose-100 rounded-sm px-1.5 py-0.5">
+                                      يحتاج متابعة
+                                    </span>
+                                  )}
+                                </div>
                               </div>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const matchedQuiz = quizzes.find(
+                                    (qz) => (grade.quizId && qz.id === grade.quizId) || qz.title === grade.quizTitle
+                                  );
+                                  setViewingQuizModelComparison({
+                                    student: selectedStudent,
+                                    grade,
+                                    quiz: matchedQuiz || null,
+                                  });
+                                }}
+                                className="px-2.5 py-1.5 rounded-xl text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-all cursor-pointer shadow-3xs flex items-center gap-1 text-xs font-bold shrink-0"
+                                title="استعراض نموذج الإجابة ومقارنة حل الطالب للتأكد من الدرجة"
+                              >
+                                <FileCheck className="w-3.5 h-3.5 text-indigo-600" />
+                                <span className="text-[10px] font-extrabold">نموذج الإجابة والمقارنة</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  triggerConfirm(
+                                    "إعادة تصحيح هذا الاختبار للطالب",
+                                    `هل تريد إعادة تصحيح اختبار "${grade.quizTitle}" للطالب "${selectedStudent.name}" (الدرجة الحالية: ${grade.score}) وفق نموذج الإجابات وتوزيع الدرجات الحالي؟`,
+                                    () => handleRegradeQuizForStudents([selectedStudent.id], grade.quizTitle),
+                                    undefined,
+                                    "نعم، إعادة التصحيح الآن",
+                                    "إلغاء"
+                                  );
+                                }}
+                                className="px-2.5 py-1.5 rounded-xl text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 transition-all cursor-pointer shadow-3xs flex items-center gap-1 text-xs font-bold shrink-0"
+                                title="إعادة تصحيح هذا الاختبار للطالب وفق نموذج الإجابة الحالي"
+                              >
+                                <RefreshCw className="w-3.5 h-3.5 text-amber-600" />
+                                <span className="text-[10px] font-extrabold">إعادة تصحيح</span>
+                              </button>
                             </div>
                           </div>
                         ))}
@@ -19788,6 +20452,44 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Student Quiz Answer Review Modal (نموذج الإجابة ومقارنة حل الطالب) */}
+      {viewingQuizModelComparison && (
+        <StudentQuizAnswerReviewModal
+          isOpen={!!viewingQuizModelComparison}
+          onClose={() => setViewingQuizModelComparison(null)}
+          student={viewingQuizModelComparison.student}
+          grade={viewingQuizModelComparison.grade}
+          quiz={viewingQuizModelComparison.quiz}
+          allQuizzes={quizzes}
+          onRegrade={async (sId, qTitle) => {
+            await handleRegradeQuizForStudents([sId], qTitle);
+            const updatedStudent = students.find((s) => s.id === sId);
+            if (updatedStudent) {
+              const updatedGrade = (updatedStudent.detailedGrades || []).find(
+                (g) =>
+                  g.quizTitle === qTitle ||
+                  (viewingQuizModelComparison.grade.quizId &&
+                    g.quizId === viewingQuizModelComparison.grade.quizId)
+              );
+              if (updatedGrade) {
+                setViewingQuizModelComparison((prev) =>
+                  prev ? { ...prev, student: updatedStudent, grade: updatedGrade } : prev
+                );
+              }
+            }
+          }}
+        />
+      )}
+
+      {/* Student Official Certificate Modal (شهادة إتمام وتفوق دراسي معتمدة) */}
+      {viewingOfficialCertificateStudent && (
+        <StudentCertificateModal
+          isOpen={!!viewingOfficialCertificateStudent}
+          onClose={() => setViewingOfficialCertificateStudent(null)}
+          student={viewingOfficialCertificateStudent}
+        />
+      )}
 
     </div>
   );

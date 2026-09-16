@@ -34,11 +34,14 @@ export interface Quiz {
 }
 
 export interface StudentGrade {
+  quizId?: string;
   quizTitle: string;
   score: number;
   maxScore: number;
   date: string;
   passed: boolean;
+  answers?: Record<string, any>;
+  detailedQuestionResults?: any[];
 }
 
 export interface Student {

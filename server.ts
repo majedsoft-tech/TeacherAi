@@ -56,6 +56,31 @@ function getServerDb() {
   return firestoreDbInstance;
 }
 
+// Recursively sanitize data before sending to Firestore (removes undefined which Firestore rejects)
+function sanitizeForFirestore<T>(data: T): T {
+  if (data === undefined) {
+    return null as any;
+  }
+  if (data === null || typeof data !== "object") {
+    return data;
+  }
+  if (data instanceof Date) {
+    return data.toISOString() as any;
+  }
+  if (Array.isArray(data)) {
+    return data
+      .filter((item) => item !== undefined)
+      .map((item) => sanitizeForFirestore(item)) as any;
+  }
+  const result: Record<string, any> = {};
+  for (const [key, value] of Object.entries(data as Record<string, any>)) {
+    if (value !== undefined) {
+      result[key] = sanitizeForFirestore(value);
+    }
+  }
+  return result as any;
+}
+
 // Robust JSON Sanitizer and Truncation Repair Utilities
 function cleanAndExtractJson(raw: string): string {
   let cleaned = (raw || "").trim();
@@ -1319,40 +1344,47 @@ ${JSON.stringify(questionsPayload, null, 2)}`;
         }
 
         detailedQuestionResults.push({
-          questionId: q.id,
-          text: q.text,
-          type: q.type,
-          options: q.options,
+          questionId: q.id || "",
+          text: q.text || "",
+          type: q.type || "multiple_choice",
+          options: Array.isArray(q.options) ? q.options : [],
           points: qPoints,
           isCorrect,
-          studentAnswer: studentAns ?? null,
-          correctAnswer: quizData.showResultToStudent !== false ? (resolvedCorrectText || q.correctAnswer) : undefined,
-          correctOptionText: resolvedCorrectText,
+          studentAnswer: studentAns !== undefined && studentAns !== null ? studentAns : null,
+          correctAnswer: quizData.showResultToStudent !== false ? (resolvedCorrectText || q.correctAnswer || "") : "",
+          correctOptionText: resolvedCorrectText || "",
         });
       });
 
       const pct = Math.round((earnedPoints / (totalPoints || 1)) * 100);
       const passed = pct >= 60;
 
+      const safeAnswers: Record<string, any> = {};
+      if (answers && typeof answers === "object") {
+        for (const [k, v] of Object.entries(answers)) {
+          safeAnswers[k] = (v !== undefined && v !== null) ? v : "";
+        }
+      }
+
       const gRecord = {
-        quizId: quizData.id || quizId,
+        quizId: quizData.id || quizId || "",
         quizTitle: quizData.title || "اختبار مدرسي",
         score: earnedPoints,
         maxScore: totalPoints,
         date: new Date().toISOString().split("T")[0],
         passed,
-        answers: answers || {},
+        answers: safeAnswers,
         detailedQuestionResults: detailedQuestionResults || [],
       };
 
-      const targetStudentId = studentInfo.studentId || `s-${Date.now()}`;
+      const targetStudentId = studentInfo.studentId || studentInfo.id || `s-${Date.now()}`;
       const teacherUid = quizData.teacherId || "";
 
       // Store in standalone_results to archive full student answers
       const submissionId = `sub-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       const standaloneDoc = {
         id: submissionId,
-        quizId: quizId,
+        quizId: quizId || "",
         quizTitle: quizData.title || "اختبار مدرسي",
         studentId: targetStudentId,
         studentName: studentInfo.name || "طالب",
@@ -1363,11 +1395,11 @@ ${JSON.stringify(questionsPayload, null, 2)}`;
         passed,
         submittedAt: new Date().toISOString(),
         teacherId: teacherUid,
-        answers: answers || {},
+        answers: safeAnswers,
         detailedQuestionResults: detailedQuestionResults || []
       };
       try {
-        await setDoc(doc(firestoreDb, "standalone_results", submissionId), standaloneDoc);
+        await setDoc(doc(firestoreDb, "standalone_results", submissionId), sanitizeForFirestore(standaloneDoc));
       } catch (subErr) {
         console.warn("Failed to archive submission in standalone_results:", subErr);
       }
@@ -1375,7 +1407,7 @@ ${JSON.stringify(questionsPayload, null, 2)}`;
       if (studentInfo.isNewStudent || !studentInfo.studentId) {
         const newStudentObj = {
           id: targetStudentId,
-          name: studentInfo.name,
+          name: studentInfo.name || "طالب",
           gradeClass: studentInfo.gradeClass || `${studentInfo.grade || ""} - ${studentInfo.semester || ""}`,
           grade: studentInfo.grade || "",
           semester: studentInfo.semester || "",
@@ -1386,7 +1418,7 @@ ${JSON.stringify(questionsPayload, null, 2)}`;
           teacherId: teacherUid,
         };
 
-        await setDoc(doc(firestoreDb, "students", targetStudentId), newStudentObj);
+        await setDoc(doc(firestoreDb, "students", targetStudentId), sanitizeForFirestore(newStudentObj));
       } else {
         const studentDocRef = doc(firestoreDb, "students", targetStudentId);
         const sDoc = await getDoc(studentDocRef);
@@ -1408,11 +1440,11 @@ ${JSON.stringify(questionsPayload, null, 2)}`;
           const newAvg = Math.round((sumEarned / (sumMax || 1)) * 100);
           const newStatus = newAvg >= 90 ? "excellent" : newAvg >= 75 ? "good" : newAvg >= 60 ? "average" : "needs_improvement";
 
-          await updateDoc(studentDocRef, {
+          await updateDoc(studentDocRef, sanitizeForFirestore({
             detailedGrades: existingGrades,
             averageScore: newAvg,
             status: newStatus,
-          });
+          }));
         } else {
           // If student document was not found under this ID, create it so grade is never lost
           const newStudentObj = {
@@ -1427,7 +1459,7 @@ ${JSON.stringify(questionsPayload, null, 2)}`;
             detailedGrades: [gRecord],
             teacherId: teacherUid,
           };
-          await setDoc(studentDocRef, newStudentObj);
+          await setDoc(studentDocRef, sanitizeForFirestore(newStudentObj));
         }
       }
 

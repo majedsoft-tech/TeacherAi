@@ -79,7 +79,18 @@ import {
   ReviewChallenge,
   ReviewScore,
 } from "./types";
-import { isTrueFalseQuestion, normalizeQuestion, isGradeMatching, isClassMatching } from "./utils/questionUtils";
+import {
+  isTrueFalseQuestion,
+  normalizeQuestion,
+  isGradeMatching,
+  isClassMatching,
+  checkAnswerCorrectness,
+  normalizeArabicText,
+  normalizeQuestionText,
+  findMatchingQuestionItem,
+  resolveQuestionCorrectText,
+  resolveTrueFalseBoolean,
+} from "./utils/questionUtils";
 import {
   initialQuizzes,
   initialStudents,
@@ -1034,6 +1045,45 @@ export default function App() {
         const savedAnswers = localStorage.getItem(`seb_student_${studentSelectedId}_quiz_${qKey}_answers`);
         setQuizAnswers(savedAnswers ? JSON.parse(savedAnswers) : {});
 
+        if (finished) {
+          const savedScore = localStorage.getItem(`seb_student_${studentSelectedId}_quiz_${qKey}_score`);
+          const savedTotal = localStorage.getItem(`seb_student_${studentSelectedId}_quiz_${qKey}_totalPoints`);
+          const savedPct = localStorage.getItem(`seb_student_${studentSelectedId}_quiz_${qKey}_percentage`);
+          if (savedScore !== null) setQuizScore(Number(savedScore) || 0);
+          if (savedTotal !== null) setQuizTotalPoints(Number(savedTotal) || 0);
+          if (savedPct !== null) setQuizPercentage(Number(savedPct) || 0);
+
+          const savedDetailed =
+            localStorage.getItem(`seb_student_${studentSelectedId}_quiz_${qKey}_detailedResults`) ||
+            localStorage.getItem(`seb_student_${studentSelectedId}_quiz_detailedResults`) ||
+            localStorage.getItem("seb_student_current_detailed_results") ||
+            localStorage.getItem(`seb_quiz_${qKey}_detailedResults`);
+          if (savedDetailed) {
+            try {
+              const parsedDetailed = JSON.parse(savedDetailed);
+              if (Array.isArray(parsedDetailed) && parsedDetailed.length > 0) {
+                setQuizDetailedResults(parsedDetailed);
+                if (quizObj.questions) {
+                  quizObj.questions = quizObj.questions.map((q) => {
+                    const evalItem = findMatchingQuestionItem(q, parsedDetailed);
+                    if (evalItem) {
+                      return {
+                        ...q,
+                        correctAnswer: evalItem.correctOptionText || evalItem.correctAnswer || q.correctAnswer,
+                        isResultCorrect: evalItem.isCorrect,
+                      };
+                    }
+                    return q;
+                  });
+                  setStudentQuiz({ ...quizObj });
+                }
+              }
+            } catch (err) {
+              console.warn("Failed to parse detailed quiz results from storage:", err);
+            }
+          }
+        }
+
         const savedIdx = localStorage.getItem(`seb_student_${studentSelectedId}_quiz_${qKey}_question_idx`);
         setCurrentStudentQuestionIdx(savedIdx ? parseInt(savedIdx, 10) : 0);
 
@@ -1281,6 +1331,14 @@ export default function App() {
   const [quizScore, setQuizScore] = useState(0);
   const [quizTotalPoints, setQuizTotalPoints] = useState(0);
   const [quizPercentage, setQuizPercentage] = useState(0);
+  const [quizDetailedResults, setQuizDetailedResults] = useState<any[]>(() => {
+    try {
+      const saved = localStorage.getItem("seb_student_current_detailed_results");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
 
   // Clear password inputs when changing student choices
   useEffect(() => {
@@ -2446,6 +2504,14 @@ export default function App() {
           setQuizTotalPoints(resData.totalPoints);
           setQuizPercentage(resData.percentage);
 
+          const qKey = studentQuiz.id || studentQuiz.title;
+          localStorage.setItem(`seb_student_${targetStudentId}_quiz_${qKey}_score`, String(resData.score));
+          localStorage.setItem(`seb_student_${targetStudentId}_quiz_${qKey}_totalPoints`, String(resData.totalPoints));
+          localStorage.setItem(`seb_student_${targetStudentId}_quiz_${qKey}_percentage`, String(resData.percentage));
+          localStorage.setItem(`seb_student_${targetStudentId}_quiz_${qKey}_answers`, JSON.stringify(quizAnswers));
+          localStorage.setItem(`seb_student_${targetStudentId}_quiz_${qKey}_finished`, "true");
+          localStorage.setItem(`seb_student_${targetStudentId}_quiz_finished`, "true");
+
           if (resData.targetStudentId) {
             setStudentSelectedId(resData.targetStudentId);
             sessionStorage.setItem("seb_student_logged_id", resData.targetStudentId);
@@ -2456,10 +2522,27 @@ export default function App() {
 
           // If detailed results with answers were returned for post-test review, populate them in studentQuiz
           if (Array.isArray(resData.detailedQuestionResults) && resData.detailedQuestionResults.length > 0) {
+            setQuizDetailedResults(resData.detailedQuestionResults);
+            localStorage.setItem(
+              `seb_student_${targetStudentId}_quiz_${qKey}_detailedResults`,
+              JSON.stringify(resData.detailedQuestionResults)
+            );
+            localStorage.setItem(
+              `seb_student_${targetStudentId}_quiz_detailedResults`,
+              JSON.stringify(resData.detailedQuestionResults)
+            );
+            localStorage.setItem(
+              "seb_student_current_detailed_results",
+              JSON.stringify(resData.detailedQuestionResults)
+            );
+            localStorage.setItem(
+              `seb_quiz_${qKey}_detailedResults`,
+              JSON.stringify(resData.detailedQuestionResults)
+            );
             setStudentQuiz((prev) => {
               if (!prev) return prev;
               const updatedQs = prev.questions.map((q) => {
-                const evaluated = resData.detailedQuestionResults.find((r: any) => r.questionId === q.id);
+                const evaluated = findMatchingQuestionItem(q, resData.detailedQuestionResults);
                 if (evaluated) {
                   return {
                     ...q,
@@ -2469,13 +2552,14 @@ export default function App() {
                 }
                 return q;
               });
-              return { ...prev, questions: updatedQs };
+              const updatedQuiz = { ...prev, questions: updatedQs };
+              localStorage.setItem(`seb_student_${targetStudentId}_quiz_${qKey}`, JSON.stringify(updatedQuiz));
+              localStorage.setItem(`seb_student_${targetStudentId}_quiz`, JSON.stringify(updatedQuiz));
+              return updatedQuiz;
             });
           }
 
           await finalizeGradingPresentation();
-          const qKey = studentQuiz.id || studentQuiz.title;
-          localStorage.setItem(`seb_student_${targetStudentId}_quiz_${qKey}_finished`, "true");
 
           if (isAutoSubmit) {
             triggerToast(
@@ -2495,113 +2579,16 @@ export default function App() {
       // 2. Client-side fallback if server endpoint is unavailable
       let earnedPoints = 0;
       let totalPoints = 0;
-
-      const normArabicText = (val: any): string => {
-        if (val === undefined || val === null) return "";
-        let str = String(val).trim();
-        str = str.replace(/[.\u06D4]+$/g, "").trim();
-        return str
-          .replace(/[إأآا]/g, "ا")
-          .replace(/ة/g, "ه")
-          .replace(/ى/g, "ي")
-          .replace(/[\u064B-\u065F\u0670]/g, "")
-          .replace(/\s+/g, " ")
-          .toLowerCase();
-      };
-
-      const isTrueArabic = (val: any): boolean => {
-        const norm = normArabicText(val);
-        return (
-          norm === "true" ||
-          norm === "صح" ||
-          norm === "صحيح" ||
-          norm === "صواب" ||
-          norm === "نعم" ||
-          norm === "1" ||
-          norm === "0"
-        );
-      };
+      const origQuiz = quizzes.find((qz) => qz.id === studentQuiz.id);
 
       const updatedQsWithResults = studentQuiz.questions.map((q) => {
         const qPoints = typeof q.points === "number" ? q.points : 1;
         totalPoints += qPoints;
         const ans = quizAnswers[q.id];
-        let isMatch = false;
-        let resolvedAnsText = String(q.correctAnswer ?? "");
-
-        if (ans !== undefined && ans !== null && String(ans).trim() !== "") {
-          const sAns = String(ans).trim();
-
-          const isTf =
-            q.type === "true_false" ||
-            (Array.isArray(q.options) &&
-              q.options.some((o) => {
-                const n = normArabicText(o);
-                return n === "صح" || n === "صحيح" || n === "صواب" || n === "خطا" || n === "خاطي";
-              }));
-
-          if (isTf) {
-            const cAns = String(q.correctAnswer ?? "").trim();
-            const isCorrectTrue =
-              cAns === "true" ||
-              cAns === "0" ||
-              cAns === "صح" ||
-              cAns === "صحيح" ||
-              cAns === "صواب" ||
-              isTrueArabic(cAns);
-
-            resolvedAnsText = isCorrectTrue ? "صحيح" : "خطأ";
-
-            let isStudentTrue = false;
-            if (sAns === "0") {
-              isStudentTrue = true;
-            } else if (sAns === "1") {
-              isStudentTrue = false;
-            } else {
-              isStudentTrue = isTrueArabic(sAns);
-            }
-
-            if (isStudentTrue === isCorrectTrue) {
-              isMatch = true;
-            }
-          } else if (q.type === "multiple_choice" && Array.isArray(q.options)) {
-            const cAns = String(q.correctAnswer ?? "").trim();
-            const cIdx = parseInt(cAns, 10);
-            const correctOptText =
-              !isNaN(cIdx) && cIdx >= 0 && cIdx < q.options.length ? String(q.options[cIdx]).trim() : cAns;
-            resolvedAnsText = correctOptText;
-
-            const normCorrect = normArabicText(correctOptText);
-            const normRawCorrect = normArabicText(cAns);
-            const normStudent = normArabicText(sAns);
-            const sIdx = parseInt(sAns, 10);
-
-            if (normCorrect && normStudent === normCorrect) {
-              isMatch = true;
-            } else if (normRawCorrect && normStudent === normRawCorrect) {
-              isMatch = true;
-            } else if (sAns === cAns) {
-              isMatch = true;
-            } else if (!isNaN(sIdx) && sIdx >= 0 && sIdx < q.options.length) {
-              const studentOptText = String(q.options[sIdx]).trim();
-              if (normCorrect && normArabicText(studentOptText) === normCorrect) {
-                isMatch = true;
-              } else if (sIdx === cIdx) {
-                isMatch = true;
-              }
-            } else if (!isNaN(cIdx) && cIdx >= 0 && cIdx < q.options.length) {
-              if (normArabicText(q.options[cIdx]) === normStudent) {
-                isMatch = true;
-              }
-            }
-          } else if (q.correctAnswer !== undefined) {
-            const cAns = String(q.correctAnswer).trim();
-            resolvedAnsText = cAns;
-            if (normArabicText(sAns) === normArabicText(cAns) || sAns === cAns) {
-              isMatch = true;
-            }
-          }
-        }
+        const origQ = findMatchingQuestionItem(q, origQuiz?.questions || []);
+        const targetQ = origQ || q;
+        const isMatch = checkAnswerCorrectness(targetQ, ans);
+        const resolvedAnsText = resolveQuestionCorrectText(targetQ);
 
         if (isMatch) {
           earnedPoints += qPoints;
@@ -2609,7 +2596,7 @@ export default function App() {
 
         return {
           ...q,
-          correctAnswer: resolvedAnsText || q.correctAnswer,
+          correctAnswer: resolvedAnsText || targetQ.correctAnswer || q.correctAnswer,
           isResultCorrect: isMatch,
         };
       });
@@ -2620,6 +2607,16 @@ export default function App() {
       setQuizScore(earnedPoints);
       setQuizTotalPoints(totalPoints);
       setQuizPercentage(pct);
+
+      const qKeyFallback = studentQuiz.id || studentQuiz.title;
+      localStorage.setItem(`seb_student_${targetStudentId}_quiz_${qKeyFallback}_score`, String(earnedPoints));
+      localStorage.setItem(`seb_student_${targetStudentId}_quiz_${qKeyFallback}_totalPoints`, String(totalPoints));
+      localStorage.setItem(`seb_student_${targetStudentId}_quiz_${qKeyFallback}_percentage`, String(pct));
+      localStorage.setItem(`seb_student_${targetStudentId}_quiz_${qKeyFallback}_answers`, JSON.stringify(quizAnswers));
+      localStorage.setItem(`seb_student_${targetStudentId}_quiz_${qKeyFallback}_finished`, "true");
+      localStorage.setItem(`seb_student_${targetStudentId}_quiz_finished`, "true");
+      localStorage.setItem(`seb_student_${targetStudentId}_quiz_${qKeyFallback}`, JSON.stringify({ ...studentQuiz, questions: updatedQsWithResults }));
+      localStorage.setItem(`seb_student_${targetStudentId}_quiz`, JSON.stringify({ ...studentQuiz, questions: updatedQsWithResults }));
 
       const gRecord = {
         quizTitle: studentQuiz.title,
@@ -9999,23 +9996,38 @@ export default function App() {
                     {/* Rendering options based on type */}
                     {question.type === "multiple_choice" ? (
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-                        {(question.options || [])
-                          .map((option, oIdx) => ({ option, oIdx }))
-                          .filter(item => {
-                            if (!item.option) return false;
-                            const t = item.option.trim();
-                            return t !== '' && 
-                              t !== 'الخيار الثالث' && 
-                              t !== 'الخيار الرابع' && 
-                              t !== 'الخيار الثالث...' && 
-                              t !== 'الخيار الرابع...' &&
-                              t !== 'option 3' &&
-                              t !== 'option 4' &&
-                              t !== 'option3' &&
-                              t !== 'option4';
-                          })
-                          .map(({ option, oIdx }) => {
-                            const isChosen = selectedAnswer === option || selectedAnswer === String(oIdx);
+                        {(() => {
+                          const validOptions = (question.options || [])
+                            .map((option, oIdx) => ({ option, oIdx }))
+                            .filter(item => {
+                              if (!item.option) return false;
+                              const t = item.option.trim();
+                              return t !== '' && 
+                                t !== 'الخيار الثالث' && 
+                                t !== 'الخيار الرابع' && 
+                                t !== 'الخيار الثالث...' && 
+                                t !== 'الخيار الرابع...' &&
+                                t !== 'option 3' &&
+                                t !== 'option 4' &&
+                                t !== 'option3' &&
+                                t !== 'option4';
+                            });
+
+                          // If student's selectedAnswer matches any option text directly, match ONLY by option text
+                          // to prevent numeric texts (e.g. "2") from accidentally matching other options' index (e.g. index 2)
+                          const matchesOptionText = validOptions.some(
+                            (item) =>
+                              item.option === selectedAnswer ||
+                              (Boolean(selectedAnswer) &&
+                                normalizeArabicText(item.option) === normalizeArabicText(selectedAnswer))
+                          );
+
+                          return validOptions.map(({ option, oIdx }) => {
+                            const isChosen = matchesOptionText
+                              ? (selectedAnswer === option ||
+                                  (Boolean(selectedAnswer) &&
+                                    normalizeArabicText(option) === normalizeArabicText(selectedAnswer)))
+                              : selectedAnswer === String(oIdx);
 
                             return (
                               <button
@@ -10049,7 +10061,8 @@ export default function App() {
                                 </div>
                               </button>
                             );
-                          })}
+                          });
+                        })()}
                       </div>
                     ) : (
                       <div className="flex flex-col sm:flex-row gap-4 pt-2">
@@ -10425,95 +10438,143 @@ export default function App() {
 
         {/* Main Result Content */}
         <main className="max-w-4xl mx-auto w-full p-4 md:p-6 space-y-6 flex-1">
-          {/* Question Index Strip (Square rounded badges like test view) */}
-          <div className="bg-gradient-to-br from-indigo-50/90 via-slate-50 to-indigo-50/40 rounded-2xl border-2 border-indigo-200 shadow-md p-5 space-y-4">
-            <div className="flex justify-between items-center text-xs text-indigo-950 font-bold select-none">
-              <span className="flex items-center gap-1.5">
-                <ClipboardList className="w-4 h-4 text-indigo-600" />
-                قائمة الأسئلة (اضغط على رقم السؤال للتنقل السريع):
-              </span>
-              <span className="font-sans font-black text-indigo-800 bg-indigo-100/80 px-2.5 py-1 rounded-full border border-indigo-200">
-                السؤال {reviewResultQuestionIdx + 1} من {totalCount}
-              </span>
-            </div>
-
-            <div className="flex flex-wrap gap-2.5 pt-1">
-              {studentQuiz.questions.map((q, idx) => {
-                const isCurrent = idx === reviewResultQuestionIdx;
-                const studentAns = quizAnswers[q.id];
-                const isAnswered = studentAns !== undefined && studentAns !== null && String(studentAns).trim() !== "";
-                const isCorrect = (q as any).isResultCorrect !== undefined
-                  ? Boolean((q as any).isResultCorrect)
-                  : (isAnswered && (
-                      studentAns === q.correctAnswer ||
-                      (Array.isArray(q.options) && !isNaN(parseInt(q.correctAnswer, 10)) && q.options[parseInt(q.correctAnswer, 10)] === studentAns) ||
-                      (q.type === "true_false" && (
-                        (studentAns === "true" || studentAns === "صحيح" || studentAns === "0" || studentAns === "صح") ===
-                        (q.correctAnswer === "true" || q.correctAnswer === "صحيح" || q.correctAnswer === "0" || q.correctAnswer === "صح")
-                      ))
-                    ));
-
-                return (
-                  <button
-                    key={q.id}
-                    type="button"
-                    onClick={() => setReviewResultQuestionIdx(idx)}
-                    className={`w-11 h-11 rounded-xl font-mono text-xs font-black flex flex-col items-center justify-center relative transition-all duration-150 cursor-pointer ${
-                      isCurrent
-                        ? isCorrect
-                          ? "bg-emerald-500 text-white ring-4 ring-emerald-300 scale-110 z-10 border-2 border-emerald-700 shadow-md font-black"
-                          : !isAnswered
-                            ? "bg-amber-400 text-slate-900 ring-4 ring-amber-300 scale-110 z-10 border-2 border-amber-600 shadow-md font-black"
-                            : "bg-red-500 text-white ring-4 ring-red-300 scale-110 z-10 border-2 border-red-700 shadow-md font-black"
-                        : isCorrect
-                          ? "bg-emerald-500 hover:bg-emerald-600 text-white border-2 border-emerald-600 shadow-xs font-black"
-                          : !isAnswered
-                            ? "bg-amber-400 hover:bg-amber-500 text-slate-900 border-2 border-amber-500 shadow-xs font-black"
-                            : "bg-red-500 hover:bg-red-600 text-white border-2 border-red-600 shadow-xs font-black"
-                    }`}
-                  >
-                    <span className="text-xs font-black leading-none">{idx + 1}</span>
-                    <span className="text-[10px] mt-0.5 leading-none">
-                      {isCorrect ? "✓" : !isAnswered ? "⚠️" : "✗"}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Question Display Card (Styled exactly like test questions) */}
           {(() => {
-            const currentQ =
-              studentQuiz.questions[reviewResultQuestionIdx] ||
-              studentQuiz.questions[0];
-            if (!currentQ) return null;
-            const studentAns = quizAnswers[currentQ.id];
-            const isAnswered = studentAns !== undefined && studentAns !== null && String(studentAns).trim() !== "";
-            const isCorrect = (currentQ as any).isResultCorrect !== undefined
-              ? Boolean((currentQ as any).isResultCorrect)
-              : (isAnswered && (
-                  studentAns === currentQ.correctAnswer ||
-                  (Array.isArray(currentQ.options) && !isNaN(parseInt(currentQ.correctAnswer, 10)) && currentQ.options[parseInt(currentQ.correctAnswer, 10)] === studentAns) ||
-                  (currentQ.type === "true_false" && (
-                    (studentAns === "true" || studentAns === "صحيح" || studentAns === "0" || studentAns === "صح") ===
-                    (currentQ.correctAnswer === "true" || currentQ.correctAnswer === "صحيح" || currentQ.correctAnswer === "0" || currentQ.correctAnswer === "صح")
-                  ))
-                ));
+            const evaluateStudentReviewQuestion = (
+              q: Question,
+              idx: number
+            ): { isCorrect: boolean; isAnswered: boolean; studentAns: any; correctOptText: string } => {
+              const origQuiz = quizzes.find((qz) => qz.id === studentQuiz?.id);
+              const origQ = findMatchingQuestionItem(q, origQuiz?.questions || []);
+              const detail = findMatchingQuestionItem(q, quizDetailedResults || []);
 
-            const isStudentTrueSelected =
-              studentAns === "true" ||
-              studentAns === "صحيح" ||
-              studentAns === "0" ||
-              studentAns === "صح" ||
-              studentAns === "صواب";
+              let studentAns = quizAnswers[q.id];
+              if (studentAns === undefined || studentAns === null) {
+                if (detail && detail.studentAnswer !== undefined && detail.studentAnswer !== null) {
+                  studentAns = detail.studentAnswer;
+                } else if (origQ?.id && quizAnswers[origQ.id] !== undefined) {
+                  studentAns = quizAnswers[origQ.id];
+                }
+              }
+              const isAnswered = studentAns !== undefined && studentAns !== null && String(studentAns).trim() !== "";
 
-            const isStudentFalseSelected =
-              studentAns === "false" ||
-              studentAns === "خطأ" ||
-              studentAns === "1" ||
-              studentAns === "خاطئ" ||
-              studentAns === "خاطئة";
+              // 1. Authoritative check from server detailed results
+              if (detail && detail.isCorrect !== undefined) {
+                return {
+                  isCorrect: Boolean(detail.isCorrect),
+                  isAnswered,
+                  studentAns,
+                  correctOptText: String(detail.correctOptionText || detail.correctAnswer || q.correctAnswer || ""),
+                };
+              }
+
+              // 2. Look up in original un-shuffled quiz from quizzes collection (contains original model answers)
+              if (origQ && isAnswered) {
+                const match = checkAnswerCorrectness(origQ, studentAns);
+                const text = resolveQuestionCorrectText(origQ);
+                if (match) {
+                  return {
+                    isCorrect: true,
+                    isAnswered,
+                    studentAns,
+                    correctOptText: text,
+                  };
+                }
+              }
+
+              // 3. Direct explicit property on question object if already set
+              if ((q as any).isResultCorrect !== undefined) {
+                return {
+                  isCorrect: Boolean((q as any).isResultCorrect),
+                  isAnswered,
+                  studentAns,
+                  correctOptText: String(q.correctAnswer || ""),
+                };
+              }
+
+              // 4. Perfect score safety: If student achieved 100% (score === totalPoints), all answered questions are correct
+              if (quizTotalPoints > 0 && quizScore === quizTotalPoints && isAnswered) {
+                return {
+                  isCorrect: true,
+                  isAnswered,
+                  studentAns,
+                  correctOptText: String(q.correctAnswer || ""),
+                };
+              }
+
+              // 5. Fallback using current question
+              const fallbackCorrect = isAnswered && checkAnswerCorrectness(q, studentAns);
+              return {
+                isCorrect: fallbackCorrect,
+                isAnswered,
+                studentAns,
+                correctOptText: String(q.correctAnswer || ""),
+              };
+            };
+
+            return (
+              <>
+                {/* Question Index Strip (Square rounded badges like test view) */}
+                <div className="bg-gradient-to-br from-indigo-50/90 via-slate-50 to-indigo-50/40 rounded-2xl border-2 border-indigo-200 shadow-md p-5 space-y-4">
+                  <div className="flex justify-between items-center text-xs text-indigo-950 font-bold select-none">
+                    <span className="flex items-center gap-1.5">
+                      <ClipboardList className="w-4 h-4 text-indigo-600" />
+                      قائمة الأسئلة (اضغط على رقم السؤال للتنقل السريع):
+                    </span>
+                    <span className="font-sans font-black text-indigo-800 bg-indigo-100/80 px-2.5 py-1 rounded-full border border-indigo-200">
+                      السؤال {reviewResultQuestionIdx + 1} من {totalCount}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2.5 pt-1">
+                    {studentQuiz.questions.map((q, idx) => {
+                      const isCurrent = idx === reviewResultQuestionIdx;
+                      const evalInfo = evaluateStudentReviewQuestion(q, idx);
+                      const isAnswered = evalInfo.isAnswered;
+                      const isCorrect = evalInfo.isCorrect;
+
+                      return (
+                        <button
+                          key={q.id}
+                          type="button"
+                          onClick={() => setReviewResultQuestionIdx(idx)}
+                          className={`w-11 h-11 rounded-xl font-mono text-xs font-black flex flex-col items-center justify-center relative transition-all duration-150 cursor-pointer ${
+                            isCurrent
+                              ? isCorrect
+                                ? "bg-emerald-500 text-white ring-4 ring-emerald-300 scale-110 z-10 border-2 border-emerald-700 shadow-md font-black"
+                                : !isAnswered
+                                  ? "bg-amber-400 text-slate-900 ring-4 ring-amber-300 scale-110 z-10 border-2 border-amber-600 shadow-md font-black"
+                                  : "bg-red-500 text-white ring-4 ring-red-300 scale-110 z-10 border-2 border-red-700 shadow-md font-black"
+                              : isCorrect
+                                ? "bg-emerald-500 hover:bg-emerald-600 text-white border-2 border-emerald-600 shadow-xs font-black"
+                                : !isAnswered
+                                  ? "bg-amber-400 hover:bg-amber-500 text-slate-900 border-2 border-amber-500 shadow-xs font-black"
+                                  : "bg-red-500 hover:bg-red-600 text-white border-2 border-red-600 shadow-xs font-black"
+                          }`}
+                        >
+                          <span className="text-xs font-black leading-none">{idx + 1}</span>
+                          <span className="text-[10px] mt-0.5 leading-none">
+                            {isCorrect ? "✓" : !isAnswered ? "⚠️" : "✗"}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Question Display Card (Styled exactly like test questions) */}
+                {(() => {
+                  const currentQ =
+                    studentQuiz.questions[reviewResultQuestionIdx] ||
+                    studentQuiz.questions[0];
+                  if (!currentQ) return null;
+                  const evalInfo = evaluateStudentReviewQuestion(currentQ, reviewResultQuestionIdx);
+                  const studentAns = evalInfo.studentAns;
+                  const isAnswered = evalInfo.isAnswered;
+                  const isCorrect = evalInfo.isCorrect;
+
+            const studentTfBool = resolveTrueFalseBoolean(studentAns, currentQ.options);
+            const isStudentTrueSelected = studentTfBool === true;
+            const isStudentFalseSelected = studentTfBool === false;
 
             return (
               <div className="space-y-4">
@@ -10565,25 +10626,40 @@ export default function App() {
                   {/* Options Display - Correct answer is hidden as requested */}
                   {currentQ.type === "multiple_choice" ? (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-                      {(currentQ.options || [])
-                        .map((option, oIdx) => ({ option, oIdx }))
-                        .filter((item) => {
-                          if (!item.option) return false;
-                          const t = item.option.trim();
-                          return (
-                            t !== "" &&
-                            t !== "الخيار الثالث" &&
-                            t !== "الخيار الرابع" &&
-                            t !== "الخيار الثالث..." &&
-                            t !== "الخيار الرابع..." &&
-                            t !== "option 3" &&
-                            t !== "option 4" &&
-                            t !== "option3" &&
-                            t !== "option4"
-                          );
-                        })
-                        .map(({ option, oIdx }) => {
-                          const isSelectedByStudent = studentAns === option || studentAns === String(oIdx);
+                      {(() => {
+                        const validReviewOptions = (currentQ.options || [])
+                          .map((option, oIdx) => ({ option, oIdx }))
+                          .filter((item) => {
+                            if (!item.option) return false;
+                            const t = item.option.trim();
+                            return (
+                              t !== "" &&
+                              t !== "الخيار الثالث" &&
+                              t !== "الخيار الرابع" &&
+                              t !== "الخيار الثالث..." &&
+                              t !== "الخيار الرابع..." &&
+                              t !== "option 3" &&
+                              t !== "option 4" &&
+                              t !== "option3" &&
+                              t !== "option4"
+                            );
+                          });
+
+                        // If studentAns matches any option text directly, match ONLY by option text
+                        // to prevent numeric texts (e.g. "2") from accidentally matching another option's index (e.g. index 2)
+                        const matchesOptionText = validReviewOptions.some(
+                          (item) =>
+                            item.option === studentAns ||
+                            (Boolean(studentAns) &&
+                              normalizeArabicText(item.option) === normalizeArabicText(studentAns))
+                        );
+
+                        return validReviewOptions.map(({ option, oIdx }) => {
+                          const isSelectedByStudent = matchesOptionText
+                            ? (studentAns === option ||
+                                (Boolean(studentAns) &&
+                                  normalizeArabicText(studentAns) === normalizeArabicText(option)))
+                            : studentAns === String(oIdx);
 
                           return (
                             <div
@@ -10635,7 +10711,8 @@ export default function App() {
                               </div>
                             </div>
                           );
-                        })}
+                        });
+                      })()}
                     </div>
                   ) : (
                     <div className="flex flex-col sm:flex-row gap-4 pt-2">
@@ -10747,6 +10824,9 @@ export default function App() {
               </div>
             );
           })()}
+        </>
+      );
+    })()}
 
           {/* Bottom Return to Home Button */}
           <div className="pt-4">

@@ -28,7 +28,7 @@ import {
   ArrowLeft
 } from "lucide-react";
 import { BankQuestion, Student } from "../types";
-import { isTrueFalseQuestion as isTFHelper, normalizeQuestion, isGradeMatching, isClassMatching } from "../utils/questionUtils";
+import { isTrueFalseQuestion as isTFHelper, normalizeQuestion, isGradeMatching, isClassMatching, checkAnswerCorrectness } from "../utils/questionUtils";
 import { db } from "../firebase";
 import { collection, doc, setDoc, getDocs, query, where, onSnapshot } from "firebase/firestore";
 import { BigRealisticPadlock } from "./BigRealisticPadlock";
@@ -1264,16 +1264,9 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
   };
 
   // Helper to check answer correctness robustly
-  const checkCorrect = (selected: string | null, correct: string) => {
-    if (!selected) return false;
-    if (selected === correct) return true;
-    if (currentQuestion && isTrueFalseQuestion(currentQuestion)) {
-      if (selected === "0" && (correct === "true" || correct === "0" || correct === "صح")) return true;
-      if (selected === "1" && (correct === "false" || correct === "1" || correct === "خطأ")) return true;
-      if (selected === "true" && (correct === "0" || correct === "true" || correct === "صح")) return true;
-      if (selected === "false" && (correct === "1" || correct === "false" || correct === "خطأ")) return true;
-    }
-    return false;
+  const checkCorrect = (selected: string | null, _correct?: string) => {
+    if (!selected || !currentQuestion) return false;
+    return checkAnswerCorrectness(currentQuestion, selected);
   };
 
   const finishCurrentQuestion = (updatedAnswers: Record<number, { selected: string; isCorrect: boolean }>) => {

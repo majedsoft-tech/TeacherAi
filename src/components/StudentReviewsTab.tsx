@@ -64,7 +64,7 @@ import {
   Minimize2
 } from "lucide-react";
 import { ReviewChallenge, ReviewScore, Question } from "../types";
-import { isTrueFalseQuestion, normalizeQuestion, isGradeMatching } from "../utils/questionUtils";
+import { isTrueFalseQuestion, normalizeQuestion, isGradeMatching, checkAnswerCorrectness } from "../utils/questionUtils";
 import { db, handleFirestoreError, OperationType } from "../firebase";
 import { setDoc, doc, collection, query, where, getDocs, deleteDoc, onSnapshot, updateDoc, deleteField, writeBatch } from "firebase/firestore";
 import { LivePodiumView, FIXED_GAMES } from "./ReviewsAdminTab";
@@ -675,30 +675,7 @@ function randomizeChallenge(challenge: ReviewChallenge): ReviewChallenge {
 
 const checkIsCorrect = (q: Question | undefined, ansIdx: number): boolean => {
   if (!q) return false;
-  const isTf = isTrueFalseQuestion(q);
-  if (isTf) {
-    const val = q.correctAnswer;
-    // index 0 is True/Correct, index 1 is False/Incorrect
-    if (val === 'true' || val === '0' || val === 'صحيح' || val === 'صواب' || val === 'صح') {
-      return ansIdx === 0;
-    }
-    if (val === 'false' || val === '1' || val === 'خطأ' || val === 'خاطئ') {
-      return ansIdx === 1;
-    }
-  }
-  
-  // Multiple choice
-  const parsed = parseInt(q.correctAnswer);
-  if (!isNaN(parsed)) {
-    return ansIdx === parsed;
-  }
-  
-  // Text matching fallback
-  if (q.options && q.options[ansIdx] === q.correctAnswer) {
-    return true;
-  }
-  
-  return false;
+  return checkAnswerCorrectness(q, ansIdx);
 };
 
 const getCumulativeLeaderboard = (

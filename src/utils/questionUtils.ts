@@ -281,3 +281,280 @@ export function isClassMatching(
 
   return false;
 }
+
+/**
+ * Normalizes Arabic text for robust comparison:
+ * - Trims whitespace and trailing punctuation
+ * - Normalizes Alef forms (إ, أ, آ -> ا)
+ * - Normalizes Teh Marbuta to Heh (ة -> ه)
+ * - Normalizes Alif Maqsura to Ya (ى -> ي)
+ * - Removes Arabic diacritics / tashkeel and tatweel
+ * - Collapses repeated spaces
+ * - Lowercases Latin characters
+ */
+export function normalizeArabicText(val: any): string {
+  if (val === undefined || val === null) return '';
+  let str = String(val).trim();
+  // Remove trailing punctuation
+  str = str.replace(/[.\u06D4!؟?،,:;]+$/g, '').trim();
+  // Arabic normalization
+  str = str
+    .replace(/[إأآا]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, '') // remove tashkeel/diacritics and tatweel
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+  return str;
+}
+
+/**
+ * Helper to check if a string represents TRUE in Arabic or English.
+ * Note: Does NOT treat "1" as truthy (in Arabic tests, 0 is often True, 1 is False).
+ */
+export function isArabicTruthy(val: any): boolean {
+  if (val === true) return true;
+  const s = normalizeArabicText(val);
+  return s === 'true' || s === 'صح' || s === 'صحيح' || s === 'صواب' || s === 'نعم';
+}
+
+/**
+ * Helper to check if a string represents FALSE in Arabic or English.
+ */
+export function isArabicFalsy(val: any): boolean {
+  if (val === false) return true;
+  const s = normalizeArabicText(val);
+  return (
+    s === 'false' ||
+    s === 'خطا' ||
+    s === 'خاطي' ||
+    s === 'خاطيه' ||
+    s === 'لا'
+  );
+}
+
+/**
+ * Resolves whether a given value (from answer or question) represents TRUE or FALSE.
+ * Handles boolean types, text ("صح", "خطأ", "true", "false"), and numeric indices (0 vs 1).
+ */
+export function resolveTrueFalseBoolean(val: any, options?: any[]): boolean | null {
+  if (val === undefined || val === null) return null;
+  if (val === true) return true;
+  if (val === false) return false;
+
+  const raw = String(val).trim();
+  if (raw === '') return null;
+
+  // Direct truthy / falsy word checks
+  if (isArabicTruthy(raw)) return true;
+  if (isArabicFalsy(raw)) return false;
+
+  // Check if options array provides mapping
+  const idx = parseInt(raw, 10);
+  if (!isNaN(idx) && Array.isArray(options) && idx >= 0 && idx < options.length) {
+    const optText = options[idx];
+    if (isArabicTruthy(optText)) return true;
+    if (isArabicFalsy(optText)) return false;
+  }
+
+  // Standard index convention for True/False (0 = True, 1 = False)
+  if (raw === '0') return true;
+  if (raw === '1') return false;
+
+  return null;
+}
+
+/**
+ * Resolves the display text of the correct answer for a question.
+ */
+export function resolveQuestionCorrectText(question: any): string {
+  if (!question) return '';
+
+  if (isTrueFalseQuestion(question)) {
+    const boolVal = resolveTrueFalseBoolean(question.correctAnswer, question.options);
+    if (boolVal === true) return 'صحيح (True)';
+    if (boolVal === false) return 'خطأ (False)';
+    return String(question.correctAnswer || '').trim();
+  }
+
+  const cRaw = String(question.correctAnswer ?? '').trim();
+  if (Array.isArray(question.options) && question.options.length > 0) {
+    const cIdx = parseInt(cRaw, 10);
+    if (!isNaN(cIdx) && cRaw === String(cIdx) && cIdx >= 0 && cIdx < question.options.length) {
+      return String(question.options[cIdx] || '').trim();
+    }
+    // If cRaw is text, check if it matches an option
+    const normCRaw = normalizeArabicText(cRaw);
+    const found = question.options.find((opt: any) => normalizeArabicText(opt) === normCRaw);
+    if (found) return String(found).trim();
+  }
+
+  return cRaw;
+}
+
+/**
+ * Universally evaluates if a student's answer is correct for any question (MCQ or T/F).
+ * Covers text answers, index answers, normalized Arabic, diacritics, and edge cases.
+ */
+export function checkAnswerCorrectness(question: any, studentAnswer: any): boolean {
+  if (!question || studentAnswer === undefined || studentAnswer === null) return false;
+  const sRaw = String(studentAnswer).trim();
+  if (sRaw === '') return false;
+
+  // 1. True / False Question Evaluation
+  if (isTrueFalseQuestion(question)) {
+    const studentBool = resolveTrueFalseBoolean(studentAnswer, question.options);
+    const correctBool = resolveTrueFalseBoolean(question.correctAnswer, question.options);
+
+    if (studentBool !== null && correctBool !== null) {
+      return studentBool === correctBool;
+    }
+  }
+
+  // 2. Multiple Choice Evaluation
+  const cRaw = String(question.correctAnswer ?? '').trim();
+  if (cRaw === '') return false;
+
+  const normStudent = normalizeArabicText(sRaw);
+  const normCorrect = normalizeArabicText(cRaw);
+
+  // Exact or normalized match between student answer and raw correct answer
+  if (normStudent === normCorrect || sRaw === cRaw) {
+    return true;
+  }
+
+  const options: any[] = Array.isArray(question.options) ? question.options : [];
+
+  // Resolve correct option text and correct option index if options exist
+  let correctOptIndex = -1;
+  let correctOptText = '';
+
+  const parsedCIdx = parseInt(cRaw, 10);
+  if (!isNaN(parsedCIdx) && cRaw === String(parsedCIdx) && parsedCIdx >= 0 && parsedCIdx < options.length) {
+    correctOptIndex = parsedCIdx;
+    correctOptText = String(options[parsedCIdx] || '').trim();
+  }
+
+  if (!correctOptText && options.length > 0) {
+    const foundIdx = options.findIndex(
+      (opt: any) => normalizeArabicText(opt) === normCorrect || String(opt).trim() === cRaw
+    );
+    if (foundIdx >= 0) {
+      correctOptIndex = foundIdx;
+      correctOptText = String(options[foundIdx] || '').trim();
+    }
+  }
+
+  const normResolvedCorrectText = normalizeArabicText(correctOptText);
+
+  // If student answer matches resolved correct option text
+  if (correctOptText && (normStudent === normResolvedCorrectText || sRaw === correctOptText)) {
+    return true;
+  }
+
+  // If student submitted an index (e.g. "0", "1", "2", "3")
+  const parsedSIdx = parseInt(sRaw, 10);
+  if (!isNaN(parsedSIdx) && sRaw === String(parsedSIdx) && parsedSIdx >= 0 && parsedSIdx < options.length) {
+    // Matches correct index directly
+    if (correctOptIndex >= 0 && parsedSIdx === correctOptIndex) {
+      return true;
+    }
+    // Student's chosen option text matches correct text or cRaw
+    const studentSelectedText = String(options[parsedSIdx] || '').trim();
+    const normStudentSelectedText = normalizeArabicText(studentSelectedText);
+    if (
+      normStudentSelectedText === normCorrect ||
+      (correctOptText && normStudentSelectedText === normResolvedCorrectText) ||
+      studentSelectedText === cRaw ||
+      studentSelectedText === correctOptText
+    ) {
+      return true;
+    }
+  }
+
+  // If student submitted text, check if that text corresponds to options[correctOptIndex]
+  if (correctOptIndex >= 0 && correctOptIndex < options.length) {
+    const textAtCorrectIndex = String(options[correctOptIndex] || '').trim();
+    if (
+      normalizeArabicText(textAtCorrectIndex) === normStudent ||
+      textAtCorrectIndex === sRaw ||
+      normalizeQuestionText(textAtCorrectIndex) === normalizeQuestionText(sRaw)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Normalizes question text for flexible comparison:
+ * Strips diacritics, all punctuation, spaces around parentheses/brackets, extra whitespace,
+ * and normalizes Arabic letters.
+ */
+export function normalizeQuestionText(val: any): string {
+  if (val === undefined || val === null) return '';
+  let str = String(val).trim();
+  // Normalize whitespace characters
+  str = str.replace(/[\u00A0\u1680\u180E\u2000-\u200B\u202F\u205F\u3000\uFEFF]/g, ' ');
+  // Replace punctuation and symbols with spaces to prevent punctuation differences from breaking matching
+  str = str.replace(/[\p{P}\p{S}]+/gu, ' ');
+  return normalizeArabicText(str).replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Robustly finds the matching question or result item from a list (such as detailedQuestionResults or original questions list).
+ * Prioritizes:
+ * 1. Question ID match (targetQ.id === item.questionId || item.id)
+ * 2. Normalized Arabic question text match
+ * 3. Deep cleaned text match (ignoring punctuation, parentheses, casing)
+ * 4. Compressed text match (no spaces/punctuation)
+ * NEVER blindly matches by index in a way that overrides ID or text matching.
+ */
+export function findMatchingQuestionItem<T extends { id?: string; questionId?: string; text?: string; [key: string]: any }>(
+  targetQ: { id?: string; text?: string; [key: string]: any } | null | undefined,
+  candidates: T[] | null | undefined
+): T | null {
+  if (!targetQ || !Array.isArray(candidates) || candidates.length === 0) return null;
+
+  const targetId = targetQ.id ? String(targetQ.id).trim() : '';
+  const targetText = targetQ.text ? String(targetQ.text).trim() : '';
+
+  // 1. Match by ID
+  if (targetId) {
+    const byId = candidates.find((c) => {
+      const cId = c.questionId ? String(c.questionId).trim() : c.id ? String(c.id).trim() : '';
+      return Boolean(cId && cId === targetId);
+    });
+    if (byId) return byId;
+  }
+
+  // 2. Match by exact normalized Arabic text
+  if (targetText) {
+    const normTarget = normalizeArabicText(targetText);
+    if (normTarget) {
+      const byNormText = candidates.find((c) => c.text && normalizeArabicText(c.text) === normTarget);
+      if (byNormText) return byNormText;
+    }
+
+    // 3. Match by deep cleaned text (stripping parentheses, punctuation, formatting)
+    const cleanTarget = normalizeQuestionText(targetText);
+    if (cleanTarget) {
+      const byCleanText = candidates.find((c) => c.text && normalizeQuestionText(c.text) === cleanTarget);
+      if (byCleanText) return byCleanText;
+
+      // 4. Match by compressed text (no spaces, no punctuation)
+      const compressedTarget = cleanTarget.replace(/\s+/g, '');
+      if (compressedTarget.length >= 4) {
+        const byCompressed = candidates.find((c) => {
+          if (!c.text) return false;
+          const cleanC = normalizeQuestionText(c.text).replace(/\s+/g, '');
+          return cleanC === compressedTarget;
+        });
+        if (byCompressed) return byCompressed;
+      }
+    }
+  }
+
+  return null;
+}

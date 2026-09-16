@@ -1138,42 +1138,59 @@ ${JSON.stringify(questionsPayload, null, 2)}`;
       const normalizeText = (val: any): string => {
         if (val === undefined || val === null) return "";
         let str = String(val).trim();
-        // Remove trailing dot/period or punctuation
-        str = str.replace(/[.\u06D4]+$/g, "").trim();
+        // Remove trailing punctuation
+        str = str.replace(/[.\u06D4!؟?،,:;]+$/g, "").trim();
         // Normalize Arabic characters: alef forms to bare alef, teh marbuta to heh, alif maqsura to ya
         str = str
           .replace(/[إأآا]/g, "ا")
           .replace(/ة/g, "ه")
           .replace(/ى/g, "ي")
-          .replace(/[\u064B-\u065F\u0670]/g, "") // remove tashkeel/diacritics
+          .replace(/[\u064B-\u065F\u0670\u0640]/g, "") // remove tashkeel/diacritics and tatweel
           .replace(/\s+/g, " ")
           .toLowerCase();
         return str;
       };
 
-      const isTruthyArabic = (val: any): boolean => {
+      const isTfOptionTrue = (val: any): boolean => {
+        if (val === true) return true;
         const norm = normalizeText(val);
-        return (
-          norm === "true" ||
-          norm === "صح" ||
-          norm === "صحيح" ||
-          norm === "صواب" ||
-          norm === "نعم" ||
-          norm === "1" ||
-          norm === "0"
-        );
+        return norm === "true" || norm === "صح" || norm === "صحيح" || norm === "صواب" || norm === "نعم";
       };
 
-      const isFalsyArabic = (val: any): boolean => {
+      const isTfOptionFalse = (val: any): boolean => {
+        if (val === false) return true;
         const norm = normalizeText(val);
         return (
           norm === "false" ||
           norm === "خطا" ||
           norm === "خاطي" ||
           norm === "خاطيه" ||
-          norm === "لا" ||
-          norm === "1"
+          norm === "لا"
         );
+      };
+
+      const resolveTfBoolean = (val: any, options?: any[]): boolean | null => {
+        if (val === undefined || val === null) return null;
+        if (val === true) return true;
+        if (val === false) return false;
+
+        const raw = String(val).trim();
+        if (raw === "") return null;
+
+        if (isTfOptionTrue(raw)) return true;
+        if (isTfOptionFalse(raw)) return false;
+
+        const idx = parseInt(raw, 10);
+        if (!isNaN(idx) && Array.isArray(options) && idx >= 0 && idx < options.length) {
+          const optText = options[idx];
+          if (isTfOptionTrue(optText)) return true;
+          if (isTfOptionFalse(optText)) return false;
+        }
+
+        if (raw === "0") return true;
+        if (raw === "1") return false;
+
+        return null;
       };
 
       questions.forEach((q: any) => {
@@ -1208,71 +1225,78 @@ ${JSON.stringify(questionsPayload, null, 2)}`;
             }));
 
         if (isTf) {
-          const cRaw = String(q.correctAnswer ?? "").trim();
-          const isCorrectTrue =
-            cRaw === "true" ||
-            cRaw === "0" ||
-            cRaw === "صح" ||
-            cRaw === "صحيح" ||
-            cRaw === "صواب" ||
-            isTruthyArabic(cRaw);
-
-          resolvedCorrectText = isCorrectTrue ? "صحيح" : "خطأ";
+          const correctBool = resolveTfBoolean(q.correctAnswer, q.options);
+          resolvedCorrectText = correctBool === true ? "صحيح (True)" : correctBool === false ? "خطأ (False)" : String(q.correctAnswer ?? "");
 
           if (studentAns !== undefined && studentAns !== null && String(studentAns).trim() !== "") {
-            const sRaw = String(studentAns).trim();
-            // Handle numeric index submission (0 = first option "صحيح", 1 = second option "خطأ")
-            let isStudentTrue = false;
-            if (sRaw === "0") {
-              isStudentTrue = true;
-            } else if (sRaw === "1") {
-              isStudentTrue = false;
-            } else {
-              isStudentTrue = isTruthyArabic(sRaw);
-            }
-
-            if (isStudentTrue === isCorrectTrue) {
+            const studentBool = resolveTfBoolean(studentAns, q.options);
+            if (studentBool !== null && correctBool !== null && studentBool === correctBool) {
               isCorrect = true;
             }
           }
         } else if (q.type === "multiple_choice" && Array.isArray(q.options)) {
           const cRaw = String(q.correctAnswer ?? "").trim();
-          const cIdx = parseInt(cRaw, 10);
+          const normCRaw = normalizeText(cRaw);
+          const options: any[] = q.options;
 
-          // Find correct option text
-          if (!isNaN(cIdx) && cIdx >= 0 && cIdx < q.options.length) {
-            resolvedCorrectText = String(q.options[cIdx]).trim();
-          } else {
-            resolvedCorrectText = cRaw;
+          // Find correct option index and text
+          let correctOptIndex = -1;
+          let correctOptText = "";
+
+          const parsedCIdx = parseInt(cRaw, 10);
+          if (!isNaN(parsedCIdx) && cRaw === String(parsedCIdx) && parsedCIdx >= 0 && parsedCIdx < options.length) {
+            correctOptIndex = parsedCIdx;
+            correctOptText = String(options[parsedCIdx] || "").trim();
           }
+
+          if (!correctOptText && options.length > 0) {
+            const foundIdx = options.findIndex(
+              (opt: any) => normalizeText(opt) === normCRaw || String(opt).trim() === cRaw
+            );
+            if (foundIdx >= 0) {
+              correctOptIndex = foundIdx;
+              correctOptText = String(options[foundIdx] || "").trim();
+            }
+          }
+
+          if (!correctOptText) {
+            correctOptText = cRaw;
+          }
+          resolvedCorrectText = correctOptText;
 
           if (studentAns !== undefined && studentAns !== null && String(studentAns).trim() !== "") {
             const sRaw = String(studentAns).trim();
-            const sIdx = parseInt(sRaw, 10);
+            const normSRaw = normalizeText(sRaw);
+            const normCorrectOptText = normalizeText(correctOptText);
 
-            const normCorrect = normalizeText(resolvedCorrectText);
-            const normRawCorrect = normalizeText(cRaw);
-            const normStudent = normalizeText(sRaw);
+            // 1. Direct or normalized text equality
+            if (normSRaw === normCorrectOptText || (normCRaw && normSRaw === normCRaw) || sRaw === correctOptText || sRaw === cRaw) {
+              isCorrect = true;
+            }
 
-            // 1. Direct text equality with Arabic normalization
-            if (normCorrect && normStudent === normCorrect) {
-              isCorrect = true;
-            } else if (normRawCorrect && normStudent === normRawCorrect) {
-              isCorrect = true;
-            } else if (sRaw === cRaw) {
-              isCorrect = true;
-            } else if (!isNaN(sIdx) && sIdx >= 0 && sIdx < q.options.length) {
-              // Student submitted an index, check against options[sIdx]
-              const studentOptText = String(q.options[sIdx]).trim();
-              if (normCorrect && normalizeText(studentOptText) === normCorrect) {
+            // 2. Student submitted an index (e.g. "0", "1")
+            const parsedSIdx = parseInt(sRaw, 10);
+            if (!isCorrect && !isNaN(parsedSIdx) && sRaw === String(parsedSIdx) && parsedSIdx >= 0 && parsedSIdx < options.length) {
+              if (correctOptIndex >= 0 && parsedSIdx === correctOptIndex) {
                 isCorrect = true;
-              } else if (sIdx === cIdx) {
-                isCorrect = true;
+              } else {
+                const studentSelectedText = String(options[parsedSIdx] || "").trim();
+                const normStudentSelectedText = normalizeText(studentSelectedText);
+                if (
+                  normStudentSelectedText === normCorrectOptText ||
+                  (normCRaw && normStudentSelectedText === normCRaw) ||
+                  studentSelectedText === correctOptText ||
+                  studentSelectedText === cRaw
+                ) {
+                  isCorrect = true;
+                }
               }
-            } else if (!isNaN(cIdx) && cIdx >= 0 && cIdx < q.options.length) {
-              // Student submitted option text, check against q.options[cIdx]
-              const correctOptText = String(q.options[cIdx]).trim();
-              if (normalizeText(correctOptText) === normStudent) {
+            }
+
+            // 3. Student submitted option text, check against options[correctOptIndex]
+            if (!isCorrect && correctOptIndex >= 0 && correctOptIndex < options.length) {
+              const textAtCorrectIndex = String(options[correctOptIndex] || "").trim();
+              if (normalizeText(textAtCorrectIndex) === normSRaw || textAtCorrectIndex === sRaw) {
                 isCorrect = true;
               }
             }
@@ -1408,7 +1432,7 @@ ${JSON.stringify(questionsPayload, null, 2)}`;
         percentage: pct,
         passed,
         targetStudentId,
-        detailedQuestionResults: quizData.showResultToStudent !== false ? detailedQuestionResults : [],
+        detailedQuestionResults: detailedQuestionResults,
       });
     } catch (error: any) {
       console.error("Error in /api/student/submit-quiz:", error);

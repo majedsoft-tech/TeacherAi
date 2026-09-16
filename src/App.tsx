@@ -11012,49 +11012,6 @@ export default function App() {
                 )}
               </button>
 
-              {/* Standalone External Review Link - Directly below Comprehensive Review in Right Sidebar */}
-              <div className="my-1.5 p-2 bg-gradient-to-br from-amber-50/90 via-orange-50/50 to-amber-100/60 border border-amber-200/90 rounded-xl space-y-1.5 shadow-2xs">
-                <div className="flex items-center justify-between gap-1">
-                  <div className="flex items-center gap-1.5 text-xs font-black text-amber-900">
-                    <ExternalLink className="w-3.5 h-3.5 text-amber-700 shrink-0" />
-                    <span>رابط المراجعة المستقل</span>
-                  </div>
-                  <span className="text-[9px] bg-amber-200/90 text-amber-900 px-1.5 py-0.5 rounded font-black">
-                    مشفر 🔒
-                  </span>
-                </div>
-                <p className="text-[10px] text-amber-800 font-bold leading-tight">
-                  رابط مباشر للمراجعة فقط بدون تسجيل وبدون أي قوائم جانبية.
-                </p>
-                <div className="flex items-center gap-1 pt-0.5">
-                  <button
-                    type="button"
-                    onClick={() => copyStandaloneReviewLink()}
-                    className="flex-1 py-1.5 px-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white rounded-lg text-[10.5px] font-black flex items-center justify-center gap-1 shadow-xs cursor-pointer active:scale-95 transition-all"
-                    title="نسخ الرابط الخارجي المشفر"
-                  >
-                    <Copy className="w-3 h-3" />
-                    <span>نسخ الرابط</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => openStandaloneReviewLink()}
-                    className="p-1.5 bg-white hover:bg-amber-50 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold flex items-center justify-center shadow-xs cursor-pointer active:scale-95 transition-all"
-                    title="فتح ومعاينة الرابط في علامة تبويب جديدة"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowStandaloneReviewModal(true)}
-                    className="p-1.5 bg-white hover:bg-amber-50 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold flex items-center justify-center shadow-xs cursor-pointer active:scale-95 transition-all"
-                    title="معلومات وتفاصيل حماية الرابط المشفر"
-                  >
-                    <Info className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-
               <button
                 type="button"
                 onClick={() => setActiveTab("reviews_admin")}

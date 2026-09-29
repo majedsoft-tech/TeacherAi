@@ -486,49 +486,48 @@ interface LivePodiumViewProps {
 }
 
 export function LivePodiumView({ scores, onReset, onClose, isAdmin, podiumAt }: LivePodiumViewProps) {
-  const [revealed, setRevealed] = useState<number[]>([]);
-  const [secondsLeft, setSecondsLeft] = useState<number>(20);
+  const [revealed, setRevealed] = useState<number[]>([3, 2, 1]);
+  const [secondsLeft, setSecondsLeft] = useState<number>(25);
 
   useEffect(() => {
-    const updateCountdown = () => {
-      if (podiumAt) {
-        const elapsed = Math.floor((Date.now() - new Date(podiumAt).getTime()) / 1000);
-        const rem = Math.max(0, 20 - elapsed);
-        setSecondsLeft(rem);
-        if (rem <= 0 && onClose) {
-          onClose();
-        }
-      } else {
-        setSecondsLeft(prev => {
-          if (prev <= 1) {
-            if (onClose) onClose();
-            return 0;
+    // For admin, sync with teacher countdown if podiumAt is present
+    // For students, give a guaranteed local countdown of at least 25 seconds so the podium NEVER prematurely disappears!
+    let initialSeconds = 25;
+    if (isAdmin && podiumAt) {
+      const elapsed = Math.floor((Date.now() - new Date(podiumAt).getTime()) / 1000);
+      initialSeconds = Math.max(0, 20 - elapsed);
+    }
+    setSecondsLeft(initialSeconds);
+
+    const interval = setInterval(() => {
+      setSecondsLeft(prev => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          if (isAdmin && onClose) {
+            onClose();
           }
-          return prev - 1;
-        });
-      }
-    };
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
 
-    updateCountdown();
-    const interval = setInterval(updateCountdown, 1000);
     return () => clearInterval(interval);
-  }, [podiumAt, onClose]);
+  }, [podiumAt, onClose, isAdmin]);
 
   useEffect(() => {
+    // Staggered quick fanfare reveal of bronze, silver, gold
     const timer3 = setTimeout(() => {
-      setRevealed(prev => [...prev, 3]);
       adminSfx.playBronzeReveal();
-    }, 1500);
+    }, 200);
 
     const timer2 = setTimeout(() => {
-      setRevealed(prev => [...prev, 2]);
       adminSfx.playSilverReveal();
-    }, 3500);
+    }, 700);
 
     const timer1 = setTimeout(() => {
-      setRevealed(prev => [...prev, 1]);
       adminSfx.playGoldReveal();
-    }, 5500);
+    }, 1300);
 
     return () => {
       clearTimeout(timer3);

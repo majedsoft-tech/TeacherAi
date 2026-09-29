@@ -61,7 +61,8 @@ import {
   Users,
   LogOut,
   Maximize2,
-  Minimize2
+  Minimize2,
+  RotateCcw
 } from "lucide-react";
 import { ReviewChallenge, ReviewScore, Question } from "../types";
 import { isTrueFalseQuestion, normalizeQuestion, isGradeMatching, checkAnswerCorrectness } from "../utils/questionUtils";
@@ -935,6 +936,31 @@ export default function StudentReviewsTab({
   const touchTargetYRef = useRef<number | null>(null);
   const touchTargetXRef = useRef<number | null>(null);
 
+  const cancelCloudAirplaneLoop = () => {
+    if (airplaneLoopRef.current) {
+      cancelAnimationFrame(airplaneLoopRef.current);
+      airplaneLoopRef.current = null;
+    }
+  };
+
+  // Global pointer release listener so mouse and touch steering never gets stuck or frozen
+  useEffect(() => {
+    const handleGlobalPointerUp = () => {
+      isTouchDraggingRef.current = false;
+      touchTargetYRef.current = null;
+      arenaRectCacheRef.current = null;
+      airplaneArrowHoldRef.current = { up: false, down: false, left: false, right: false };
+    };
+    window.addEventListener("pointerup", handleGlobalPointerUp);
+    window.addEventListener("pointercancel", handleGlobalPointerUp);
+    window.addEventListener("blur", handleGlobalPointerUp);
+    return () => {
+      window.removeEventListener("pointerup", handleGlobalPointerUp);
+      window.removeEventListener("pointercancel", handleGlobalPointerUp);
+      window.removeEventListener("blur", handleGlobalPointerUp);
+    };
+  }, []);
+
   // --- MAZE CHASE GAME STATES ---
   const [mazePlayerPos, setMazePlayerPos] = useState<{ r: number; c: number }>({ r: 3, c: 4 });
   const [mazeMonsters, setMazeMonsters] = useState<{ id: number; r: number; c: number; type: string }[]>([
@@ -1444,6 +1470,7 @@ export default function StudentReviewsTab({
     if (isDeactivatedOrStopped) {
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
       if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
+      cancelCloudAirplaneLoop();
       sfx.stopBGM();
       handleExitGame();
       clearSavedProgressForChallenge(matchingChallenge.id, matchingChallenge.gameType);
@@ -1471,6 +1498,7 @@ export default function StudentReviewsTab({
       } else if (newLiveState === "waiting" && (oldLiveState === "playing" || oldLiveState === "podium")) {
         if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
         if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
+        cancelCloudAirplaneLoop();
         sfx.stopBGM();
         setGameState("idle");
         setScore(0);
@@ -1485,6 +1513,7 @@ export default function StudentReviewsTab({
       } else if (newLiveState === "podium") {
         if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
         if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
+        cancelCloudAirplaneLoop();
         sfx.stopBGM();
         sfx.playGameOver();
         setShowGameOverIntro(true);
@@ -1686,6 +1715,7 @@ export default function StudentReviewsTab({
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
       if (gameSecondsRef.current) clearInterval(gameSecondsRef.current);
       if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
+      cancelCloudAirplaneLoop();
     };
   }, []);
 
@@ -1924,7 +1954,7 @@ export default function StudentReviewsTab({
       // Setup cloud airplane first question with presentation
       setAirplaneLives(3);
       setAirplaneBanner(null);
-      setupCloudAirplane(randomizedChallenge.questions[0]);
+      cancelCloudAirplaneLoop();
       startQuestionWithIntro(0, "cloud_airplane", randomizedChallenge);
     } else if (randomizedChallenge.gameType === "wayground_arena") {
       setTimeLeft(15);
@@ -2045,6 +2075,7 @@ export default function StudentReviewsTab({
 
     // 1. Reset any existing game loop, clear falling items, and stop active timers during intro
     if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
+    cancelCloudAirplaneLoop();
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     if (introIntervalRef.current) clearInterval(introIntervalRef.current);
     if (gameIntroTimerRef.current) clearTimeout(gameIntroTimerRef.current);
@@ -2614,18 +2645,18 @@ export default function StudentReviewsTab({
     const targetQ = q || activeChallengeRef.current?.questions[currentQuestionIdxRef.current];
     if (!targetQ || !targetQ.options || targetQ.options.length === 0) return;
 
-    if (airplaneLoopRef.current) {
-      cancelAnimationFrame(airplaneLoopRef.current);
-      airplaneLoopRef.current = null;
-    }
+    cancelCloudAirplaneLoop();
 
-    cloudDomRefs.current = {};
     setAirplanePos({ x: 18, y: 48 });
     airplanePosRef.current = { x: 18, y: 48 };
     setAirplaneAngle(0);
     airplaneAngleRef.current = 0;
     airplaneVelocityRef.current = { vx: 0, vy: 0 };
     airplaneArrowHoldRef.current = { up: false, down: false, left: false, right: false };
+    touchTargetYRef.current = null;
+    touchTargetXRef.current = null;
+    isTouchDraggingRef.current = false;
+    arenaRectCacheRef.current = null;
     setAirplaneTargetCloud(null);
     setAirplaneState("flying");
     setCloudBurstEffect(null);
@@ -2653,7 +2684,7 @@ export default function StudentReviewsTab({
         x: startX,
         y: baseY,
         baseY,
-        speed: 0.30 + (i % 2) * 0.05, // Upgraded from 0.18 for engaging, brisk game pacing
+        speed: 0.28 + (i % 2) * 0.04,
         waveOffset: i * 1.5
       };
     });
@@ -2661,31 +2692,43 @@ export default function StudentReviewsTab({
     airplaneCloudsRef.current = initialClouds;
     setAirplaneClouds(initialClouds);
 
-    startCloudAirplaneLoop();
+    // Immediately position existing cloud DOM elements without waiting for re-render
+    initialClouds.forEach(c => {
+      const el = cloudDomRefs.current[c.idx];
+      if (el) {
+        el.style.left = `${c.x}%`;
+        el.style.top = `${c.y}%`;
+      }
+    });
+
+    if (airplaneSpriteRef.current) {
+      airplaneSpriteRef.current.style.left = `18%`;
+      airplaneSpriteRef.current.style.top = `48%`;
+      airplaneSpriteRef.current.style.transform = `translate3d(-50%, -50%, 0) rotate(0deg)`;
+    }
+
+    // Only start loop if intro is NOT active!
+    if (!isQuestionIntroRef.current) {
+      startCloudAirplaneLoop();
+    }
   };
 
   const startCloudAirplaneLoop = () => {
-    if (airplaneLoopRef.current) cancelAnimationFrame(airplaneLoopRef.current);
+    cancelCloudAirplaneLoop();
 
     let lastTime = performance.now();
     let timeElapsed = 0;
 
     const animate = (now: number) => {
-      // If answer is revealed or challenge ended, pause loop
-      if (isAnswerRevealedRef.current) {
-        if (airplaneLoopRef.current) cancelAnimationFrame(airplaneLoopRef.current);
-        airplaneLoopRef.current = null;
+      // If answer is revealed or challenge ended, or in question intro, pause loop immediately
+      if (isAnswerRevealedRef.current || isQuestionIntroRef.current) {
+        cancelCloudAirplaneLoop();
         return;
       }
 
-      // If in intro preview or countdown, keep animation frame scheduled so it begins seamlessly when intro ends!
-      if (isQuestionIntroRef.current) {
-        lastTime = now;
-        airplaneLoopRef.current = requestAnimationFrame(animate);
-        return;
-      }
-
-      const dt = Math.min((now - lastTime) / 16.66, 2.0);
+      // Safe dt clamping to prevent freezing or wild jumps on low-spec lab devices
+      const rawDt = (now - lastTime) / 16.66;
+      const dt = Math.min(Math.max(rawDt, 0.1), 1.5);
       lastTime = now;
       timeElapsed += dt * 0.035;
 
@@ -2700,39 +2743,38 @@ export default function StudentReviewsTab({
       if (keys["ArrowLeft"] || keys["a"] || keys["A"] || hold.left) inputX -= 1;
       if (keys["ArrowRight"] || keys["d"] || keys["D"] || hold.right) inputX += 1;
 
-      // Aerodynamic Physics Parameters - Upgraded for mobile agility & high performance
-      const maxVy = 1.45; // % per frame (responsive vertical climb/dive)
-      const maxVx = 1.15; // % per frame
+      // Allow keyboard and hold buttons to override stale touch target
+      if (inputY !== 0 || inputX !== 0) {
+        touchTargetYRef.current = null;
+      }
+
+      // Aerodynamic Physics Parameters
+      const maxVy = 1.45;
+      const maxVx = 1.15;
 
       let targetVy = inputY * maxVy;
       let targetVx = inputX * maxVx;
 
-      // Direct touch dragging tracking (overrides key steer smoothly when dragging finger)
       if (touchTargetYRef.current !== null) {
         const diffY = touchTargetYRef.current - airplanePosRef.current.y;
         targetVy = Math.max(-1.5, Math.min(1.5, diffY * 0.18));
       }
 
       if (targetVy !== 0) {
-        // Accelerate smoothly into climb or dive
         airplaneVelocityRef.current.vy += (targetVy - airplaneVelocityRef.current.vy) * Math.min(1, 0.26 * dt);
       } else {
-        // Natural aerodynamic glide friction
         airplaneVelocityRef.current.vy *= Math.pow(0.85, dt);
       }
 
       if (targetVx !== 0) {
-        // Accelerate smoothly forward/backward
         airplaneVelocityRef.current.vx += (targetVx - airplaneVelocityRef.current.vx) * Math.min(1, 0.26 * dt);
       } else {
         airplaneVelocityRef.current.vx *= Math.pow(0.85, dt);
       }
 
-      // Integrate positions
       let nextX = airplanePosRef.current.x + airplaneVelocityRef.current.vx * dt;
       let nextY = airplanePosRef.current.y + airplaneVelocityRef.current.vy * dt;
 
-      // Soft borders clamping
       if (nextY < 14) {
         nextY = 14;
         airplaneVelocityRef.current.vy = 0;
@@ -2751,19 +2793,17 @@ export default function StudentReviewsTab({
 
       airplanePosRef.current = { x: nextX, y: nextY };
 
-      // Realistic Aerodynamic Banking & Pitch Angle
       const targetPitch = Math.max(-20, Math.min(20, airplaneVelocityRef.current.vy * 16));
       airplaneAngleRef.current += (targetPitch - airplaneAngleRef.current) * Math.min(1, 0.18 * dt);
 
-      // Gentle cruising oscillation
       const airFloat = Math.sin(timeElapsed * 1.8) * 0.45;
       const renderY = nextY + airFloat;
 
-      // High-performance Direct DOM transformation (zero React reconciliation lag)
+      // High-performance Direct DOM transformation (GPU accelerated with translate3d)
       if (airplaneSpriteRef.current) {
         airplaneSpriteRef.current.style.left = `${nextX}%`;
         airplaneSpriteRef.current.style.top = `${renderY}%`;
-        airplaneSpriteRef.current.style.transform = `translate(-50%, -50%) rotate(${airplaneAngleRef.current.toFixed(1)}deg)`;
+        airplaneSpriteRef.current.style.transform = `translate3d(-50%, -50%, 0) rotate(${airplaneAngleRef.current.toFixed(1)}deg)`;
       }
 
       const currentClouds = airplaneCloudsRef.current;
@@ -2775,12 +2815,10 @@ export default function StudentReviewsTab({
       const planePos = airplanePosRef.current;
       let collidingCloud: (typeof currentClouds)[0] | null = null;
 
-      // Direct in-place mutation of clouds - zero GC allocation
       for (let i = 0; i < currentClouds.length; i++) {
         const c = currentClouds[i];
-        let cloudNextX = c.x - (c.speed || 0.30) * dt;
+        let cloudNextX = c.x - (c.speed || 0.28) * dt;
 
-        // If cloud flew past screen to far left (-25%), wrap around to the right
         if (cloudNextX < -25) {
           cloudNextX = 110 + (c.idx * 16);
         }
@@ -2789,7 +2827,6 @@ export default function StudentReviewsTab({
         c.x = cloudNextX;
         c.y = waveY;
 
-        // Collision detection between airplane and cloud
         if (!collidingCloud && !isAnswerRevealedRef.current) {
           const distDx = Math.abs(cloudNextX - planePos.x);
           const distDy = Math.abs(waveY - planePos.y);
@@ -2805,10 +2842,8 @@ export default function StudentReviewsTab({
         }
       }
 
-      // Collision triggered!
       if (collidingCloud) {
-        if (airplaneLoopRef.current) cancelAnimationFrame(airplaneLoopRef.current);
-        airplaneLoopRef.current = null;
+        cancelCloudAirplaneLoop();
         airplaneVelocityRef.current = { vx: 0, vy: 0 };
         touchTargetYRef.current = null;
         handleAirplaneCollision(collidingCloud);
@@ -2859,16 +2894,16 @@ export default function StudentReviewsTab({
   const handleArenaPointerUp = () => {
     isTouchDraggingRef.current = false;
     touchTargetYRef.current = null;
+    arenaRectCacheRef.current = null;
   };
 
   const handleAirplaneCollision = (cloudItem: { idx: number; text: string; x: number; y: number }) => {
-    if (isAnswerRevealedRef.current || isQuestionIntroRef.current) return;
+    if (isAnswerRevealedRef.current) return;
     const q = activeChallengeRef.current?.questions[currentQuestionIdxRef.current];
     if (!q) return;
 
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-    if (airplaneLoopRef.current) cancelAnimationFrame(airplaneLoopRef.current);
-    airplaneLoopRef.current = null;
+    cancelCloudAirplaneLoop();
 
     isAnswerRevealedRef.current = true;
     setIsAnswerRevealed(true);
@@ -2883,8 +2918,10 @@ export default function StudentReviewsTab({
     if (airplaneSpriteRef.current) {
       airplaneSpriteRef.current.style.left = `${cloudItem.x}%`;
       airplaneSpriteRef.current.style.top = `${cloudItem.y}%`;
-      airplaneSpriteRef.current.style.transform = `translate(-50%, -50%) rotate(0deg)`;
+      airplaneSpriteRef.current.style.transform = `translate3d(-50%, -50%, 0) rotate(0deg)`;
     }
+
+    let currentLives = airplaneLives;
 
     if (isCorrect) {
       sfx.playCorrect();
@@ -2900,14 +2937,14 @@ export default function StudentReviewsTab({
 
       // Sparkle particles around cloud
       const colors = ["#38bdf8", "#34d399", "#fcd34d", "#f43f5e", "#a7f3d0", "#ffffff"];
-      const newParticles = Array.from({ length: 24 }).map(() => ({
+      const newParticles = Array.from({ length: 16 }).map(() => ({
         id: Math.random(),
         x: cloudItem.x + (Math.random() - 0.5) * 14,
         y: cloudItem.y + (Math.random() - 0.5) * 12,
         color: colors[Math.floor(Math.random() * colors.length)]
       }));
       setParticles(newParticles);
-      setTimeout(() => setParticles([]), 900);
+      setTimeout(() => setParticles([]), 700);
     } else {
       sfx.playIncorrect();
       sfx.playLightningBuzz();
@@ -2915,16 +2952,25 @@ export default function StudentReviewsTab({
       if (cloudItem.idx >= 0) {
         setCloudBurstEffect({ cloudIdx: cloudItem.idx, type: "wrong" });
       }
-      setAirplaneBanner("خطأ!");
-      setAirplaneBannerType("wrong");
       setStreak(0);
-      setAirplaneLives(prev => Math.max(0, prev - 1));
+      currentLives = Math.max(0, airplaneLives - 1);
+      setAirplaneLives(currentLives);
       setScore(prev => Math.max(0, prev - 40));
+
+      if (isTimeout) {
+        setAirplaneBanner("انتهى الوقت! ⌛");
+      } else if (currentLives === 0) {
+        setAirplaneBanner("انتهت جميع المحاولات! 💥");
+      } else {
+        setAirplaneBanner("خطأ!");
+      }
+      setAirplaneBannerType("wrong");
     }
     setLastAnswerCorrect(isCorrect);
 
-    // Reset and advance to next question after 2.8 seconds
+    // Reset and advance to next question after 2.2 seconds
     setTimeout(() => {
+      cancelCloudAirplaneLoop();
       setIsAnswerRevealed(false);
       isAnswerRevealedRef.current = false;
       setLastAnswerCorrect(null);
@@ -2939,7 +2985,13 @@ export default function StudentReviewsTab({
       if (airplaneSpriteRef.current) {
         airplaneSpriteRef.current.style.left = `18%`;
         airplaneSpriteRef.current.style.top = `48%`;
-        airplaneSpriteRef.current.style.transform = `translate(-50%, -50%) rotate(0deg)`;
+        airplaneSpriteRef.current.style.transform = `translate3d(-50%, -50%, 0) rotate(0deg)`;
+      }
+
+      // If all lives are lost, finish game and transition to podium
+      if (currentLives <= 0) {
+        handleFinishGame();
+        return;
       }
 
       const latestChallenge = activeChallengeRef.current;
@@ -2952,7 +3004,7 @@ export default function StudentReviewsTab({
       } else {
         handleFinishGame();
       }
-    }, 2800);
+    }, 2200);
   };
 
   const handleAirplaneHitCloud = (targetIdx: number) => {
@@ -2985,7 +3037,7 @@ export default function StudentReviewsTab({
     if (airplaneSpriteRef.current) {
       airplaneSpriteRef.current.style.left = `${cloud.x}%`;
       airplaneSpriteRef.current.style.top = `${cloud.y}%`;
-      airplaneSpriteRef.current.style.transform = `translate(-50%, -50%) rotate(${angleDeg}deg)`;
+      airplaneSpriteRef.current.style.transform = `translate3d(-50%, -50%, 0) rotate(${angleDeg}deg)`;
     }
     sfx.playAirplaneSwoop();
 
@@ -6959,518 +7011,662 @@ export default function StudentReviewsTab({
                         isAirplaneFullscreen ? 'fixed inset-0 z-50 rounded-none h-screen' : 'h-[620px] sm:h-[680px] rounded-3xl'
                       } overflow-hidden select-none border-4 border-sky-400/40 shadow-2xl bg-gradient-to-b from-sky-400 via-sky-300 to-sky-200 flex flex-col justify-between`}
                     >
-                      {/* Background Floating Atmosphere Clouds */}
-                      <div className="absolute inset-0 pointer-events-none overflow-hidden">
-                        {/* Distant soft background clouds - lightweight gradient shapes */}
-                        <div className="absolute -top-6 -left-10 w-72 h-36 bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.35)_0%,transparent_75%)] rounded-full" />
-                        <div className="absolute top-20 -right-12 w-96 h-44 bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.30)_0%,transparent_75%)] rounded-full" />
-                        <div className="absolute top-48 left-1/3 w-80 h-32 bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.25)_0%,transparent_75%)] rounded-full" />
-
-                        {/* City Skyline Silhouette at bottom (matching screenshot) */}
-                        <div className="absolute bottom-0 left-0 right-0 h-36 sm:h-44 pointer-events-none z-5 opacity-40">
-                          <svg className="w-full h-full" viewBox="0 0 1200 300" preserveAspectRatio="none">
-                            <defs>
-                              <linearGradient id="cityGrad1" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="0%" stopColor="#0284c7" stopOpacity="0.4" />
-                                <stop offset="100%" stopColor="#0369a1" stopOpacity="0.7" />
-                              </linearGradient>
-                              <linearGradient id="cityGrad2" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.3" />
-                                <stop offset="100%" stopColor="#0284c7" stopOpacity="0.6" />
-                              </linearGradient>
-                            </defs>
-                            {/* Back layer buildings */}
-                            <path
-                              fill="url(#cityGrad1)"
-                              d="M0 300 L0 180 L40 180 L40 150 L60 150 L60 180 L120 180 L120 110 L130 110 L130 90 L140 110 L180 110 L180 200 L240 200 L240 130 L270 130 L270 200 L320 200 L320 160 L360 160 L360 90 L390 90 L390 200 L440 200 L440 140 L480 140 L480 200 L540 200 L540 110 L550 110 L550 80 L560 110 L600 110 L600 200 L660 200 L660 150 L710 150 L710 200 L760 200 L760 120 L810 120 L810 200 L870 200 L870 140 L910 140 L910 200 L960 200 L960 100 L970 100 L970 70 L980 100 L1020 100 L1020 200 L1080 200 L1080 150 L1130 150 L1130 200 L1200 200 L1200 300 Z"
-                            />
-                            {/* Front layer buildings */}
-                            <path
-                              fill="url(#cityGrad2)"
-                              d="M0 300 L0 220 L30 220 L30 190 L70 190 L70 230 L100 230 L100 160 L140 160 L140 230 L200 230 L200 170 L250 170 L250 230 L300 230 L300 180 L340 180 L340 230 L400 230 L400 150 L450 150 L450 230 L500 230 L500 190 L530 190 L530 230 L580 230 L580 170 L630 170 L630 230 L690 230 L690 180 L740 180 L740 230 L790 230 L790 160 L840 160 L840 230 L890 230 L890 190 L940 190 L940 230 L1000 230 L1000 170 L1050 170 L1050 230 L1110 230 L1110 190 L1150 190 L1150 230 L1200 230 L1200 300 Z"
-                            />
-                          </svg>
-                        </div>
-                      </div>
-
-                      {/* TOP HEADER BAR (Exactly as shown in user screenshot) */}
-                      <div className="relative z-20 w-full px-5 pt-4 flex items-center justify-between pointer-events-auto">
-                        {/* Left: Timer Display (e.g. 0:38) */}
-                        <div className="flex items-center">
-                          <span className="text-white font-sans text-2xl sm:text-3xl font-black drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)] tracking-wider">
-                            {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, "0")}
-                          </span>
-                        </div>
-
-                        {/* Center: Result Banner (e.g. "خطأ!" or "صحيح! 🎉") */}
-                        <div className="flex-1 flex items-center justify-center">
-                          <AnimatePresence>
-                            {airplaneBanner && (
-                              <motion.div
-                                key={airplaneBanner}
-                                initial={{ opacity: 0, scale: 0.5, y: -10 }}
-                                animate={{ opacity: 1, scale: 1, y: 0 }}
-                                exit={{ opacity: 0, scale: 0.8 }}
-                                transition={{ type: "spring", stiffness: 350, damping: 20 }}
-                                className={`text-2xl sm:text-4xl font-black drop-shadow-[0_3px_6px_rgba(0,0,0,0.6)] ${
-                                  airplaneBannerType === "correct"
-                                    ? "text-emerald-100 drop-shadow-[0_0_20px_rgba(16,185,129,0.9)]"
-                                    : "text-white drop-shadow-[0_0_20px_rgba(239,68,68,0.9)]"
-                                }`}
-                              >
-                                {airplaneBanner}
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-                        </div>
-
-                        {/* Right: Lives Hearts & Correct Score (e.g. 🤍 🤍 1✔) */}
-                        <div className="flex items-center gap-2">
-                          <div className="flex items-center gap-1 text-xl sm:text-2xl select-none">
-                            {[0, 1, 2].map(idx => (
-                              <span 
-                                key={idx} 
-                                className={`transition-all duration-300 drop-shadow-[0_2px_4px_rgba(0,0,0,0.4)] ${
-                                  idx < airplaneLives ? 'text-red-500 scale-100' : 'text-white/85 scale-90'
-                                }`}
-                              >
-                                {idx < airplaneLives ? '❤️' : '🤍'}
-                              </span>
-                            ))}
-                          </div>
-
-                          <span className="text-white font-sans text-xl sm:text-2xl font-black drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)] mr-1">
-                            {correctCount}✔
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* FLIGHT SKY & CLOUDS INTERACTIVE STAGE */}
-                      <div 
-                        ref={airplaneArenaRef}
-                        onPointerDown={handleArenaPointerDown}
-                        onPointerMove={handleArenaPointerMove}
-                        onPointerUp={handleArenaPointerUp}
-                        onPointerCancel={handleArenaPointerUp}
-                        className="relative flex-1 w-full overflow-hidden select-none cursor-crosshair touch-none"
-                      >
-                        {/* Render Floating & Moving Answer Clouds */}
-                        {(airplaneClouds && airplaneClouds.length > 0
-                          ? airplaneClouds
-                          : (activeChallenge.questions[currentQuestionIdx]?.options || []).map((opt, i) => ({
-                              idx: i,
-                              text: opt,
-                              x: 20 + i * 25,
-                              y: 30 + (i % 2) * 30,
-                              baseY: 30 + (i % 2) * 30,
-                              speed: 0.30,
-                              waveOffset: 0
-                            }))
-                        ).map((cloud) => {
-                          const optIdx = cloud.idx;
-                          const isSelected = selectedAnswerIdx === optIdx;
-                          const isTargeted = airplaneTargetCloud === optIdx;
-                          const isHovered = airplaneHoverIdx === optIdx;
-                          const q = activeChallenge.questions[currentQuestionIdx];
-                          const isThisCorrect = checkIsCorrect(q, optIdx);
-
-                          let cloudSkin = "normal";
-                          if (isAnswerRevealed) {
-                            if (isThisCorrect) cloudSkin = "correct";
-                            else if (isSelected && !isThisCorrect) cloudSkin = "wrong";
-                          }
-
-                          return (
-                            <div
-                              key={`cloud-option-${optIdx}`}
-                              ref={(el) => { cloudDomRefs.current[optIdx] = el; }}
-                              style={{
-                                left: `${cloud.x}%`,
-                                top: `${cloud.y}%`,
-                                transform: 'translate(-50%, -50%)',
-                                willChange: 'left, top',
-                              }}
-                              className="absolute z-15 pointer-events-none select-none"
-                            >
-                              {/* Lightweight Cloud Graphic without GPU-killing SVG drop-shadow filter */}
-                              <div className="relative">
-                                <svg
-                                  className={`w-44 sm:w-56 md:w-64 h-24 sm:h-28 transition-colors duration-200 ${
-                                    cloudSkin === "correct"
-                                      ? "text-emerald-100"
-                                      : cloudSkin === "wrong"
-                                      ? "text-slate-700"
-                                      : isHovered
-                                      ? "text-sky-50"
-                                      : "text-white"
-                                  }`}
-                                  viewBox="0 0 240 120"
-                                  fill="currentColor"
-                                >
-                                  {/* Soft native SVG cloud shadow - 0ms raster overhead on mobile GPU */}
-                                  <ellipse cx="120" cy="96" rx="84" ry="12" fill="rgba(15,23,42,0.12)" />
-                                  {/* Puffy multi-lobed cloud path */}
-                                  <path d="M 45,95 Q 15,95 15,70 Q 15,50 35,45 Q 40,20 70,20 Q 90,20 100,32 Q 115,10 145,10 Q 180,10 190,38 Q 215,35 225,58 Q 235,80 215,95 Q 200,95 185,95 Z" />
-                                  <ellipse cx="65" cy="72" rx="42" ry="26" />
-                                  <ellipse cx="120" cy="62" rx="55" ry="36" />
-                                  <ellipse cx="175" cy="72" rx="42" ry="26" />
-                                  <ellipse cx="95" cy="48" rx="35" ry="28" />
-                                  <ellipse cx="150" cy="45" rx="38" ry="28" />
-                                </svg>
-
-                                {/* Storm Lightning Flash on Wrong Cloud */}
-                                {cloudSkin === "wrong" && (
-                                  <motion.div
-                                    initial={{ opacity: 0, scale: 0.5 }}
-                                    animate={{ opacity: [0, 1, 0, 1, 0.8], scale: 1 }}
-                                    transition={{ duration: 0.4 }}
-                                    className="absolute -top-3 left-1/2 -translate-x-1/2 text-3xl select-none"
-                                  >
-                                    ⚡
-                                  </motion.div>
-                                )}
-
-                                {/* Sparkle Stars on Correct Cloud */}
-                                {cloudSkin === "correct" && (
-                                  <motion.div
-                                    initial={{ opacity: 0, scale: 0.5 }}
-                                    animate={{ opacity: 1, scale: [0.8, 1.2, 1] }}
-                                    transition={{ duration: 0.5 }}
-                                    className="absolute -top-4 left-1/2 -translate-x-1/2 flex items-center gap-1 text-xl select-none"
-                                  >
-                                    <span>✨</span>
-                                    <span className="text-xs font-black bg-emerald-600 text-white px-2 py-0.5 rounded-full shadow-md">
-                                      +150 🌟
-                                    </span>
-                                    <span>✨</span>
-                                  </motion.div>
-                                )}
-
-                                {/* Option Content Inside Cloud */}
-                                <div className="absolute inset-0 flex flex-col items-center justify-center p-3 text-center pointer-events-none">
-                                  <span className={`font-black text-xs sm:text-sm md:text-base leading-snug line-clamp-2 px-3 select-none ${
-                                    cloudSkin === "wrong" ? "text-white" : "text-slate-900"
-                                  }`}>
-                                    {cloud.text}
-                                  </span>
-                                </div>
-                              </div>
+                      {activeChallenge.liveState === "podium" || (gameState === "finished" && !activeChallenge.liveState) ? (
+                        /* PODIUM / CROWNING SCREEN FOR CLOUD AIRPLANE ✈️☁️🏆 */
+                        <div className="w-full h-full overflow-y-auto bg-slate-950/95 backdrop-blur-xl p-4 sm:p-6 flex flex-col items-center justify-between text-white relative z-30">
+                          {/* Header Bar with Title and Close Button */}
+                          <div className="w-full flex items-center justify-between gap-3 mb-4 pb-3 border-b border-sky-800/40">
+                            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-yellow-500/10 border border-yellow-500/30 text-yellow-300 text-xs font-black shadow-md">
+                              <span>🏆 منصة تتويج أبطال طائرة الغيوم ✈️☁️🏆</span>
                             </div>
-                          );
-                        })}
-
-                        {/* RED PROPELLER AIRPLANE */}
-                        <div
-                          ref={airplaneSpriteRef}
-                          style={{
-                            left: `${airplanePos.x}%`,
-                            top: `${airplanePos.y}%`,
-                            transform: `translate(-50%, -50%) rotate(${airplaneAngle}deg)`,
-                            width: "110px",
-                            height: "70px",
-                            willChange: "left, top, transform",
-                          }}
-                          className="absolute z-25 pointer-events-none"
-                        >
-                          {/* Propeller Vapor Trail */}
-                          <div className="absolute -left-5 top-1/2 -translate-y-1/2 flex items-center space-x-1 opacity-60">
-                            <span className="w-2 h-2 rounded-full bg-white animate-ping" />
-                            <span className="w-3 h-1.5 rounded-full bg-white/70" />
-                          </div>
-
-                          {/* High Quality Red Passenger Propeller Airplane SVG */}
-                          <svg
-                            className="w-full h-full"
-                            viewBox="0 0 160 100"
-                            fill="none"
-                          >
-                            {/* Tail Rudder (Red with white trim) */}
-                            <path d="M 15 48 L 5 15 L 28 15 L 35 48 Z" fill="#b91c1c" />
-                            <path d="M 5 15 L 28 15 L 24 24 L 8 24 Z" fill="#f87171" />
-                            
-                            {/* Horizontal Stabilizers */}
-                            <path d="M 8 50 L 2 44 L 20 44 L 26 50 Z" fill="#991b1b" />
-
-                            {/* Main Fuselage (Curved aerodynamic red cabin) */}
-                            <path
-                              d="M 22 52 C 20 42, 35 34, 60 33 C 95 32, 130 36, 145 48 C 150 52, 150 56, 144 60 C 130 68, 95 70, 60 69 C 35 68, 20 62, 22 52 Z"
-                              fill="#dc2626"
-                            />
-                            {/* Fuselage top highlight */}
-                            <path
-                              d="M 35 42 C 55 36, 100 36, 140 48 C 120 42, 75 40, 35 42 Z"
-                              fill="#f87171"
-                              opacity="0.8"
-                            />
-
-                            {/* White Racing Stripe */}
-                            <path
-                              d="M 28 54 C 55 52, 100 52, 142 53 C 142 56, 100 55, 28 57 Z"
-                              fill="#ffffff"
-                            />
-
-                            {/* Cockpit Windshield (Glass Blue) */}
-                            <path
-                              d="M 124 43 C 132 44, 138 48, 142 52 L 130 52 C 126 48, 124 45, 124 43 Z"
-                              fill="#38bdf8"
-                              stroke="#ffffff"
-                              strokeWidth="1"
-                            />
-                            {/* Cabin Windows (Round Portholes) */}
-                            <circle cx="108" cy="48" r="3.5" fill="#bae6fd" stroke="#991b1b" strokeWidth="0.8" />
-                            <circle cx="92" cy="48" r="3.5" fill="#bae6fd" stroke="#991b1b" strokeWidth="0.8" />
-                            <circle cx="76" cy="48" r="3.5" fill="#bae6fd" stroke="#991b1b" strokeWidth="0.8" />
-                            <circle cx="60" cy="48" r="3.5" fill="#bae6fd" stroke="#991b1b" strokeWidth="0.8" />
-
-                            {/* Main Wing (Red with darker underwing shadow) */}
-                            <path
-                              d="M 68 53 L 88 88 C 94 90, 102 88, 102 84 L 98 53 Z"
-                              fill="#b91c1c"
-                            />
-                            <path
-                              d="M 72 53 L 90 84 L 96 84 L 95 53 Z"
-                              fill="#ef4444"
-                            />
-                            {/* Wingtip Light */}
-                            <circle cx="96" cy="86" r="2" fill="#22c55e" />
-
-                            {/* Front Nose Spinner Hub */}
-                            <path
-                              d="M 144 48 C 152 50, 155 54, 144 58 Z"
-                              fill="#e2e8f0"
-                            />
-
-                            {/* High-speed Spinning Propeller Blur Effect */}
-                            <g className="origin-[148px_53px]">
-                              <ellipse cx="149" cy="53" rx="2.5" ry="24" fill="#f8fafc" opacity="0.75" />
-                              <ellipse cx="149" cy="53" rx="1.5" ry="18" fill="#38bdf8" opacity="0.4" />
-                            </g>
-                          </svg>
-
-                          {/* Airplane State Reactions */}
-                          {airplaneState === "celebrating" && (
-                            <motion.div
-                              initial={{ scale: 0 }}
-                              animate={{ scale: [0, 1.4, 1] }}
-                              className="absolute -top-4 -right-2 text-2xl select-none"
-                            >
-                              🌟
-                            </motion.div>
-                          )}
-                          {airplaneState === "hit_wrong" && (
-                            <motion.div
-                              initial={{ opacity: 0 }}
-                              animate={{ opacity: [0, 1, 0] }}
-                              transition={{ duration: 0.5 }}
-                              className="absolute -top-3 left-1/2 -translate-x-1/2 text-2xl select-none"
-                            >
-                              💨
-                            </motion.div>
-                          )}
-                        </div>
-
-                        {/* Confetti & Sparkles */}
-                        {particles.map(p => (
-                          <div
-                            key={p.id}
-                            style={{ left: `${p.x}%`, top: `${p.y}%`, backgroundColor: p.color }}
-                            className="absolute w-3.5 h-3.5 rounded-full animate-ping z-30 pointer-events-none shadow-md"
-                          />
-                        ))}
-
-                        {/* On-Screen Aerodynamic Flight Controls (Arrow Pad for Touch & Mouse) */}
-                        <div className="absolute bottom-3 left-3 sm:bottom-4 sm:left-4 z-30 pointer-events-auto flex items-center gap-1.5 bg-slate-950/50 backdrop-blur-md p-1.5 rounded-2xl border border-white/20 shadow-2xl select-none">
-                          {/* Left Arrow Button */}
-                          <button
-                            type="button"
-                            onPointerDown={(e) => { e.preventDefault(); airplaneArrowHoldRef.current.left = true; }}
-                            onPointerUp={() => { airplaneArrowHoldRef.current.left = false; }}
-                            onPointerLeave={() => { airplaneArrowHoldRef.current.left = false; }}
-                            onPointerCancel={() => { airplaneArrowHoldRef.current.left = false; }}
-                            className="w-10 h-10 rounded-xl bg-white/15 hover:bg-sky-500/40 active:bg-sky-500/70 text-white font-black text-sm sm:text-base flex items-center justify-center border border-white/10 transition active:scale-95 shadow-sm"
-                            title="تحريك لليسار (◄)"
-                          >
-                            ◄
-                          </button>
-
-                          {/* Vertical Column (Up & Down) */}
-                          <div className="flex flex-col gap-1">
                             <button
-                              type="button"
-                              onPointerDown={(e) => { e.preventDefault(); airplaneArrowHoldRef.current.up = true; }}
-                              onPointerUp={() => { airplaneArrowHoldRef.current.up = false; }}
-                              onPointerLeave={() => { airplaneArrowHoldRef.current.up = false; }}
-                              onPointerCancel={() => { airplaneArrowHoldRef.current.up = false; }}
-                              className="w-10 h-8 rounded-xl bg-white/15 hover:bg-sky-500/40 active:bg-sky-500/70 text-white font-black text-xs sm:text-sm flex items-center justify-center border border-white/10 transition active:scale-95 shadow-sm"
-                              title="صعود للأعلى (▲)"
+                              onClick={handleExitGame}
+                              className="px-3.5 py-1.5 bg-rose-600/90 hover:bg-rose-500 border border-rose-400/40 text-white rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-1.5 shadow-md active:scale-95 shrink-0"
+                              title="إغلاق والعودة للرئيسية"
                             >
-                              ▲
-                            </button>
-                            <button
-                              type="button"
-                              onPointerDown={(e) => { e.preventDefault(); airplaneArrowHoldRef.current.down = true; }}
-                              onPointerUp={() => { airplaneArrowHoldRef.current.down = false; }}
-                              onPointerLeave={() => { airplaneArrowHoldRef.current.down = false; }}
-                              onPointerCancel={() => { airplaneArrowHoldRef.current.down = false; }}
-                              className="w-10 h-8 rounded-xl bg-white/15 hover:bg-sky-500/40 active:bg-sky-500/70 text-white font-black text-xs sm:text-sm flex items-center justify-center border border-white/10 transition active:scale-95 shadow-sm"
-                              title="هبوط للأسفل (▼)"
-                            >
-                              ▼
+                              <span>إغلاق</span>
+                              <X className="w-4 h-4" />
                             </button>
                           </div>
 
-                          {/* Right Arrow Button */}
-                          <button
-                            type="button"
-                            onPointerDown={(e) => { e.preventDefault(); airplaneArrowHoldRef.current.right = true; }}
-                            onPointerUp={() => { airplaneArrowHoldRef.current.right = false; }}
-                            onPointerLeave={() => { airplaneArrowHoldRef.current.right = false; }}
-                            onPointerCancel={() => { airplaneArrowHoldRef.current.right = false; }}
-                            className="w-10 h-10 rounded-xl bg-white/15 hover:bg-sky-500/40 active:bg-sky-500/70 text-white font-black text-sm sm:text-base flex items-center justify-center border border-white/10 transition active:scale-95 shadow-sm"
-                            title="تحريك لليمين (►)"
-                          >
-                            ►
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* BOTTOM QUESTION BAR (Identical to screenshot!) */}
-                      <div className="relative z-20 w-full px-4 pb-3 flex flex-col items-center gap-2 pointer-events-auto">
-                        {/* Question Card Box */}
-                        <div className="w-full max-w-3xl bg-slate-900/90 border border-slate-700/80 rounded-2xl sm:rounded-3xl p-3 sm:p-4 text-center shadow-2xl backdrop-blur-md flex items-center justify-between gap-3">
-                          {/* Menu Bar Icon Left */}
-                          <button
-                            type="button"
-                            onClick={() => triggerToast("استخدم الفأرة أو اللمس لتوجيه الطائرة نحو السحابة ذات الإجابة الصحيحة ☁️✈️", "info")}
-                            className="p-2 text-slate-400 hover:text-white transition rounded-xl hover:bg-slate-800 shrink-0 cursor-pointer"
-                            title="تعليمات اللعبة"
-                          >
-                            <span className="text-lg">☰</span>
-                          </button>
-
-                          {/* Question Text in Center */}
-                          <div className="flex-1 text-center">
-                            <h3 className="text-white font-black text-sm sm:text-base md:text-lg leading-relaxed line-clamp-2">
-                              {activeChallenge.questions[currentQuestionIdx]?.text}
+                          <div className="text-center space-y-2 mb-4">
+                            <div className="inline-flex items-center justify-center p-3 rounded-full bg-yellow-500/20 border border-yellow-400/50 mb-1">
+                              <Trophy className="w-10 h-10 text-yellow-400 animate-bounce" />
+                            </div>
+                            <h3 className="text-2xl md:text-3xl font-black text-white drop-shadow-md">
+                              {activeChallenge.liveState === "podium"
+                                ? "إعلان الفائزين وأبطال التحليق! 🏆🎉"
+                                : "أكملت رحلة التحليق بنجاح يا بطل! ✈️✨"}
                             </h3>
+                            <p className="text-xs md:text-sm text-slate-300 font-bold max-w-lg mx-auto">
+                              مبارك لفرسان وطياري الغيوم الفائزين بالمراكز الأولى! لقد حصلت على{" "}
+                              <span className="text-yellow-400 font-sans font-black text-base">{score}</span> نقطة، وأجبت على{" "}
+                              <span className="text-emerald-400 font-sans font-black text-base">{correctCount}</span> من{" "}
+                              <span className="text-white font-sans font-black">{activeChallenge.questions.length}</span> سؤالاً.
+                            </p>
                           </div>
 
-                          {/* Right Controls (Audio & Fullscreen) */}
-                          <div className="flex items-center gap-1.5 shrink-0">
+                          {/* Live Podium Component */}
+                          <div className="w-full max-w-4xl mx-auto my-auto">
+                            <LivePodiumView
+                              scores={getPodiumScores()}
+                              onReset={() => {}}
+                              isAdmin={false}
+                              podiumAt={activeChallenge.podiumAt}
+                            />
+                          </div>
+
+                          {/* 20-Second Countdown Display if teacher broadcasted podium */}
+                          {podiumSecondsLeft !== null && (
+                            <div className="mt-4 px-5 py-2.5 bg-gradient-to-r from-rose-500/20 via-amber-500/20 to-sky-500/20 border border-amber-400/30 text-amber-200 rounded-2xl text-xs sm:text-sm font-extrabold text-center shadow-lg flex items-center justify-center gap-2">
+                              <span>⏱️ التوقيت التنازلي للإغلاق:</span>
+                              <span className="font-sans font-black text-lg text-amber-300 bg-amber-950/80 px-3 py-0.5 rounded-lg border border-amber-500/40 min-w-[2.5rem] inline-block shadow-inner">
+                                {podiumSecondsLeft}
+                              </span>
+                              <span>ثانية</span>
+                            </div>
+                          )}
+
+                          {/* Action Buttons: Play Again & Close */}
+                          <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
                             <button
-                              type="button"
-                              onClick={() => setSoundEnabled(!soundEnabled)}
-                              className="p-2 text-slate-400 hover:text-white transition rounded-xl hover:bg-slate-800 cursor-pointer"
-                              title={soundEnabled ? "كتم الصوت" : "تشغيل الصوت"}
+                              onClick={() => handleStartGame(activeChallenge)}
+                              className="px-6 py-2.5 bg-sky-600 hover:bg-sky-500 border border-sky-300/30 text-white rounded-xl text-xs sm:text-sm font-black transition cursor-pointer shadow-lg flex items-center gap-2 active:scale-95"
                             >
-                              {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                              <span>إعادة التحليق والتحدي ✈️</span>
+                              <RotateCcw className="w-4 h-4" />
                             </button>
                             <button
-                              type="button"
-                              onClick={() => setIsAirplaneFullscreen(!isAirplaneFullscreen)}
-                              className="p-2 text-slate-400 hover:text-white transition rounded-xl hover:bg-slate-800 cursor-pointer"
-                              title={isAirplaneFullscreen ? "تصغير الشاشة" : "ملء الشاشة"}
+                              onClick={handleExitGame}
+                              className="px-6 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-600/50 text-white rounded-xl text-xs sm:text-sm font-black transition cursor-pointer shadow-md flex items-center gap-2 active:scale-95"
                             >
-                              {isAirplaneFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                              <span>العودة لقائمة الألعاب 🚪</span>
+                              <X className="w-4 h-4" />
                             </button>
                           </div>
                         </div>
+                      ) : (hasFinishedWaygroundQuestions || gameState === "finished") ? (
+                        /* WAITING FOR TEACHER PODIUM CORONATION SCREEN */
+                        <div className="w-full h-full bg-slate-950/95 backdrop-blur-xl p-6 sm:p-8 flex flex-col items-center justify-center text-center text-white relative z-30 space-y-6">
+                          <motion.div
+                            animate={{ scale: [1, 1.12, 1], rotate: [0, 6, -6, 0] }}
+                            transition={{ repeat: Infinity, duration: 3, ease: "easeInOut" }}
+                            className="w-24 h-24 rounded-full bg-sky-500/20 border-2 border-sky-400/50 flex items-center justify-center text-5xl shadow-[0_0_40px_rgba(56,189,248,0.4)]"
+                          >
+                            ✈️
+                          </motion.div>
+                          
+                          <div className="space-y-3 max-w-lg">
+                            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-yellow-500/20 border border-yellow-400/40 text-yellow-300 text-xs font-black shadow-md animate-pulse">
+                              <Trophy className="w-4 h-4 text-yellow-400" />
+                              <span>بانتظار إعلان المعلم لمنصة التتويج والأبطال 🏆</span>
+                            </div>
+                            <h3 className="text-2xl sm:text-3xl font-black text-white drop-shadow-md">
+                              أكملت رحلة التحليق بنجاح يا بطل! ✈️✨
+                            </h3>
+                            <p className="text-xs sm:text-sm text-slate-300 font-bold leading-relaxed">
+                              لقد حصلت على <span className="text-yellow-400 font-sans font-black text-base">{score}</span> نقطة، وأجبت على <span className="text-emerald-400 font-sans font-black text-base">{correctCount}</span> من <span className="text-white font-sans font-black">{activeChallenge.questions.length}</span> سؤالاً.
+                            </p>
+                            <div className="p-3 bg-sky-950/70 rounded-2xl border border-sky-800/50 text-xs text-sky-200 font-bold space-y-1">
+                              <p>⏳ يرجى الانتظار، ستظهر منصة التتويج التفاعلية للأبطال تلقائياً على شاشتك فور إعلان المعلم لنتائج الجولة!</p>
+                            </div>
+                          </div>
 
-                        {/* Flight Guidance Indicator */}
-                        <div className="flex items-center gap-2 text-xs text-sky-200/90 bg-slate-900/80 border border-sky-500/30 px-3.5 py-1.5 rounded-full backdrop-blur-md font-bold shadow-lg">
-                          <span>✈️</span>
-                          <span>وجّه الطائرة باللمس أو الأسهم للاصطدام بسحابة الإجابة الصحيحة</span>
+                          <button
+                            onClick={handleExitGame}
+                            className="px-6 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-600/50 text-white rounded-xl text-xs sm:text-sm font-black transition cursor-pointer shadow-md flex items-center gap-2 active:scale-95"
+                          >
+                            <span>خروج والعودة للقائمة 🚪</span>
+                            <X className="w-4 h-4" />
+                          </button>
                         </div>
-                      </div>
+                      ) : (
+                        /* ACTIVE FLIGHT ARENA */
+                        <>
+                          {/* Background Floating Atmosphere Clouds */}
+                          <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                            {/* Distant soft background clouds - lightweight gradient shapes */}
+                            <div className="absolute -top-6 -left-10 w-72 h-36 bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.35)_0%,transparent_75%)] rounded-full" />
+                            <div className="absolute top-20 -right-12 w-96 h-44 bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.30)_0%,transparent_75%)] rounded-full" />
+                            <div className="absolute top-48 left-1/3 w-80 h-32 bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.25)_0%,transparent_75%)] rounded-full" />
 
-                      {/* Game Intro & Preview Overlay */}
-                      {isQuestionIntro && (
-                        <div className="absolute inset-0 bg-slate-950/90 z-40 flex flex-col items-center justify-center p-4 sm:p-6 text-center overflow-hidden">
-                          {gameIntroStage === "preview" ? (
-                            <motion.div
-                              initial={{ opacity: 0, scale: 0.9 }}
-                              animate={{ opacity: 1, scale: 1 }}
-                              className="relative z-10 max-w-lg w-full bg-slate-900/95 border border-sky-400/40 p-6 rounded-3xl shadow-[0_0_50px_rgba(56,189,248,0.3)] backdrop-blur-xl space-y-5"
-                            >
-                              <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-sky-500/20 border border-sky-400/30 text-sky-200 text-xs font-black tracking-wide">
-                                <span>✈️ مغامرة طائرة السحاب</span>
-                                <span className="w-2 h-2 rounded-full bg-yellow-400 animate-ping" />
+                            {/* City Skyline Silhouette at bottom (matching screenshot) */}
+                            <div className="absolute bottom-0 left-0 right-0 h-36 sm:h-44 pointer-events-none z-5 opacity-40">
+                              <svg className="w-full h-full" viewBox="0 0 1200 300" preserveAspectRatio="none">
+                                <defs>
+                                  <linearGradient id="cityGrad1" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="0%" stopColor="#0284c7" stopOpacity="0.4" />
+                                    <stop offset="100%" stopColor="#0369a1" stopOpacity="0.7" />
+                                  </linearGradient>
+                                  <linearGradient id="cityGrad2" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.3" />
+                                    <stop offset="100%" stopColor="#0284c7" stopOpacity="0.6" />
+                                  </linearGradient>
+                                </defs>
+                                {/* Back layer buildings */}
+                                <path
+                                  fill="url(#cityGrad1)"
+                                  d="M0 300 L0 180 L40 180 L40 150 L60 150 L60 180 L120 180 L120 110 L130 110 L130 90 L140 110 L180 110 L180 200 L240 200 L240 130 L270 130 L270 200 L320 200 L320 160 L360 160 L360 90 L390 90 L390 200 L440 200 L440 140 L480 140 L480 200 L540 200 L540 110 L550 110 L550 80 L560 110 L600 110 L600 200 L660 200 L660 150 L710 150 L710 200 L760 200 L760 120 L810 120 L810 200 L870 200 L870 140 L910 140 L910 200 L960 200 L960 100 L970 100 L970 70 L980 100 L1020 100 L1020 200 L1080 200 L1080 150 L1130 150 L1130 200 L1200 200 L1200 300 Z"
+                                />
+                                {/* Front layer buildings */}
+                                <path
+                                  fill="url(#cityGrad2)"
+                                  d="M0 300 L0 220 L30 220 L30 190 L70 190 L70 230 L100 230 L100 160 L140 160 L140 230 L200 230 L200 170 L250 170 L250 230 L300 230 L300 180 L340 180 L340 230 L400 230 L400 150 L450 150 L450 230 L500 230 L500 190 L530 190 L530 230 L580 230 L580 170 L630 170 L630 230 L690 230 L690 180 L740 180 L740 230 L790 230 L790 160 L840 160 L840 230 L890 230 L890 190 L940 190 L940 230 L1000 230 L1000 170 L1050 170 L1050 230 L1110 230 L1110 190 L1150 190 L1150 230 L1200 230 L1200 300 Z"
+                                />
+                              </svg>
+                            </div>
+                          </div>
+
+                          {/* TOP HEADER BAR (Exactly as shown in user screenshot) */}
+                          <div className="relative z-20 w-full px-5 pt-4 flex items-center justify-between pointer-events-auto">
+                            {/* Left: Timer Display (e.g. 0:38) */}
+                            <div className="flex items-center">
+                              <span className="text-white font-sans text-2xl sm:text-3xl font-black drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)] tracking-wider">
+                                {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, "0")}
+                              </span>
+                            </div>
+
+                            {/* Center: Result Banner (e.g. "خطأ!" or "صحيح! 🎉") */}
+                            <div className="flex-1 flex items-center justify-center">
+                              <AnimatePresence>
+                                {airplaneBanner && (
+                                  <motion.div
+                                    key={airplaneBanner}
+                                    initial={{ opacity: 0, scale: 0.5, y: -10 }}
+                                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                                    exit={{ opacity: 0, scale: 0.8 }}
+                                    transition={{ type: "spring", stiffness: 350, damping: 20 }}
+                                    className={`text-2xl sm:text-4xl font-black drop-shadow-[0_3px_6px_rgba(0,0,0,0.6)] ${
+                                      airplaneBannerType === "correct"
+                                        ? "text-emerald-100 drop-shadow-[0_0_20px_rgba(16,185,129,0.9)]"
+                                        : "text-white drop-shadow-[0_0_20px_rgba(239,68,68,0.9)]"
+                                    }`}
+                                  >
+                                    {airplaneBanner}
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+                            </div>
+
+                            {/* Right: Lives Hearts & Correct Score (e.g. 🤍 🤍 1✔) */}
+                            <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-1 text-xl sm:text-2xl select-none">
+                                {[0, 1, 2].map(idx => (
+                                  <span 
+                                    key={idx} 
+                                    className={`transition-all duration-300 drop-shadow-[0_2px_4px_rgba(0,0,0,0.4)] ${
+                                      idx < airplaneLives ? 'text-red-500 scale-100' : 'text-white/85 scale-90'
+                                    }`}
+                                  >
+                                    {idx < airplaneLives ? '❤️' : '🤍'}
+                                  </span>
+                                ))}
                               </div>
 
-                              <div className="relative py-4 flex items-center justify-center h-24">
-                                <motion.div
-                                  animate={{
-                                    y: [0, -15, 0],
-                                    rotate: [0, 8, -8, 0],
+                              <span className="text-white font-sans text-xl sm:text-2xl font-black drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)] mr-1">
+                                {correctCount}✔
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* FLIGHT SKY & CLOUDS INTERACTIVE STAGE */}
+                          <div 
+                            ref={airplaneArenaRef}
+                            onPointerDown={handleArenaPointerDown}
+                            onPointerMove={handleArenaPointerMove}
+                            onPointerUp={handleArenaPointerUp}
+                            onPointerCancel={handleArenaPointerUp}
+                            className="relative flex-1 w-full overflow-hidden select-none cursor-crosshair touch-none"
+                          >
+                            {/* Render Floating & Moving Answer Clouds */}
+                            {(airplaneClouds && airplaneClouds.length > 0
+                              ? airplaneClouds
+                              : (activeChallenge.questions[currentQuestionIdx]?.options || []).map((opt, i) => ({
+                                  idx: i,
+                                  text: opt,
+                                  x: 20 + i * 25,
+                                  y: 30 + (i % 2) * 30,
+                                  baseY: 30 + (i % 2) * 30,
+                                  speed: 0.28,
+                                  waveOffset: 0
+                                }))
+                            ).map((cloud) => {
+                              const optIdx = cloud.idx;
+                              const isSelected = selectedAnswerIdx === optIdx;
+                              const isTargeted = airplaneTargetCloud === optIdx;
+                              const isHovered = airplaneHoverIdx === optIdx;
+                              const q = activeChallenge.questions[currentQuestionIdx];
+                              const isThisCorrect = checkIsCorrect(q, optIdx);
+
+                              let cloudSkin = "normal";
+                              if (isAnswerRevealed) {
+                                if (isThisCorrect) cloudSkin = "correct";
+                                else if (isSelected && !isThisCorrect) cloudSkin = "wrong";
+                              }
+
+                              return (
+                                <div
+                                  key={`cloud-option-${optIdx}`}
+                                  ref={(el) => { cloudDomRefs.current[optIdx] = el; }}
+                                  style={{
+                                    left: `${cloud.x}%`,
+                                    top: `${cloud.y}%`,
+                                    transform: 'translate3d(-50%, -50%, 0)',
+                                    willChange: 'left, top',
                                   }}
-                                  transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
-                                  className="text-6xl select-none drop-shadow-[0_0_20px_rgba(56,189,248,0.8)]"
+                                  className="absolute z-15 pointer-events-none select-none"
                                 >
-                                  ✈️
+                                  {/* Lightweight Cloud Graphic without GPU-killing SVG drop-shadow filter */}
+                                  <div className="relative">
+                                    <svg
+                                      className={`w-44 sm:w-56 md:w-64 h-24 sm:h-28 transition-colors duration-200 ${
+                                        cloudSkin === "correct"
+                                          ? "text-emerald-100"
+                                          : cloudSkin === "wrong"
+                                          ? "text-slate-700"
+                                          : isHovered
+                                          ? "text-sky-50"
+                                          : "text-white"
+                                      }`}
+                                      viewBox="0 0 240 120"
+                                      fill="currentColor"
+                                    >
+                                      {/* Soft native SVG cloud shadow */}
+                                      <ellipse cx="120" cy="96" rx="84" ry="12" fill="rgba(15,23,42,0.12)" />
+                                      {/* Puffy multi-lobed cloud path */}
+                                      <path d="M 45,95 Q 15,95 15,70 Q 15,50 35,45 Q 40,20 70,20 Q 90,20 100,32 Q 115,10 145,10 Q 180,10 190,38 Q 215,35 225,58 Q 235,80 215,95 Q 200,95 185,95 Z" />
+                                      <ellipse cx="65" cy="72" rx="42" ry="26" />
+                                      <ellipse cx="120" cy="62" rx="55" ry="36" />
+                                      <ellipse cx="175" cy="72" rx="42" ry="26" />
+                                      <ellipse cx="95" cy="48" rx="35" ry="28" />
+                                      <ellipse cx="150" cy="45" rx="38" ry="28" />
+                                    </svg>
+
+                                    {/* Storm Lightning Flash on Wrong Cloud */}
+                                    {cloudSkin === "wrong" && (
+                                      <motion.div
+                                        initial={{ opacity: 0, scale: 0.5 }}
+                                        animate={{ opacity: [0, 1, 0, 1, 0.8], scale: 1 }}
+                                        transition={{ duration: 0.4 }}
+                                        className="absolute -top-3 left-1/2 -translate-x-1/2 text-3xl select-none"
+                                      >
+                                        ⚡
+                                      </motion.div>
+                                    )}
+
+                                    {/* Sparkle Stars on Correct Cloud */}
+                                    {cloudSkin === "correct" && (
+                                      <motion.div
+                                        initial={{ opacity: 0, scale: 0.5 }}
+                                        animate={{ opacity: 1, scale: [0.8, 1.2, 1] }}
+                                        transition={{ duration: 0.5 }}
+                                        className="absolute -top-4 left-1/2 -translate-x-1/2 flex items-center gap-1 text-xl select-none"
+                                      >
+                                        <span>✨</span>
+                                        <span className="text-xs font-black bg-emerald-600 text-white px-2 py-0.5 rounded-full shadow-md">
+                                          +150 🌟
+                                        </span>
+                                        <span>✨</span>
+                                      </motion.div>
+                                    )}
+
+                                    {/* Option Content Inside Cloud */}
+                                    <div className="absolute inset-0 flex flex-col items-center justify-center p-3 text-center pointer-events-none">
+                                      <span className={`font-black text-xs sm:text-sm md:text-base leading-snug line-clamp-2 px-3 select-none ${
+                                        cloudSkin === "wrong" ? "text-white" : "text-slate-900"
+                                      }`}>
+                                        {cloud.text}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+
+                            {/* RED PROPELLER AIRPLANE */}
+                            <div
+                              ref={airplaneSpriteRef}
+                              style={{
+                                left: `${airplanePos.x}%`,
+                                top: `${airplanePos.y}%`,
+                                transform: `translate3d(-50%, -50%, 0) rotate(${airplaneAngle}deg)`,
+                                width: "110px",
+                                height: "70px",
+                                willChange: "left, top, transform",
+                              }}
+                              className="absolute z-25 pointer-events-none"
+                            >
+                              {/* Propeller Vapor Trail */}
+                              <div className="absolute -left-5 top-1/2 -translate-y-1/2 flex items-center space-x-1 opacity-60">
+                                <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+                                <span className="w-3 h-1.5 rounded-full bg-white/70" />
+                              </div>
+
+                              {/* High Quality Red Passenger Propeller Airplane SVG */}
+                              <svg
+                                className="w-full h-full"
+                                viewBox="0 0 160 100"
+                                fill="none"
+                              >
+                                {/* Tail Rudder */}
+                                <path d="M 15 48 L 5 15 L 28 15 L 35 48 Z" fill="#b91c1c" />
+                                <path d="M 5 15 L 28 15 L 24 24 L 8 24 Z" fill="#f87171" />
+                                
+                                {/* Horizontal Stabilizers */}
+                                <path d="M 8 50 L 2 44 L 20 44 L 26 50 Z" fill="#991b1b" />
+
+                                {/* Main Fuselage */}
+                                <path
+                                  d="M 22 52 C 20 42, 35 34, 60 33 C 95 32, 130 36, 145 48 C 150 52, 150 56, 144 60 C 130 68, 95 70, 60 69 C 35 68, 20 62, 22 52 Z"
+                                  fill="#dc2626"
+                                />
+                                <path
+                                  d="M 35 42 C 55 36, 100 36, 140 48 C 120 42, 75 40, 35 42 Z"
+                                  fill="#f87171"
+                                  opacity="0.8"
+                                />
+
+                                {/* White Racing Stripe */}
+                                <path
+                                  d="M 28 54 C 55 52, 100 52, 142 53 C 142 56, 100 55, 28 57 Z"
+                                  fill="#ffffff"
+                                />
+
+                                {/* Cockpit Windshield */}
+                                <path
+                                  d="M 124 43 C 132 44, 138 48, 142 52 L 130 52 C 126 48, 124 45, 124 43 Z"
+                                  fill="#38bdf8"
+                                  stroke="#ffffff"
+                                  strokeWidth="1"
+                                />
+                                {/* Cabin Windows */}
+                                <circle cx="108" cy="48" r="3.5" fill="#bae6fd" stroke="#991b1b" strokeWidth="0.8" />
+                                <circle cx="92" cy="48" r="3.5" fill="#bae6fd" stroke="#991b1b" strokeWidth="0.8" />
+                                <circle cx="76" cy="48" r="3.5" fill="#bae6fd" stroke="#991b1b" strokeWidth="0.8" />
+                                <circle cx="60" cy="48" r="3.5" fill="#bae6fd" stroke="#991b1b" strokeWidth="0.8" />
+
+                                {/* Main Wing */}
+                                <path
+                                  d="M 68 53 L 88 88 C 94 90, 102 88, 102 84 L 98 53 Z"
+                                  fill="#b91c1c"
+                                />
+                                <path
+                                  d="M 72 53 L 90 84 L 96 84 L 95 53 Z"
+                                  fill="#ef4444"
+                                />
+                                <circle cx="96" cy="86" r="2" fill="#22c55e" />
+
+                                {/* Front Nose Spinner Hub */}
+                                <path
+                                  d="M 144 48 C 152 50, 155 54, 144 58 Z"
+                                  fill="#e2e8f0"
+                                />
+
+                                {/* Propeller Blur Effect */}
+                                <g className="origin-[148px_53px]">
+                                  <ellipse cx="149" cy="53" rx="2.5" ry="24" fill="#f8fafc" opacity="0.75" />
+                                  <ellipse cx="149" cy="53" rx="1.5" ry="18" fill="#38bdf8" opacity="0.4" />
+                                </g>
+                              </svg>
+
+                              {/* Airplane State Reactions */}
+                              {airplaneState === "celebrating" && (
+                                <motion.div
+                                  initial={{ scale: 0 }}
+                                  animate={{ scale: [0, 1.4, 1] }}
+                                  className="absolute -top-4 -right-2 text-2xl select-none"
+                                >
+                                  🌟
                                 </motion.div>
-                              </div>
+                              )}
+                              {airplaneState === "hit_wrong" && (
+                                <motion.div
+                                  initial={{ opacity: 0 }}
+                                  animate={{ opacity: [0, 1, 0] }}
+                                  transition={{ duration: 0.5 }}
+                                  className="absolute -top-3 left-1/2 -translate-x-1/2 text-2xl select-none"
+                                >
+                                  💨
+                                </motion.div>
+                              )}
+                            </div>
 
-                              <div className="space-y-2">
-                                <h3 className="text-xl md:text-2xl font-black text-white drop-shadow-md">
-                                  حلّق في السماء واخترق سحب الإجابة الصحيحة! ☁️✈️
-                                </h3>
-                                <p className="text-xs sm:text-sm text-slate-300 font-bold leading-relaxed">
-                                  وجّه الطائرة باللمس أو الأسهم للاصطدام بسحابة الإجابة الصحيحة لكسب النقاط والتقدم! ✈️☁️
-                                </p>
-                              </div>
+                            {/* Confetti & Sparkles */}
+                            {particles.map(p => (
+                              <div
+                                key={p.id}
+                                style={{ left: `${p.x}%`, top: `${p.y}%`, backgroundColor: p.color }}
+                                className="absolute w-3.5 h-3.5 rounded-full animate-ping z-30 pointer-events-none shadow-md"
+                              />
+                            ))}
 
+                            {/* On-Screen Aerodynamic Flight Controls (Arrow Pad for Touch & Mouse) */}
+                            <div className="absolute bottom-3 left-3 sm:bottom-4 sm:left-4 z-30 pointer-events-auto flex items-center gap-1.5 bg-slate-950/50 backdrop-blur-md p-1.5 rounded-2xl border border-white/20 shadow-2xl select-none">
+                              {/* Left Arrow Button */}
                               <button
                                 type="button"
-                                onClick={() => {
-                                  const q = activeChallenge.questions[currentQuestionIdx];
-                                  if (q) triggerGameCountdown(currentQuestionIdx, "cloud_airplane", q);
-                                }}
-                                className="w-full py-3.5 bg-gradient-to-r from-sky-500 via-blue-600 to-indigo-600 hover:from-sky-400 hover:to-blue-500 text-white rounded-2xl text-sm font-black shadow-lg shadow-sky-950 transition transform active:scale-95 cursor-pointer flex items-center justify-center gap-2 border border-sky-300/30"
+                                onPointerDown={(e) => { e.preventDefault(); airplaneArrowHoldRef.current.left = true; }}
+                                onPointerUp={() => { airplaneArrowHoldRef.current.left = false; }}
+                                onPointerLeave={() => { airplaneArrowHoldRef.current.left = false; }}
+                                onPointerCancel={() => { airplaneArrowHoldRef.current.left = false; }}
+                                className="w-10 h-10 rounded-xl bg-white/15 hover:bg-sky-500/40 active:bg-sky-500/70 text-white font-black text-sm sm:text-base flex items-center justify-center border border-white/10 transition active:scale-95 shadow-sm cursor-pointer"
+                                title="تحريك لليسار (◄)"
                               >
-                                <span>بدء التحليق الآن ✈️</span>
+                                ◄
                               </button>
-                            </motion.div>
-                          ) : (
-                            <div className="relative z-10 max-w-lg w-full flex flex-col items-center justify-center space-y-6">
-                              <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-sky-500/10 border border-sky-400/30 text-sky-300 text-xs font-black shadow-md animate-pulse">
-                                <span>✈️ استعد للتحليق...</span>
+
+                              {/* Vertical Column (Up & Down) */}
+                              <div className="flex flex-col gap-1">
+                                <button
+                                  type="button"
+                                  onPointerDown={(e) => { e.preventDefault(); airplaneArrowHoldRef.current.up = true; }}
+                                  onPointerUp={() => { airplaneArrowHoldRef.current.up = false; }}
+                                  onPointerLeave={() => { airplaneArrowHoldRef.current.up = false; }}
+                                  onPointerCancel={() => { airplaneArrowHoldRef.current.up = false; }}
+                                  className="w-10 h-8 rounded-xl bg-white/15 hover:bg-sky-500/40 active:bg-sky-500/70 text-white font-black text-xs sm:text-sm flex items-center justify-center border border-white/10 transition active:scale-95 shadow-sm cursor-pointer"
+                                  title="صعود للأعلى (▲)"
+                                >
+                                  ▲
+                                </button>
+                                <button
+                                  type="button"
+                                  onPointerDown={(e) => { e.preventDefault(); airplaneArrowHoldRef.current.down = true; }}
+                                  onPointerUp={() => { airplaneArrowHoldRef.current.down = false; }}
+                                  onPointerLeave={() => { airplaneArrowHoldRef.current.down = false; }}
+                                  onPointerCancel={() => { airplaneArrowHoldRef.current.down = false; }}
+                                  className="w-10 h-8 rounded-xl bg-white/15 hover:bg-sky-500/40 active:bg-sky-500/70 text-white font-black text-xs sm:text-sm flex items-center justify-center border border-white/10 transition active:scale-95 shadow-sm cursor-pointer"
+                                  title="هبوط للأسفل (▼)"
+                                >
+                                  ▼
+                                </button>
                               </div>
 
-                              <div className="relative flex items-center justify-center w-36 h-36">
-                                <AnimatePresence mode="wait">
-                                  {introCountdown > 0 && (
-                                    <motion.span
-                                      key={`cloud-count-${introCountdown}`}
-                                      initial={{ scale: 0.2, opacity: 0 }}
-                                      animate={{ scale: [0.2, 1.4, 1], opacity: 1 }}
-                                      exit={{ scale: 1.8, opacity: 0 }}
-                                      className="text-7xl font-sans font-black text-sky-300 drop-shadow-[0_0_35px_#38bdf8]"
-                                    >
-                                      {introCountdown}
-                                    </motion.span>
-                                  )}
-                                  {introCountdown === 0 && (
-                                    <motion.div
-                                      key="cloud-count-go"
-                                      initial={{ scale: 0.3, opacity: 0 }}
-                                      animate={{ scale: [0.3, 1.3, 1], opacity: 1 }}
-                                      className="text-3xl sm:text-4xl font-black text-yellow-300 drop-shadow-[0_0_40px_#fde047] whitespace-nowrap"
-                                    >
-                                      ✈️ حلّق الآن! ✨
-                                    </motion.div>
-                                  )}
-                                </AnimatePresence>
-                              </div>
+                              {/* Right Arrow Button */}
+                              <button
+                                type="button"
+                                onPointerDown={(e) => { e.preventDefault(); airplaneArrowHoldRef.current.right = true; }}
+                                onPointerUp={() => { airplaneArrowHoldRef.current.right = false; }}
+                                onPointerLeave={() => { airplaneArrowHoldRef.current.right = false; }}
+                                onPointerCancel={() => { airplaneArrowHoldRef.current.right = false; }}
+                                className="w-10 h-10 rounded-xl bg-white/15 hover:bg-sky-500/40 active:bg-sky-500/70 text-white font-black text-sm sm:text-base flex items-center justify-center border border-white/10 transition active:scale-95 shadow-sm cursor-pointer"
+                                title="تحريك لليمين (►)"
+                              >
+                                ►
+                              </button>
+                            </div>
+                          </div>
 
-                              <div className="bg-slate-900/90 border border-sky-500/40 p-4 rounded-2xl max-w-md w-full text-center space-y-1 shadow-xl backdrop-blur-md">
-                                <span className="text-[10px] text-sky-300 font-extrabold uppercase tracking-widest">السؤال الحالي</span>
-                                <p className="text-sm md:text-base font-black text-white line-clamp-2">
+                          {/* BOTTOM QUESTION BAR */}
+                          <div className="relative z-20 w-full px-4 pb-3 flex flex-col items-center gap-2 pointer-events-auto">
+                            {/* Question Card Box */}
+                            <div className="w-full max-w-3xl bg-slate-900/90 border border-slate-700/80 rounded-2xl sm:rounded-3xl p-3 sm:p-4 text-center shadow-2xl backdrop-blur-md flex items-center justify-between gap-3">
+                              {/* Menu Bar Icon Left */}
+                              <button
+                                type="button"
+                                onClick={() => triggerToast("استخدم الفأرة أو اللمس لتوجيه الطائرة نحو السحابة ذات الإجابة الصحيحة ☁️✈️", "info")}
+                                className="p-2 text-slate-400 hover:text-white transition rounded-xl hover:bg-slate-800 shrink-0 cursor-pointer"
+                                title="تعليمات اللعبة"
+                              >
+                                <span className="text-lg">☰</span>
+                              </button>
+
+                              {/* Question Text in Center */}
+                              <div className="flex-1 text-center">
+                                <h3 className="text-white font-black text-sm sm:text-base md:text-lg leading-relaxed line-clamp-2">
                                   {activeChallenge.questions[currentQuestionIdx]?.text}
-                                </p>
+                                </h3>
+                              </div>
+
+                              {/* Right Controls (Audio & Fullscreen) */}
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => setSoundEnabled(!soundEnabled)}
+                                  className="p-2 text-slate-400 hover:text-white transition rounded-xl hover:bg-slate-800 cursor-pointer"
+                                  title={soundEnabled ? "كتم الصوت" : "تشغيل الصوت"}
+                                >
+                                  {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setIsAirplaneFullscreen(!isAirplaneFullscreen)}
+                                  className="p-2 text-slate-400 hover:text-white transition rounded-xl hover:bg-slate-800 cursor-pointer"
+                                  title={isAirplaneFullscreen ? "تصغير الشاشة" : "ملء الشاشة"}
+                                >
+                                  {isAirplaneFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                                </button>
                               </div>
                             </div>
+
+                            {/* Flight Guidance Indicator */}
+                            <div className="flex items-center gap-2 text-xs text-sky-200/90 bg-slate-900/80 border border-sky-500/30 px-3.5 py-1.5 rounded-full backdrop-blur-md font-bold shadow-lg">
+                              <span>✈️</span>
+                              <span>وجّه الطائرة باللمس أو الأسهم للاصطدام بسحابة الإجابة الصحيحة</span>
+                            </div>
+
+                            {/* Quick Click Option Buttons for 100% Reliable Lab PC Play */}
+                            <div className="w-full max-w-3xl grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 pointer-events-auto">
+                              {(activeChallenge.questions[currentQuestionIdx]?.options || []).map((opt, optIdx) => {
+                                const isSelected = selectedAnswerIdx === optIdx;
+                                const q = activeChallenge.questions[currentQuestionIdx];
+                                const isCorrectOpt = checkIsCorrect(q, optIdx);
+                                let btnStyle = "bg-slate-900/90 hover:bg-sky-600/80 border-sky-400/40 text-white";
+                                if (isAnswerRevealed) {
+                                  if (isCorrectOpt) btnStyle = "bg-emerald-600 border-emerald-300 text-white scale-102 shadow-emerald-900/50";
+                                  else if (isSelected) btnStyle = "bg-rose-600 border-rose-400 text-white";
+                                  else btnStyle = "bg-slate-800/70 border-slate-700 text-slate-400 opacity-60";
+                                }
+                                return (
+                                  <button
+                                    key={optIdx}
+                                    type="button"
+                                    onClick={() => {
+                                      if (!isAnswerRevealed) {
+                                        handleAirplaneHitCloud(optIdx);
+                                      }
+                                    }}
+                                    disabled={isAnswerRevealed}
+                                    className={`p-2.5 sm:p-3 rounded-2xl border text-xs sm:text-sm font-black transition-all cursor-pointer flex items-center justify-center gap-2 shadow-lg active:scale-95 ${btnStyle}`}
+                                    title={`سحابة الخيار ${optIdx + 1}`}
+                                  >
+                                    <span className="text-base">☁️</span>
+                                    <span className="truncate">{opt}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          {/* Game Intro & Preview Overlay */}
+                          {isQuestionIntro && (
+                            <div className="absolute inset-0 bg-slate-950/90 z-40 flex flex-col items-center justify-center p-4 sm:p-6 text-center overflow-hidden">
+                              {gameIntroStage === "preview" ? (
+                                <motion.div
+                                  initial={{ opacity: 0, scale: 0.9 }}
+                                  animate={{ opacity: 1, scale: 1 }}
+                                  className="relative z-10 max-w-lg w-full bg-slate-900/95 border border-sky-400/40 p-6 rounded-3xl shadow-[0_0_50px_rgba(56,189,248,0.3)] backdrop-blur-xl space-y-5"
+                                >
+                                  <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-sky-500/20 border border-sky-400/30 text-sky-200 text-xs font-black tracking-wide">
+                                    <span>✈️ مغامرة طائرة السحاب</span>
+                                    <span className="w-2 h-2 rounded-full bg-yellow-400 animate-ping" />
+                                  </div>
+
+                                  <div className="relative py-4 flex items-center justify-center h-24">
+                                    <motion.div
+                                      animate={{
+                                        y: [0, -15, 0],
+                                        rotate: [0, 8, -8, 0],
+                                      }}
+                                      transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
+                                      className="text-6xl select-none drop-shadow-[0_0_20px_rgba(56,189,248,0.8)]"
+                                    >
+                                      ✈️
+                                    </motion.div>
+                                  </div>
+
+                                  <div className="space-y-2">
+                                    <h3 className="text-xl md:text-2xl font-black text-white drop-shadow-md">
+                                      حلّق في السماء واخترق سحب الإجابة الصحيحة! ☁️✈️
+                                    </h3>
+                                    <p className="text-xs sm:text-sm text-slate-300 font-bold leading-relaxed">
+                                      وجّه الطائرة باللمس أو الأسهم للاصطدام بسحابة الإجابة الصحيحة لكسب النقاط والتقدم! ✈️☁️
+                                    </p>
+                                  </div>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const q = activeChallenge.questions[currentQuestionIdx];
+                                      if (q) triggerGameCountdown(currentQuestionIdx, "cloud_airplane", q);
+                                    }}
+                                    className="w-full py-3.5 bg-gradient-to-r from-sky-500 via-blue-600 to-indigo-600 hover:from-sky-400 hover:to-blue-500 text-white rounded-2xl text-sm font-black shadow-lg shadow-sky-950 transition transform active:scale-95 cursor-pointer flex items-center justify-center gap-2 border border-sky-300/30"
+                                  >
+                                    <span>بدء التحليق الآن ✈️</span>
+                                  </button>
+                                </motion.div>
+                              ) : (
+                                <div className="relative z-10 max-w-lg w-full flex flex-col items-center justify-center space-y-6">
+                                  <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-sky-500/10 border border-sky-400/30 text-sky-300 text-xs font-black shadow-md animate-pulse">
+                                    <span>✈️ استعد للتحليق...</span>
+                                  </div>
+
+                                  <div className="relative flex items-center justify-center w-36 h-36">
+                                    <AnimatePresence mode="wait">
+                                      {introCountdown > 0 && (
+                                        <motion.span
+                                          key={`cloud-count-${introCountdown}`}
+                                          initial={{ scale: 0.2, opacity: 0 }}
+                                          animate={{ scale: [0.2, 1.4, 1], opacity: 1 }}
+                                          exit={{ scale: 1.8, opacity: 0 }}
+                                          className="text-7xl font-sans font-black text-sky-300 drop-shadow-[0_0_35px_#38bdf8]"
+                                        >
+                                          {introCountdown}
+                                        </motion.span>
+                                      )}
+                                      {introCountdown === 0 && (
+                                        <motion.div
+                                          key="cloud-count-go"
+                                          initial={{ scale: 0.3, opacity: 0 }}
+                                          animate={{ scale: [0.3, 1.3, 1], opacity: 1 }}
+                                          className="text-3xl sm:text-4xl font-black text-yellow-300 drop-shadow-[0_0_40px_#fde047] whitespace-nowrap"
+                                        >
+                                          ✈️ حلّق الآن! ✨
+                                        </motion.div>
+                                      )}
+                                    </AnimatePresence>
+                                  </div>
+
+                                  <div className="bg-slate-900/90 border border-sky-500/40 p-4 rounded-2xl max-w-md w-full text-center space-y-1 shadow-xl backdrop-blur-md">
+                                    <span className="text-[10px] text-sky-300 font-extrabold uppercase tracking-widest">السؤال الحالي</span>
+                                    <p className="text-sm md:text-base font-black text-white line-clamp-2">
+                                      {activeChallenge.questions[currentQuestionIdx]?.text}
+                                    </p>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                           )}
-                        </div>
+                        </>
                       )}
                     </div>
                   )}

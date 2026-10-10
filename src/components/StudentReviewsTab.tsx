@@ -3875,7 +3875,27 @@ export default function StudentReviewsTab({
 
                       {/* Card Body */}
                       <div className="p-5 pt-3.5 space-y-4 flex-1 flex flex-col justify-between">
-                        <div className="space-y-2 text-center">
+                        {/* Action Button - Moved directly below Game Title Header */}
+                        <div>
+                          {isActivated && challenge ? (
+                            <button
+                              onClick={() => handleStartGame(challenge)}
+                              className="w-full py-3 text-white rounded-xl text-xs sm:text-sm font-black transition cursor-pointer flex items-center justify-center gap-2 shadow-md hover:scale-[1.02] active:scale-95 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700"
+                            >
+                              <Play className="w-4 h-4 fill-current" />
+                              <span>ابدأ التحدي الآن 🚀</span>
+                            </button>
+                          ) : (
+                            <button
+                              disabled
+                              className="w-full py-3 bg-slate-100 border border-slate-200 text-slate-400 rounded-xl text-xs font-black cursor-not-allowed flex items-center justify-center gap-1.5"
+                            >
+                              <span>غير متاحة حالياً ⏸️</span>
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="space-y-2 text-center pt-2 border-t border-slate-100">
                           <p className="text-xs text-slate-600 font-bold leading-relaxed">
                             {fg.desc}
                           </p>
@@ -3906,26 +3926,6 @@ export default function StudentReviewsTab({
                             </span>
                           </div>
                         )}
-
-                        {/* Action Button */}
-                        <div className="pt-2 border-t border-slate-100">
-                          {isActivated && challenge ? (
-                            <button
-                              onClick={() => handleStartGame(challenge)}
-                              className="w-full py-3 text-white rounded-xl text-xs sm:text-sm font-black transition cursor-pointer flex items-center justify-center gap-2 shadow-md hover:scale-[1.02] active:scale-95 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700"
-                            >
-                              <Play className="w-4 h-4 fill-current" />
-                              <span>ابدأ التحدي الآن 🚀</span>
-                            </button>
-                          ) : (
-                            <button
-                              disabled
-                              className="w-full py-3 bg-slate-100 border border-slate-200 text-slate-400 rounded-xl text-xs font-black cursor-not-allowed flex items-center justify-center gap-1.5"
-                            >
-                              <span>غير متاحة حالياً ⏸️</span>
-                            </button>
-                          )}
-                        </div>
 
                         {/* Independent Leaderboard & Results Section for this Game */}
                         {(() => {
@@ -7542,38 +7542,6 @@ export default function StudentReviewsTab({
                             <div className="flex items-center gap-2 text-xs text-sky-200/90 bg-slate-900/80 border border-sky-500/30 px-3.5 py-1.5 rounded-full backdrop-blur-md font-bold shadow-lg">
                               <span>✈️</span>
                               <span>وجّه الطائرة باللمس أو الأسهم للاصطدام بسحابة الإجابة الصحيحة</span>
-                            </div>
-
-                            {/* Quick Click Option Buttons for 100% Reliable Lab PC Play */}
-                            <div className="w-full max-w-3xl grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 pointer-events-auto">
-                              {(activeChallenge.questions[currentQuestionIdx]?.options || []).map((opt, optIdx) => {
-                                const isSelected = selectedAnswerIdx === optIdx;
-                                const q = activeChallenge.questions[currentQuestionIdx];
-                                const isCorrectOpt = checkIsCorrect(q, optIdx);
-                                let btnStyle = "bg-slate-900/90 hover:bg-sky-600/80 border-sky-400/40 text-white";
-                                if (isAnswerRevealed) {
-                                  if (isCorrectOpt) btnStyle = "bg-emerald-600 border-emerald-300 text-white scale-102 shadow-emerald-900/50";
-                                  else if (isSelected) btnStyle = "bg-rose-600 border-rose-400 text-white";
-                                  else btnStyle = "bg-slate-800/70 border-slate-700 text-slate-400 opacity-60";
-                                }
-                                return (
-                                  <button
-                                    key={optIdx}
-                                    type="button"
-                                    onClick={() => {
-                                      if (!isAnswerRevealed) {
-                                        handleAirplaneHitCloud(optIdx);
-                                      }
-                                    }}
-                                    disabled={isAnswerRevealed}
-                                    className={`p-2.5 sm:p-3 rounded-2xl border text-xs sm:text-sm font-black transition-all cursor-pointer flex items-center justify-center gap-2 shadow-lg active:scale-95 ${btnStyle}`}
-                                    title={`سحابة الخيار ${optIdx + 1}`}
-                                  >
-                                    <span className="text-base">☁️</span>
-                                    <span className="truncate">{opt}</span>
-                                  </button>
-                                );
-                              })}
                             </div>
                           </div>
 

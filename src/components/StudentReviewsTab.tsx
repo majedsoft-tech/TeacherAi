@@ -3895,15 +3895,6 @@ export default function StudentReviewsTab({
                           )}
                         </div>
 
-                        <div className="space-y-2 text-center pt-2 border-t border-slate-100">
-                          <p className="text-xs text-slate-600 font-bold leading-relaxed">
-                            {fg.desc}
-                          </p>
-                          <h4 className="font-black text-slate-900 text-base sm:text-lg leading-snug pt-2 border-t border-slate-100">
-                            {challenge?.title || fg.defaultTitle}
-                          </h4>
-                        </div>
-
                         {/* Metadata Pills */}
                         <div className="flex flex-wrap items-center justify-center gap-2 text-xs font-bold text-slate-700 pt-2 border-t border-slate-100">
                           <span className="bg-slate-100 text-slate-800 border border-slate-200 px-2.5 py-1 rounded-lg">
@@ -3926,77 +3917,6 @@ export default function StudentReviewsTab({
                             </span>
                           </div>
                         )}
-
-                        {/* Independent Leaderboard & Results Section for this Game */}
-                        {(() => {
-                          const gameLeaderboard = (() => {
-                            if (!challenge) return [];
-                            const challengeScores = reviewScores.filter(s => s.challengeId === challenge.id);
-                            const studentMap: { [studentId: string]: ReviewScore } = {};
-                            challengeScores.forEach(s => {
-                              if (!studentMap[s.studentId] || (s.score || 0) > (studentMap[s.studentId].score || 0)) {
-                                studentMap[s.studentId] = s;
-                              }
-                            });
-                            return Object.values(studentMap).sort((a, b) => (b.score || 0) - (a.score || 0));
-                          })();
-
-                          return (
-                            <div className="pt-3 border-t border-slate-100 space-y-2 text-right">
-                              {/* Leaderboard entries */}
-
-                              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                                {gameLeaderboard.slice(0, 5).map((scoreItem, idx) => {
-                                  const isMe = scoreItem.studentId === activeStudent?.id;
-                                  return (
-                                    <div
-                                      key={scoreItem.id || idx}
-                                      className={`p-2 rounded-xl text-xs flex items-center justify-between gap-2 border font-sans ${
-                                        isMe
-                                          ? "bg-amber-50 border-amber-300 text-amber-900 font-black shadow-xs"
-                                          : "bg-slate-50/80 border-slate-200 text-slate-700"
-                                      }`}
-                                    >
-                                      <div className="flex items-center gap-2 truncate">
-                                        <span
-                                          className={`w-5 h-5 rounded-full flex items-center justify-center font-black text-[10px] shrink-0 ${
-                                            idx === 0
-                                              ? "bg-amber-400 text-slate-950"
-                                              : idx === 1
-                                              ? "bg-slate-300 text-slate-950"
-                                              : idx === 2
-                                              ? "bg-amber-700 text-white"
-                                              : "bg-slate-200 text-slate-600"
-                                          }`}
-                                        >
-                                          {idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : idx + 1}
-                                        </span>
-                                        <span className="truncate font-bold text-[11px]">
-                                          {scoreItem.studentName} {isMe && <span className="text-amber-600 font-bold">(أنت)</span>}
-                                        </span>
-                                      </div>
-
-                                      <div className="flex items-center gap-2 shrink-0 font-extrabold text-[11px]">
-                                        <span className="text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 font-sans">
-                                          {scoreItem.score} ن
-                                        </span>
-                                        <span className="text-slate-400 text-[10px] font-sans">
-                                          ({scoreItem.correctCount}/{scoreItem.totalCount})
-                                        </span>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-
-                                {gameLeaderboard.length === 0 && (
-                                  <p className="text-center text-[11px] text-slate-400 font-bold py-3 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
-                                    لا توجد نتائج مسجلة لهذه اللعبة بعد. كن أول المتصدرين! 🚀
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })()}
                       </div>
                     </div>
                   );

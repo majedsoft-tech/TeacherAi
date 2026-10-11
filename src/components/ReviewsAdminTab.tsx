@@ -1875,6 +1875,9 @@ export default function ReviewsAdminTab({
       if (gameType) {
         targetChallengeIds.add(gameType);
         targetChallengeIds.add(`fixed_game_${gameType}`);
+        if (currentUser?.uid) {
+          targetChallengeIds.add(`fixed_game_${currentUser.uid}_${gameType}`);
+        }
         reviewChallenges.filter(c => c.gameType === gameType).forEach(c => targetChallengeIds.add(c.id));
       }
 
@@ -2078,6 +2081,7 @@ export default function ReviewsAdminTab({
       }
 
       await ejectAllStudentsForChallenge(docId, gameType);
+      await handleClearScores(docId, gameType, true, true);
 
       // Return to main games list and close any active leaderboard view/modal
       setSelectedChallengeId(null);
@@ -2597,10 +2601,16 @@ export default function ReviewsAdminTab({
                         </div>
 
                         {/* Independent Leaderboard & Results Section for this Game in Teacher View */}
-                        {(() => {
+                        {isActivated ? (() => {
                           const gameLeaderboard = (() => {
                             if (!challenge) return [];
-                            const challengeScores = reviewScores.filter(s => s.challengeId === challenge.id);
+                            const challengeScores = reviewScores.filter(s => 
+                              s.challengeId === challenge.id || 
+                              s.challengeId === fg.id || 
+                              s.challengeId === fg.gameType ||
+                              s.challengeId === `fixed_game_${fg.gameType}` ||
+                              (currentUser?.uid && s.challengeId === `fixed_game_${currentUser.uid}_${fg.gameType}`)
+                            );
                             const studentMap: { [studentId: string]: ReviewScore } = {};
                             challengeScores.forEach(s => {
                               if (!studentMap[s.studentId] || (s.score || 0) > (studentMap[s.studentId].score || 0)) {
@@ -2610,10 +2620,27 @@ export default function ReviewsAdminTab({
                             return Object.values(studentMap).sort((a, b) => (b.score || 0) - (a.score || 0));
                           })();
 
+                          if (gameLeaderboard.length === 0) return null;
+
                           return (
                             <div className="pt-3 border-t border-slate-100 space-y-2 text-right">
-                              {/* Leaderboard entries */}
+                              {/* Header with clear button */}
+                              <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 pb-1">
+                                <span className="flex items-center gap-1 text-slate-700">
+                                  <span>🏆 صدارة الجولة الحالية</span>
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleClearScores(challenge?.id || fg.id, fg.gameType)}
+                                  className="text-[10px] text-rose-500 hover:text-rose-700 hover:underline flex items-center gap-0.5 cursor-pointer"
+                                  title="تصفير ومسح أسماء المتصدرين"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                  <span>تصفير الأسماء</span>
+                                </button>
+                              </div>
 
+                              {/* Leaderboard entries */}
                               <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
                                 {gameLeaderboard.slice(0, 5).map((scoreItem, idx) => (
                                   <div
@@ -2649,16 +2676,10 @@ export default function ReviewsAdminTab({
                                     </div>
                                   </div>
                                 ))}
-
-                                {gameLeaderboard.length === 0 && (
-                                  <p className="text-center text-[11px] text-slate-400 font-bold py-3 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
-                                    لا توجد نتائج مسجلة لهذه اللعبة بعد.
-                                  </p>
-                                )}
                               </div>
                             </div>
                           );
-                        })()}
+                        })() : null}
                       </div>
                     </div>
                   </div>

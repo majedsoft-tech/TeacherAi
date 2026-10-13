@@ -109,6 +109,8 @@ import StudentCurriculumReview from "./components/StudentCurriculumReview";
 import CurriculumReviewAdminTab from "./components/CurriculumReviewAdminTab";
 import { RegisteredTeachersTab } from "./components/RegisteredTeachersTab";
 import { StudentCertificateModal } from "./components/StudentCertificateModal";
+import { ExamSecurityGuard } from "./components/ExamSecurityGuard";
+import { TeacherExamLiveMonitorModal } from "./components/TeacherExamLiveMonitorModal";
 import { getOngoingQuizzesForStudent, getLockingQuizForSubject } from "./utils/quizLockUtils";
 import { UnitLessonMultiSelect } from "./components/UnitLessonMultiSelect";
 import { QuestionBankSmartFilters } from "./components/QuestionBankSmartFilters";
@@ -3690,6 +3692,8 @@ export default function App() {
     setBuilderRequireClassGroup(quiz.requireClassGroup ?? false);
     setBuilderEnableSubmitLock(quiz.enableSubmitLock !== false);
     setBuilderSubmitLockMinutes(quiz.submitLockMinutesBeforeEnd ?? 5);
+    setBuilderEnableAntiCheat(quiz.enableAntiCheat !== false);
+    setBuilderMaxViolations(quiz.maxViolationsAllowed ?? 3);
 
     if (quiz.questions && quiz.questions.length > 0) {
       setBuilderQuestions(
@@ -3739,6 +3743,10 @@ export default function App() {
   const [builderIsTimed, setBuilderIsTimed] = useState(true);
   const [builderEnableSubmitLock, setBuilderEnableSubmitLock] = useState(true);
   const [builderSubmitLockMinutes, setBuilderSubmitLockMinutes] = useState(5);
+  const [builderEnableAntiCheat, setBuilderEnableAntiCheat] = useState(true);
+  const [builderMaxViolations, setBuilderMaxViolations] = useState(3);
+  const [proctoringModalOpen, setProctoringModalOpen] = useState(false);
+  const [proctoringSelectedQuiz, setProctoringSelectedQuiz] = useState<Quiz | null>(null);
   const [builderHasAvailability, setBuilderHasAvailability] = useState(false);
   const [builderSelectedStudentIds, setBuilderSelectedStudentIds] = useState<string[]>([]);
   const [builderTargetStudentMode, setBuilderTargetStudentMode] = useState<"all" | "selected">("all");
@@ -4665,6 +4673,8 @@ export default function App() {
       requireClassGroup: builderRequireClassGroup,
       enableSubmitLock: builderIsTimed ? builderEnableSubmitLock : false,
       submitLockMinutesBeforeEnd: builderIsTimed ? Number(builderSubmitLockMinutes || 5) : 5,
+      enableAntiCheat: builderEnableAntiCheat,
+      maxViolationsAllowed: Number(builderMaxViolations || 3),
       targetStudentIds:
         builderCustomizeClass &&
         builderTargetStudentMode === "selected" &&
@@ -4705,6 +4715,8 @@ export default function App() {
       setBuilderIsTimed(true);
       setBuilderEnableSubmitLock(true);
       setBuilderSubmitLockMinutes(5);
+      setBuilderEnableAntiCheat(true);
+      setBuilderMaxViolations(3);
       setBuilderHasAvailability(false);
       setBuilderQuestions([
         {
@@ -6539,6 +6551,8 @@ export default function App() {
             ? "average"
             : "needs_improvement";
 
+    const deletedQuizTitle = gradesArray[quizIndex]?.quizTitle;
+
     await runWithProgress(
       async () => {
         await updateDoc(doc(db, "students", studentId), {
@@ -6559,6 +6573,65 @@ export default function App() {
             };
           });
         }
+
+        // Clean up exam_proctoring and localStorage so the student can cleanly retake
+        if (deletedQuizTitle) {
+          const qObj = quizzes.find((q) => q.title === deletedQuizTitle);
+          const pIds = [`${deletedQuizTitle}_${studentId}`];
+          if (qObj?.id) pIds.push(`${qObj.id}_${studentId}`);
+
+          for (const pId of pIds) {
+            try {
+              await deleteDoc(doc(db, "exam_proctoring", pId));
+            } catch {}
+          }
+
+          const keysToClear = [
+            `seb_student_${studentId}_quiz_${deletedQuizTitle}_started`,
+            `seb_student_${studentId}_quiz_${deletedQuizTitle}_finished`,
+            `seb_student_${studentId}_quiz_${deletedQuizTitle}_timer`,
+            `seb_student_${studentId}_quiz_${deletedQuizTitle}_answers`,
+            `seb_student_${studentId}_quiz_${deletedQuizTitle}_end_timestamp`,
+            `seb_student_${studentId}_quiz_${deletedQuizTitle}_question_idx`,
+            `seb_student_${studentId}_quiz_${deletedQuizTitle}_score`,
+            `seb_student_${studentId}_quiz_${deletedQuizTitle}_totalPoints`,
+            `seb_student_${studentId}_quiz_${deletedQuizTitle}_percentage`,
+            `seb_student_${studentId}_quiz_${deletedQuizTitle}_detailedResults`,
+            `seb_exam_proctoring_${deletedQuizTitle}_${studentId}`,
+          ];
+          if (qObj) {
+            keysToClear.push(
+              `seb_student_${studentId}_quiz_${qObj.id}_started`,
+              `seb_student_${studentId}_quiz_${qObj.id}_finished`,
+              `seb_student_${studentId}_quiz_${qObj.id}_timer`,
+              `seb_student_${studentId}_quiz_${qObj.id}_answers`,
+              `seb_student_${studentId}_quiz_${qObj.id}_end_timestamp`,
+              `seb_student_${studentId}_quiz_${qObj.id}_question_idx`,
+              `seb_student_${studentId}_quiz_${qObj.id}_score`,
+              `seb_student_${studentId}_quiz_${qObj.id}_totalPoints`,
+              `seb_student_${studentId}_quiz_${qObj.id}_percentage`,
+              `seb_student_${studentId}_quiz_${qObj.id}_detailedResults`,
+              `seb_exam_proctoring_${qObj.id}_${studentId}`,
+            );
+          }
+          keysToClear.forEach((k) => {
+            try {
+              localStorage.removeItem(k);
+            } catch {}
+          });
+
+          // Broadcast reset
+          try {
+            const bc = new BroadcastChannel("exam_proctoring_channel");
+            bc.postMessage({
+              type: "RESET_STUDENT_SESSION",
+              studentId,
+              quizId: qObj?.id,
+              quizTitle: deletedQuizTitle,
+            });
+            bc.close();
+          } catch {}
+        }
       },
       "جاري حذف نتيجة الاختبار وتحديث المعدل التراكمي للطالب...",
       "تم حذف نتيجة الاختبار وتصحيح المعدل التراكمي بنجاح 🗑️"
@@ -6574,6 +6647,8 @@ export default function App() {
 
     await runWithProgress(
       async () => {
+        const qObj = quizzes.find((q) => q.title === quizTitle);
+
         const studentUpdates = studentIds.map(async (sId) => {
           const targetStudentObj = students.find((s) => s.id === sId);
           if (!targetStudentObj) return;
@@ -6630,7 +6705,7 @@ export default function App() {
             });
           }
 
-          // Update Firestore and clear localStorage quiz tracking
+          // Update Firestore and clear localStorage quiz tracking & proctoring
           try {
             const studentRef = doc(db, "students", sId);
             await updateDoc(studentRef, {
@@ -6639,7 +6714,15 @@ export default function App() {
               status: newStatus,
             });
 
-            const qObj = quizzes.find((q) => q.title === quizTitle);
+            // Delete proctoring session from Firestore so anti-cheat locks are removed
+            const pIds = [`${quizTitle}_${sId}`];
+            if (qObj?.id) pIds.push(`${qObj.id}_${sId}`);
+            for (const pId of pIds) {
+              try {
+                await deleteDoc(doc(db, "exam_proctoring", pId));
+              } catch {}
+            }
+
             const keysToClear = [
               `seb_student_${sId}_quiz_${quizTitle}_started`,
               `seb_student_${sId}_quiz_${quizTitle}_finished`,
@@ -6647,6 +6730,11 @@ export default function App() {
               `seb_student_${sId}_quiz_${quizTitle}_answers`,
               `seb_student_${sId}_quiz_${quizTitle}_end_timestamp`,
               `seb_student_${sId}_quiz_${quizTitle}_question_idx`,
+              `seb_student_${sId}_quiz_${quizTitle}_score`,
+              `seb_student_${sId}_quiz_${quizTitle}_totalPoints`,
+              `seb_student_${sId}_quiz_${quizTitle}_percentage`,
+              `seb_student_${sId}_quiz_${quizTitle}_detailedResults`,
+              `seb_exam_proctoring_${quizTitle}_${sId}`,
             ];
             if (qObj) {
               keysToClear.push(
@@ -6656,15 +6744,38 @@ export default function App() {
                 `seb_student_${sId}_quiz_${qObj.id}_answers`,
                 `seb_student_${sId}_quiz_${qObj.id}_end_timestamp`,
                 `seb_student_${sId}_quiz_${qObj.id}_question_idx`,
+                `seb_student_${sId}_quiz_${qObj.id}_score`,
+                `seb_student_${sId}_quiz_${qObj.id}_totalPoints`,
+                `seb_student_${sId}_quiz_${qObj.id}_percentage`,
+                `seb_student_${sId}_quiz_${qObj.id}_detailedResults`,
+                `seb_exam_proctoring_${qObj.id}_${sId}`,
               );
             }
-            keysToClear.forEach((k) => localStorage.removeItem(k));
+            keysToClear.forEach((k) => {
+              try {
+                localStorage.removeItem(k);
+              } catch {}
+            });
           } catch (err) {
             console.error("Firestore update error for student reset:", err);
           }
         });
 
         await Promise.all(studentUpdates);
+
+        // Broadcast reset to all connected tabs
+        try {
+          const bc = new BroadcastChannel("exam_proctoring_channel");
+          studentIds.forEach((sId) => {
+            bc.postMessage({
+              type: "RESET_STUDENT_SESSION",
+              studentId: sId,
+              quizId: qObj?.id,
+              quizTitle,
+            });
+          });
+          bc.close();
+        } catch {}
       },
       "جاري حذف نتيجة الاختبار وتحديث السجلات...",
       studentIds.length === 1
@@ -7904,11 +8015,20 @@ export default function App() {
 
         // Ensure student has not submitted this quiz yet (matching by title or finished state in storage)
         const qKey = q.id || q.title;
+        const hasGradeRecorded =
+          activeStudent.detailedGrades &&
+          activeStudent.detailedGrades.some((g) => g.quizTitle === q.title);
         const isFinishedLocal = localStorage.getItem(`seb_student_${activeStudent.id}_quiz_${qKey}_finished`) === "true";
-        const isTaken =
-          (activeStudent.detailedGrades &&
-            activeStudent.detailedGrades.some((g) => g.quizTitle === q.title)) ||
-          isFinishedLocal;
+
+        if (!hasGradeRecorded && isFinishedLocal) {
+          try {
+            localStorage.removeItem(`seb_student_${activeStudent.id}_quiz_${qKey}_finished`);
+            localStorage.removeItem(`seb_student_${activeStudent.id}_quiz_${qKey}_started`);
+            localStorage.removeItem(`seb_student_${activeStudent.id}_quiz_${qKey}_end_timestamp`);
+          } catch {}
+        }
+
+        const isTaken = Boolean(hasGradeRecorded);
         return !isTaken;
       });
 
@@ -9274,7 +9394,22 @@ export default function App() {
                                     type="button"
                                     onClick={() => {
                                       const qKey = quiz.id || quiz.title;
-                                      const isSameQuiz = localStorage.getItem(`seb_student_${studentSelectedId}_quiz_${qKey}_started`) === "true" && localStorage.getItem(`seb_student_${studentSelectedId}_quiz_${qKey}_finished`) !== "true";
+                                      const activeStudentObj = students.find((s) => s.id === studentSelectedId);
+                                      const hasResultInFirestore = (activeStudentObj?.detailedGrades || []).some(
+                                        (g) => g.quizTitle === quiz.title
+                                      );
+
+                                      const savedEndStr = localStorage.getItem(`seb_student_${studentSelectedId}_quiz_${qKey}_end_timestamp`);
+                                      const isExpired = savedEndStr ? parseInt(savedEndStr, 10) <= Date.now() : false;
+                                      const isFinishedLocal = localStorage.getItem(`seb_student_${studentSelectedId}_quiz_${qKey}_finished`) === "true";
+
+                                      // Resume only if student actually was in the middle of this quiz without submitting,
+                                      // timer has not expired, and there is no finished state or completed grade!
+                                      const isSameQuiz =
+                                        !hasResultInFirestore &&
+                                        !isFinishedLocal &&
+                                        !isExpired &&
+                                        localStorage.getItem(`seb_student_${studentSelectedId}_quiz_${qKey}_started`) === "true";
 
                                       const enterQuizAction = () => {
                                         if (isSameQuiz) {
@@ -9300,7 +9435,7 @@ export default function App() {
                                         }
                                         
                                         if (isSameQuiz) {
-                                          // Resume
+                                          // Resume ongoing attempt
                                           const savedEnd = localStorage.getItem(`seb_student_${studentSelectedId}_quiz_${qKey}_end_timestamp`);
                                           if (savedEnd) {
                                             const end = parseInt(savedEnd, 10);
@@ -9324,7 +9459,7 @@ export default function App() {
                                           const savedIdx = localStorage.getItem(`seb_student_${studentSelectedId}_quiz_${qKey}_question_idx`);
                                           setCurrentStudentQuestionIdx(savedIdx ? parseInt(savedIdx, 10) : 0);
                                         } else {
-                                          // Brand new test start!
+                                          // Brand new test start or retake after teacher deleted result!
                                           const examDurationSeconds = quiz.durationMinutes === 9999 ? 999999 : quiz.durationMinutes * 60;
                                           const end = Date.now() + (examDurationSeconds * 1000);
                                           
@@ -9336,6 +9471,25 @@ export default function App() {
                                           localStorage.setItem(`seb_student_${studentSelectedId}_quiz_${qKey}_timer`, examDurationSeconds.toString());
                                           localStorage.setItem(`seb_student_${studentSelectedId}_quiz_${qKey}_answers`, JSON.stringify({}));
                                           localStorage.setItem(`seb_student_${studentSelectedId}_quiz_${qKey}_question_idx`, "0");
+
+                                          // Clean up stale previous attempt scores and proctoring locks
+                                          try {
+                                            localStorage.removeItem(`seb_student_${studentSelectedId}_quiz_${qKey}_score`);
+                                            localStorage.removeItem(`seb_student_${studentSelectedId}_quiz_${qKey}_totalPoints`);
+                                            localStorage.removeItem(`seb_student_${studentSelectedId}_quiz_${qKey}_percentage`);
+                                            localStorage.removeItem(`seb_student_${studentSelectedId}_quiz_${qKey}_detailedResults`);
+                                            localStorage.removeItem(`seb_student_${studentSelectedId}_quiz_finished`);
+                                            localStorage.removeItem(`seb_exam_proctoring_${quiz.id}_${studentSelectedId}`);
+                                            localStorage.removeItem(`seb_exam_proctoring_${quiz.title}_${studentSelectedId}`);
+                                          } catch {}
+
+                                          // Also remove any stale proctoring record in Firestore to start 100% clean
+                                          try {
+                                            deleteDoc(doc(db, "exam_proctoring", `${quiz.id}_${studentSelectedId}`));
+                                          } catch {}
+                                          try {
+                                            deleteDoc(doc(db, "exam_proctoring", `${quiz.title}_${studentSelectedId}`));
+                                          } catch {}
                                           
                                           setQuizTimer(examDurationSeconds);
                                           setQuizAnswers({});
@@ -9841,10 +9995,27 @@ export default function App() {
           : `${actMins < 10 ? "0" : ""}${actMins}:${actSecs < 10 ? "0" : ""}${actSecs}`;
 
       return (
-        <div
-          className="min-h-screen bg-slate-50 flex flex-col text-slate-800 pb-20 justify-start"
-          dir="rtl"
+        <ExamSecurityGuard
+          quizId={studentQuiz.id || "active_quiz"}
+          quizTitle={studentQuiz.title}
+          studentId={studentSelectedId || "student_guest"}
+          studentName={studentName}
+          gradeClass={studentClass || ""}
+          teacherId={studentQuiz.teacherId || studentPortalTeacherId}
+          enableAntiCheat={studentQuiz.enableAntiCheat !== false}
+          maxViolationsAllowed={studentQuiz.maxViolationsAllowed || 3}
+          currentQuestionIdx={currentStudentQuestionIdx}
+          totalQuestions={totalCount}
+          answeredQuestions={answeredCount}
+          onAutoSubmitDueToViolations={(reason) => {
+            triggerToast(reason, "error");
+            handleStudentSubmitQuiz(true);
+          }}
         >
+          <div
+            className="min-h-screen bg-slate-50 flex flex-col text-slate-800 pb-20 justify-start select-none"
+            dir="rtl"
+          >
           {/* Ongoing Header Sticky Top */}
           <header className="sticky top-0 z-40 bg-white border-b border-slate-200 shadow-sm px-6 py-4">
             <div className="max-w-4xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4 pb-3 border-b border-slate-100 mb-3">
@@ -10344,6 +10515,7 @@ export default function App() {
             )}
           </AnimatePresence>
         </div>
+        </ExamSecurityGuard>
       );
     }
 
@@ -11555,15 +11727,30 @@ export default function App() {
                     </p>
                   </div>
 
-                  {/* Yellow Create/Build New Button from screenshot */}
-                  <button
-                    type="button"
-                    onClick={() => setShowQuizCreationModal(true)}
-                    className="w-full sm:w-auto bg-[#f4be1c] hover:bg-[#ffca28] text-[#0f172a] font-extrabold text-sm px-7 py-3.5 rounded-2xl transform hover:-translate-y-1 hover:scale-[1.05] hover:shadow-xl hover:shadow-amber-400/30 active:scale-[0.96] transition-all duration-200 ease-out flex items-center justify-center gap-2 cursor-pointer shrink-0"
-                  >
-                    <PlusCircle className="w-5 h-5 text-[#0f172a]" />
-                    <span>إنشاء اختبار</span>
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
+                    {/* Live Proctoring Monitor Button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProctoringSelectedQuiz(null);
+                        setProctoringModalOpen(true);
+                      }}
+                      className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs sm:text-sm px-5 py-3.5 rounded-2xl transform hover:-translate-y-0.5 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer border border-slate-700 shadow-md shrink-0"
+                    >
+                      <ShieldAlert className="w-4 h-4 text-amber-400 animate-pulse" />
+                      <span>المراقبة الحية بالمعمل 🖥️</span>
+                    </button>
+
+                    {/* Yellow Create/Build New Button from screenshot */}
+                    <button
+                      type="button"
+                      onClick={() => setShowQuizCreationModal(true)}
+                      className="w-full sm:w-auto bg-[#f4be1c] hover:bg-[#ffca28] text-[#0f172a] font-extrabold text-sm px-7 py-3.5 rounded-2xl transform hover:-translate-y-1 hover:scale-[1.05] hover:shadow-xl hover:shadow-amber-400/30 active:scale-[0.96] transition-all duration-200 ease-out flex items-center justify-center gap-2 cursor-pointer shrink-0"
+                    >
+                      <PlusCircle className="w-5 h-5 text-[#0f172a]" />
+                      <span>إنشاء اختبار</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Compact Search & Filters Row to fully preserve search feature */}
@@ -11778,6 +11965,21 @@ export default function App() {
                                       <span>استعراض التفاصيل</span>
                                     </button>
 
+                                    {/* Live Proctoring Monitor */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setActiveMenuQuizId(null);
+                                        setProctoringSelectedQuiz(quiz);
+                                        setProctoringModalOpen(true);
+                                      }}
+                                      className="w-full text-right px-4 py-2 hover:bg-indigo-50 text-indigo-700 text-xs font-bold transition flex items-center gap-2 border-t border-slate-100"
+                                    >
+                                      <ShieldAlert className="w-3.5 h-3.5 text-indigo-600 animate-pulse" />
+                                      <span>مراقبة المعمل الحية 🛡️</span>
+                                    </button>
+
                                     {/* Delete Quiz */}
                                     <button
                                       type="button"
@@ -11913,7 +12115,7 @@ export default function App() {
                             )}
 
                             {/* Card Buttons Divider & Content perfectly styled */}
-                            <div className="pt-2 mt-2 border-t border-slate-100 flex items-center">
+                            <div className="pt-2 mt-2 border-t border-slate-100 flex items-center gap-1.5">
                               {/* Toggle Activation Button */}
                               <button
                                 type="button"
@@ -11921,7 +12123,7 @@ export default function App() {
                                   e.stopPropagation();
                                   handleToggleQuizStatus(quiz.id);
                                 }}
-                                className={`w-full font-bold py-1 px-2 rounded-lg flex items-center justify-center gap-1 text-[10px] transition duration-150 cursor-pointer shadow-3xs active:scale-[0.98] ${
+                                className={`flex-1 font-bold py-1.5 px-2 rounded-lg flex items-center justify-center gap-1 text-[10px] transition duration-150 cursor-pointer shadow-3xs active:scale-[0.98] ${
                                   quiz.status === "active"
                                     ? "bg-red-800 hover:bg-red-900 text-white border border-red-900"
                                     : "bg-emerald-800 hover:bg-emerald-900 text-white border border-emerald-900"
@@ -11939,6 +12141,21 @@ export default function App() {
                                     <span>تفعيل</span>
                                   </>
                                 )}
+                              </button>
+
+                              {/* Proctoring Button */}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setProctoringSelectedQuiz(quiz);
+                                  setProctoringModalOpen(true);
+                                }}
+                                className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-[10px] font-black transition flex items-center gap-1 cursor-pointer shadow-3xs shrink-0"
+                                title="شاشة المراقبة اللحظية لمنع الغش بالمعمل"
+                              >
+                                <ShieldAlert className="w-3 h-3 text-indigo-600 animate-pulse" />
+                                <span>مراقبة 🛡️</span>
                               </button>
                             </div>
                           </div>
@@ -12198,6 +12415,21 @@ export default function App() {
                                         >
                                           <Eye className="w-3.5 h-3.5 text-indigo-600" />
                                           <span>استعراض التفاصيل</span>
+                                        </button>
+
+                                        {/* Live Proctoring Monitor */}
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setActiveMenuQuizId(null);
+                                            setProctoringSelectedQuiz(quiz);
+                                            setProctoringModalOpen(true);
+                                          }}
+                                          className="w-full text-right px-4 py-2 hover:bg-indigo-50 text-indigo-700 text-xs font-bold transition flex items-center gap-2 border-t border-slate-100"
+                                        >
+                                          <ShieldAlert className="w-3.5 h-3.5 text-indigo-600 animate-pulse" />
+                                          <span>مراقبة المعمل الحية 🛡️</span>
                                         </button>
 
                                         <button
@@ -13700,6 +13932,85 @@ export default function App() {
                                   </span>
                                 </div>
                               )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Anti-Cheat & Lab Security Settings Card */}
+                      <div className="flex flex-col p-4 bg-indigo-50/40 hover:bg-indigo-50/60 border border-indigo-200/80 rounded-2xl transition-all duration-200 space-y-3">
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="flex items-center gap-4 flex-1">
+                            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-indigo-100/70 text-indigo-700 border border-indigo-200 shrink-0">
+                              <ShieldAlert className="w-5.5 h-5.5 text-indigo-600 animate-pulse" />
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-extrabold text-sm text-slate-850 block">
+                                  نظام حظر الغش والمراقبة الحية بالمعمل (Anti-Cheat Guard)
+                                </span>
+                                <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black border border-emerald-200">
+                                  موصى به للمعمل 🛡️
+                                </span>
+                              </div>
+                              <span className="text-xs text-slate-500 block mt-0.5">
+                                إلزام وضع ملء الشاشة، حظر فتح التبويبات والنسخ، مع بث حالة الطلاب اللحظية لشاشة المعلم.
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Toggle Switch */}
+                          <button
+                            type="button"
+                            onClick={() => setBuilderEnableAntiCheat(!builderEnableAntiCheat)}
+                            className={`w-11 h-6 rounded-full p-0.5 transition-colors duration-200 cursor-pointer flex items-center shrink-0 ${
+                              builderEnableAntiCheat
+                                ? "bg-indigo-600 justify-end"
+                                : "bg-slate-300 justify-start"
+                            }`}
+                            title={builderEnableAntiCheat ? "تعطيل نظام الحماية" : "تفعيل نظام الحماية"}
+                          >
+                            <span className="w-5 h-5 rounded-full bg-white shadow-md block transition-transform" />
+                          </button>
+                        </div>
+
+                        {builderEnableAntiCheat && (
+                          <div className="pt-3 border-t border-indigo-100 space-y-3 animate-fadeIn text-xs">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              {/* Strikes limit */}
+                              <div className="bg-white p-3 rounded-xl border border-indigo-100 space-y-1.5">
+                                <label className="text-[11px] font-black text-slate-800 block">
+                                  الحد الأقصى لإنذارات مغادرة الشاشة قبل التسليم التلقائي:
+                                </label>
+                                <div className="flex items-center gap-2">
+                                  {[1, 2, 3, 5].map((count) => (
+                                    <button
+                                      key={count}
+                                      type="button"
+                                      onClick={() => setBuilderMaxViolations(count)}
+                                      className={`px-3 py-1.5 rounded-lg text-xs font-black transition border ${
+                                        builderMaxViolations === count
+                                          ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
+                                          : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
+                                      }`}
+                                    >
+                                      {count} {count === 1 ? "إنذار" : "إنذارات"}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+
+                              {/* Features summary badge */}
+                              <div className="bg-white p-3 rounded-xl border border-indigo-100 space-y-1.5 flex flex-col justify-center text-[11px] text-slate-600 font-semibold">
+                                <div className="flex items-center gap-1.5 text-emerald-700 font-bold">
+                                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                  <span>ملء الشاشة إلزامي + حظر النسخ والقوائم المنبثقة</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 text-indigo-700 font-bold">
+                                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                  <span>رصد فوري لفتح التبويبات وبث حي لشاشة المعلم</span>
+                                </div>
+                              </div>
                             </div>
                           </div>
                         )}
@@ -19777,6 +20088,18 @@ export default function App() {
           student={viewingOfficialCertificateStudent}
         />
       )}
+
+      {/* Live Exam Proctoring Monitor Modal for Teacher */}
+      <TeacherExamLiveMonitorModal
+        isOpen={proctoringModalOpen}
+        onClose={() => {
+          setProctoringModalOpen(false);
+          setProctoringSelectedQuiz(null);
+        }}
+        quiz={proctoringSelectedQuiz}
+        teacherId={currentUser?.uid}
+        triggerToast={triggerToast}
+      />
 
     </div>
   );

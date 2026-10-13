@@ -31,6 +31,37 @@ export interface Quiz {
   enableSubmitLock?: boolean;
   submitLockMinutesBeforeEnd?: number;
   targetStudentIds?: string[] | null;
+  enableAntiCheat?: boolean;
+  maxViolationsAllowed?: number;
+  requireFullscreen?: boolean;
+  preventCopyPaste?: boolean;
+}
+
+export interface ProctoringViolation {
+  id: string;
+  type: 'tab_switch' | 'fullscreen_exit' | 'blur' | 'copy_attempt' | 'devtools';
+  message: string;
+  timestamp: string;
+}
+
+export interface LiveStudentSession {
+  id: string; // `${quizId}_${studentId}`
+  quizId: string;
+  quizTitle: string;
+  studentId: string;
+  studentName: string;
+  gradeClass: string;
+  teacherId?: string;
+  status: 'active' | 'warning' | 'blurred' | 'tab_left' | 'submitted' | 'disqualified';
+  isFullscreen: boolean;
+  currentQuestionIdx: number;
+  totalQuestions: number;
+  answeredQuestions: number;
+  violationsCount: number;
+  maxViolations: number;
+  violations: ProctoringViolation[];
+  lastHeartbeat: number;
+  startedAt: string;
 }
 
 export interface StudentGrade {

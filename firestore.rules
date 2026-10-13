@@ -71,5 +71,10 @@ service cloud.firestore {
     match /standalone_results/{submissionId} {
       allow read, write: if true;
     }
+
+    // Live Exam Proctoring for Computer Labs
+    match /exam_proctoring/{sessionId} {
+      allow read, write: if true;
+    }
   }
 }

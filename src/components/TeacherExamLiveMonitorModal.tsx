@@ -21,6 +21,10 @@ import {
   Eye,
   CheckCircle2,
   Terminal,
+  LayoutGrid,
+  List,
+  Layers,
+  GraduationCap,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -54,6 +58,9 @@ export const TeacherExamLiveMonitorModal: React.FC<TeacherExamLiveMonitorModalPr
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [selectedGradeClass, setSelectedGradeClass] = useState<string>("all");
+  const [groupByGradeClass, setGroupByGradeClass] = useState<boolean>(false);
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [selectedStudentForLogs, setSelectedStudentForLogs] = useState<LiveStudentSession | null>(null);
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"students" | "kiosk_setup">("students");
@@ -219,6 +226,18 @@ export const TeacherExamLiveMonitorModal: React.FC<TeacherExamLiveMonitorModalPr
     } catch {}
   };
 
+  // Unique Grade & Classes available across sessions
+  const availableGradeClasses = useMemo(() => {
+    const set = new Set<string>();
+    sessions.forEach((s) => {
+      const gc = s.gradeClass?.trim();
+      if (gc) {
+        set.add(gc);
+      }
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "ar"));
+  }, [sessions]);
+
   // Filtered Students
   const filteredSessions = useMemo(() => {
     return sessions.filter((s) => {
@@ -232,9 +251,25 @@ export const TeacherExamLiveMonitorModal: React.FC<TeacherExamLiveMonitorModalPr
       if (filterStatus === "warning") return s.status === "warning" || s.violationsCount > 0;
       if (filterStatus === "disqualified") return s.status === "disqualified";
 
+      if (selectedGradeClass !== "all") {
+        const studentGC = (s.gradeClass || "").trim();
+        if (studentGC !== selectedGradeClass) return false;
+      }
+
       return true;
     });
-  }, [sessions, searchQuery, filterStatus]);
+  }, [sessions, searchQuery, filterStatus, selectedGradeClass]);
+
+  // Grouped Students by Grade & Class
+  const groupedSessions = useMemo(() => {
+    const map: Record<string, LiveStudentSession[]> = {};
+    filteredSessions.forEach((s) => {
+      const key = (s.gradeClass && s.gradeClass.trim()) || "غير محدد الصف والفصل";
+      if (!map[key]) map[key] = [];
+      map[key].push(s);
+    });
+    return map;
+  }, [filteredSessions]);
 
   // Statistics
   const totalCount = sessions.length;
@@ -285,6 +320,288 @@ exit
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
     triggerToast("تم تحميل ملف التشغيل التلقائي بنجاح (Safe-Exam-Lab-Launcher.bat) 💾", "success");
+  };
+
+  const renderStudentCard = (session: LiveStudentSession) => {
+    const isWarned = session.violationsCount > 0;
+    const isDisq = session.status === "disqualified";
+    const isFs = session.isFullscreen;
+
+    return (
+      <div
+        key={session.id}
+        className={`bg-white rounded-2xl border p-4 shadow-xs transition-all relative flex flex-col justify-between space-y-3.5 ${
+          isDisq
+            ? "border-rose-400 bg-rose-50/30"
+            : isWarned
+            ? "border-amber-300 bg-amber-50/20"
+            : "border-slate-200 hover:border-indigo-300"
+        }`}
+      >
+        {/* Top Bar of Student Card */}
+        <div className="flex items-start justify-between gap-2">
+          <div className="space-y-0.5 min-w-0">
+            <h4 className="font-black text-sm text-slate-900 truncate">
+              {session.studentName}
+            </h4>
+            <span className="text-[11px] text-slate-500 font-bold block truncate">
+              {session.gradeClass || "طالب اختبار"}
+            </span>
+          </div>
+
+          {/* Status Tag */}
+          <div>
+            {isDisq ? (
+              <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-rose-100 text-rose-800 border border-rose-200 flex items-center gap-1">
+                <UserX className="w-3 h-3 text-rose-600" />
+                <span>مستبعد 🛑</span>
+              </span>
+            ) : isWarned ? (
+              <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-200 flex items-center gap-1 animate-pulse">
+                <AlertTriangle className="w-3 h-3 text-amber-600" />
+                <span>{session.violationsCount} إنذارات ⚠️</span>
+              </span>
+            ) : isFs ? (
+              <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+                <span>ملتزم 🟢</span>
+              </span>
+            ) : (
+              <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-slate-100 text-slate-700 border border-slate-200 flex items-center gap-1">
+                <span>خارج التكبير</span>
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Middle Details: Progress & Fullscreen indicator */}
+        <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-150 space-y-2 text-xs font-bold text-slate-700">
+          <div className="flex items-center justify-between">
+            <span className="text-slate-500 text-[11px]">موقع الطالب:</span>
+            <span className="font-sans font-black text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
+              السؤال {(session.currentQuestionIdx || 0) + 1} من {session.totalQuestions || "—"}
+            </span>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <span className="text-slate-500 text-[11px]">وضع ملء الشاشة:</span>
+            <span
+              className={`px-2 py-0.5 rounded-md text-[10px] font-black flex items-center gap-1 ${
+                isFs
+                  ? "bg-emerald-100 text-emerald-800"
+                  : "bg-rose-100 text-rose-800 animate-pulse"
+              }`}
+            >
+              <Maximize2 className="w-3 h-3" />
+              <span>{isFs ? "مفعل (داخل الاختبار)" : "معطل / خارج المتصفح"}</span>
+            </span>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <span className="text-slate-500 text-[11px]">سجل الإنذارات:</span>
+            <span
+              className={`font-sans font-black text-xs ${
+                session.violationsCount === 0
+                  ? "text-emerald-700"
+                  : "text-rose-700 font-extrabold"
+              }`}
+            >
+              {session.violationsCount} من {session.maxViolations || 3}
+            </span>
+          </div>
+        </div>
+
+        {/* Card Action Buttons */}
+        <div className="flex items-center gap-1.5 pt-1 border-t border-slate-100">
+          <button
+            type="button"
+            onClick={() => setSelectedStudentForLogs(session)}
+            className="flex-1 py-1.5 px-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-black rounded-lg transition flex items-center justify-center gap-1 cursor-pointer"
+            title="عرض سجل مخالفات الطالب"
+          >
+            <Eye className="w-3 h-3 text-indigo-600" />
+            <span>السجل ({session.violations?.length || 0})</span>
+          </button>
+
+          {session.violationsCount > 0 && (
+            <button
+              type="button"
+              onClick={() => handleResetStrikes(session)}
+              className="py-1.5 px-2 bg-amber-50 hover:bg-amber-100 text-amber-800 text-[11px] font-black rounded-lg border border-amber-200 transition flex items-center justify-center gap-1 cursor-pointer"
+              title="إعادة ضبط الإنذارات وإعطاء فرصة"
+            >
+              <RotateCcw className="w-3 h-3 text-amber-600" />
+              <span>عفو</span>
+            </button>
+          )}
+
+          {!isDisq && (
+            <button
+              type="button"
+              onClick={() => handleDisqualifyStudent(session)}
+              className="py-1.5 px-2 bg-rose-50 hover:bg-rose-100 text-rose-700 text-[11px] font-black rounded-lg border border-rose-200 transition flex items-center justify-center gap-1 cursor-pointer"
+              title="استبعاد الطالب وإنهاء الاختبار فوراً"
+            >
+              <UserX className="w-3 h-3" />
+              <span>استبعاد</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => handleDeleteSession(session)}
+            className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+            title="مسح من القائمة"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderStudentRow = (session: LiveStudentSession) => {
+    const isWarned = session.violationsCount > 0;
+    const isDisq = session.status === "disqualified";
+    const isFs = session.isFullscreen;
+
+    return (
+      <tr
+        key={session.id}
+        className={`border-b transition-colors ${
+          isDisq
+            ? "bg-rose-50/50 hover:bg-rose-50/80 border-rose-200"
+            : isWarned
+            ? "bg-amber-50/40 hover:bg-amber-50/80 border-amber-200"
+            : "bg-white hover:bg-slate-50/80 border-slate-150"
+        }`}
+      >
+        <td className="px-4 py-3">
+          <div className="flex items-center gap-2.5">
+            <div
+              className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-xs shrink-0 ${
+                isDisq
+                  ? "bg-rose-100 text-rose-800 border border-rose-200"
+                  : isWarned
+                  ? "bg-amber-100 text-amber-900 border border-amber-200"
+                  : "bg-indigo-50 text-indigo-700 border border-indigo-100"
+              }`}
+            >
+              {session.studentName.trim().charAt(0) || "ط"}
+            </div>
+            <div className="min-w-0">
+              <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
+                {session.studentName}
+              </h4>
+              <span className="text-[11px] text-slate-500 font-bold block truncate">
+                {session.gradeClass || "غير محدد الصف/الفصل"}
+              </span>
+            </div>
+          </div>
+        </td>
+
+        <td className="px-4 py-3 whitespace-nowrap">
+          {isDisq ? (
+            <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-rose-100 text-rose-800 border border-rose-200 inline-flex items-center gap-1">
+              <UserX className="w-3 h-3 text-rose-600" />
+              <span>مستبعد 🛑</span>
+            </span>
+          ) : isWarned ? (
+            <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-200 inline-flex items-center gap-1 animate-pulse">
+              <AlertTriangle className="w-3 h-3 text-amber-600" />
+              <span>{session.violationsCount} إنذارات ⚠️</span>
+            </span>
+          ) : isFs ? (
+            <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+              <span>ملتزم 🟢</span>
+            </span>
+          ) : (
+            <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-slate-100 text-slate-700 border border-slate-200 inline-flex items-center gap-1">
+              <span>خارج التكبير</span>
+            </span>
+          )}
+        </td>
+
+        <td className="px-4 py-3 whitespace-nowrap">
+          <span
+            className={`px-2.5 py-1 rounded-lg text-[10px] font-black inline-flex items-center gap-1 ${
+              isFs
+                ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                : "bg-rose-50 text-rose-800 border border-rose-200 animate-pulse"
+            }`}
+          >
+            <Maximize2 className="w-3 h-3" />
+            <span>{isFs ? "ملء الشاشة نشط" : "خارج المتصفح"}</span>
+          </span>
+        </td>
+
+        <td className="px-4 py-3 whitespace-nowrap">
+          <span className="font-sans font-bold text-xs text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-100 inline-block">
+            السؤال {(session.currentQuestionIdx || 0) + 1} من {session.totalQuestions || "—"}
+          </span>
+        </td>
+
+        <td className="px-4 py-3 whitespace-nowrap">
+          <span
+            className={`font-sans font-black text-xs ${
+              session.violationsCount === 0
+                ? "text-emerald-700"
+                : "text-rose-700 font-extrabold"
+            }`}
+          >
+            {session.violationsCount} من {session.maxViolations || 3}
+          </span>
+        </td>
+
+        <td className="px-4 py-3 whitespace-nowrap text-left">
+          <div className="flex items-center justify-end gap-1.5">
+            <button
+              type="button"
+              onClick={() => setSelectedStudentForLogs(session)}
+              className="py-1 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-black rounded-lg transition flex items-center gap-1 cursor-pointer"
+              title="عرض سجل مخالفات الطالب"
+            >
+              <Eye className="w-3 h-3 text-indigo-600" />
+              <span>السجل ({session.violations?.length || 0})</span>
+            </button>
+
+            {session.violationsCount > 0 && (
+              <button
+                type="button"
+                onClick={() => handleResetStrikes(session)}
+                className="py-1 px-2.5 bg-amber-50 hover:bg-amber-100 text-amber-800 text-[11px] font-black rounded-lg border border-amber-200 transition flex items-center gap-1 cursor-pointer"
+                title="إعادة ضبط الإنذارات للطالب"
+              >
+                <RotateCcw className="w-3 h-3 text-amber-600" />
+                <span>عفو</span>
+              </button>
+            )}
+
+            {!isDisq && (
+              <button
+                type="button"
+                onClick={() => handleDisqualifyStudent(session)}
+                className="py-1 px-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-[11px] font-black rounded-lg border border-rose-200 transition flex items-center gap-1 cursor-pointer"
+                title="استبعاد الطالب"
+              >
+                <UserX className="w-3 h-3" />
+                <span>استبعاد</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => handleDeleteSession(session)}
+              className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+              title="مسح من القائمة"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </td>
+      </tr>
+    );
   };
 
   if (!isOpen) return null;
@@ -428,34 +745,102 @@ exit
               </div>
             </div>
 
-            {/* Filter and Search Bar */}
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-50 p-3 rounded-2xl border border-slate-200">
-              <div className="relative w-full sm:w-80">
+            {/* Filter and Controls Bar */}
+            <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 bg-slate-50 p-3 sm:p-4 rounded-2xl border border-slate-200">
+              {/* Search Box */}
+              <div className="relative flex-1 min-w-[220px]">
                 <Search className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
                   type="text"
-                  placeholder="البحث باسم الطالب أو الفصل..."
+                  placeholder="البحث باسم الطالب أو الصف أو الفصل..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-white border border-slate-200 rounded-xl pr-9 pl-4 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full bg-white border border-slate-200 rounded-xl pr-9 pl-4 py-2 text-xs font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
 
-              <div className="flex items-center gap-2 w-full sm:w-auto">
+              {/* Filter controls row */}
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Status Filter */}
                 <select
                   value={filterStatus}
                   onChange={(e) => setFilterStatus(e.target.value)}
-                  className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer w-full sm:w-auto"
+                  className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                  title="تصفية حسب حالة الالتزام"
                 >
                   <option value="all">كل الحالات ({sessions.length})</option>
                   <option value="active">ملتزمون فقط 🟢</option>
                   <option value="warning">لديهم مخالفات ⚠️</option>
                   <option value="disqualified">مستبعدون 🛑</option>
                 </select>
+
+                {/* Grade & Class Filter (عرض الطلاب بالصف والفصل) */}
+                <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-700">
+                  <GraduationCap className="w-4 h-4 text-indigo-600 shrink-0" />
+                  <select
+                    value={selectedGradeClass}
+                    onChange={(e) => setSelectedGradeClass(e.target.value)}
+                    className="bg-transparent text-xs font-bold text-slate-700 focus:outline-none cursor-pointer max-w-[170px] truncate"
+                    title="تصفية الطلاب حسب الصف والفصل"
+                  >
+                    <option value="all">كل الصفوف والفصول</option>
+                    {availableGradeClasses.map((gc) => (
+                      <option key={gc} value={gc}>
+                        {gc}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Group by Grade & Class toggle */}
+                <button
+                  type="button"
+                  onClick={() => setGroupByGradeClass(!groupByGradeClass)}
+                  className={`px-3 py-2 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 cursor-pointer ${
+                    groupByGradeClass
+                      ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
+                      : "bg-white text-slate-700 border-slate-200 hover:bg-slate-100"
+                  }`}
+                  title="تجميع الطلاب وتقسيمهم حسب الصف والفصل"
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  <span>تجميع بالصف والفصل</span>
+                </button>
+
+                {/* Grid / List View Switcher */}
+                <div className="flex bg-slate-200/90 p-1 rounded-xl border border-slate-300/80 text-xs font-bold shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setViewMode("grid")}
+                    className={`px-3 py-1 rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+                      viewMode === "grid"
+                        ? "bg-white text-indigo-700 shadow-xs font-black"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                    title="عرض شبكة البطاقات"
+                  >
+                    <LayoutGrid className="w-3.5 h-3.5" />
+                    <span>شبكة</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setViewMode("list")}
+                    className={`px-3 py-1 rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+                      viewMode === "list"
+                        ? "bg-white text-indigo-700 shadow-xs font-black"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                    title="عرض على شكل قائمة / جدول"
+                  >
+                    <List className="w-3.5 h-3.5" />
+                    <span>قائمة</span>
+                  </button>
+                </div>
               </div>
             </div>
 
-            {/* Students Grid */}
+            {/* Students Display Section */}
             {filteredSessions.length === 0 ? (
               <div className="py-16 text-center space-y-3 bg-slate-50/50 rounded-3xl border border-dashed border-slate-300">
                 <div className="w-14 h-14 bg-indigo-50 text-indigo-500 rounded-2xl mx-auto flex items-center justify-center">
@@ -463,152 +848,115 @@ exit
                 </div>
                 <h4 className="text-base font-black text-slate-700">لا يوجد طلاب متصلون حالياً في المعمل</h4>
                 <p className="text-xs text-slate-400 font-semibold max-w-md mx-auto">
-                  بمجرد أن يبدأ الطالب فتح الاختبار وتقديم الإجابات، ستظهر بطاقته هنا فورياً مع مؤشر التزامه وحالة شاشته.
+                  {searchQuery || filterStatus !== "all" || selectedGradeClass !== "all"
+                    ? "لا توجد نتائج مطابقة لمعايير البحث والتصفية المحددة."
+                    : "بمجرد أن يبدأ الطالب فتح الاختبار وتقديم الإجابات، ستظهر بياناته هنا فورياً مع مؤشر التزامه وحالة شاشته."}
                 </p>
               </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredSessions.map((session) => {
-                  const isWarned = session.violationsCount > 0;
-                  const isDisq = session.status === "disqualified";
-                  const isFs = session.isFullscreen;
+            ) : groupByGradeClass ? (
+              /* Grouped by Grade & Class */
+              <div className="space-y-6">
+                {Object.entries(groupedSessions).map(([groupTitle, groupItems]) => {
+                  if (groupItems.length === 0) return null;
+                  const groupCompliant = groupItems.filter(
+                    (s) => s.status === "active" && s.isFullscreen && s.violationsCount === 0
+                  ).length;
+                  const groupWarned = groupItems.filter(
+                    (s) => s.violationsCount > 0 && s.status !== "disqualified"
+                  ).length;
+                  const groupDisq = groupItems.filter((s) => s.status === "disqualified").length;
 
                   return (
                     <div
-                      key={session.id}
-                      className={`bg-white rounded-2xl border p-4 shadow-xs transition-all relative flex flex-col justify-between space-y-3.5 ${
-                        isDisq
-                          ? "border-rose-400 bg-rose-50/30"
-                          : isWarned
-                          ? "border-amber-300 bg-amber-50/20"
-                          : "border-slate-200 hover:border-indigo-300"
-                      }`}
+                      key={groupTitle}
+                      className="bg-slate-50/70 border border-slate-200 rounded-3xl p-4 sm:p-5 space-y-4 shadow-xs"
                     >
-                      {/* Top Bar of Student Card */}
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="space-y-0.5 min-w-0">
-                          <h4 className="font-black text-sm text-slate-900 truncate">
-                            {session.studentName}
-                          </h4>
-                          <span className="text-[11px] text-slate-500 font-bold block truncate">
-                            {session.gradeClass || "طالب اختبار"}
-                          </span>
+                      {/* Section Header */}
+                      <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center font-bold shadow-md shadow-indigo-500/20">
+                            <GraduationCap className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h3 className="font-black text-base text-slate-900">{groupTitle}</h3>
+                            <span className="text-xs text-slate-500 font-bold block mt-0.5">
+                              {groupItems.length} طلاب مسجلين في الجلسة الحالية
+                            </span>
+                          </div>
                         </div>
 
-                        {/* Status Tag */}
-                        <div>
-                          {isDisq ? (
-                            <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-rose-100 text-rose-800 border border-rose-200 flex items-center gap-1">
-                              <UserX className="w-3 h-3 text-rose-600" />
-                              <span>مستبعد 🛑</span>
-                            </span>
-                          ) : isWarned ? (
-                            <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-200 flex items-center gap-1 animate-pulse">
+                        {/* Group stats chips */}
+                        <div className="flex flex-wrap items-center gap-2 text-xs font-black">
+                          <span className="px-2.5 py-1 rounded-xl bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                            {groupCompliant} ملتزمون
+                          </span>
+                          {groupWarned > 0 && (
+                            <span className="px-2.5 py-1 rounded-xl bg-amber-100 text-amber-900 border border-amber-200 flex items-center gap-1">
                               <AlertTriangle className="w-3 h-3 text-amber-600" />
-                              <span>{session.violationsCount} إنذارات ⚠️</span>
+                              {groupWarned} إنذارات
                             </span>
-                          ) : isFs ? (
-                            <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
-                              <span>ملتزم 🟢</span>
-                            </span>
-                          ) : (
-                            <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-slate-100 text-slate-700 border border-slate-200 flex items-center gap-1">
-                              <span>خارج التكبير</span>
+                          )}
+                          {groupDisq > 0 && (
+                            <span className="px-2.5 py-1 rounded-xl bg-rose-100 text-rose-800 border border-rose-200 flex items-center gap-1">
+                              <UserX className="w-3 h-3 text-rose-600" />
+                              {groupDisq} مستبعدون
                             </span>
                           )}
                         </div>
                       </div>
 
-                      {/* Middle Details: Progress & Fullscreen indicator */}
-                      <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-150 space-y-2 text-xs font-bold text-slate-700">
-                        <div className="flex items-center justify-between">
-                          <span className="text-slate-500 text-[11px]">موقع الطالب:</span>
-                          <span className="font-sans font-black text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
-                            السؤال {(session.currentQuestionIdx || 0) + 1} من {session.totalQuestions || "—"}
-                          </span>
+                      {/* Content inside group: Grid or List */}
+                      {viewMode === "grid" ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {groupItems.map(renderStudentCard)}
                         </div>
-
-                        <div className="flex items-center justify-between">
-                          <span className="text-slate-500 text-[11px]">وضع ملء الشاشة:</span>
-                          <span
-                            className={`px-2 py-0.5 rounded-md text-[10px] font-black flex items-center gap-1 ${
-                              isFs
-                                ? "bg-emerald-100 text-emerald-800"
-                                : "bg-rose-100 text-rose-800 animate-pulse"
-                            }`}
-                          >
-                            <Maximize2 className="w-3 h-3" />
-                            <span>{isFs ? "مفعل (داخل الاختبار)" : "معطل / خارج المتصفح"}</span>
-                          </span>
+                      ) : (
+                        <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-xs">
+                          <table className="w-full text-right text-xs">
+                            <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 text-[11px] font-black">
+                              <tr>
+                                <th className="px-4 py-3">الطالب والصف</th>
+                                <th className="px-4 py-3">حالة الالتزام</th>
+                                <th className="px-4 py-3">وضع ملء الشاشة</th>
+                                <th className="px-4 py-3">موقع الطالب</th>
+                                <th className="px-4 py-3">سجل المخالفات</th>
+                                <th className="px-4 py-3 text-left">إجراءات المراقبة</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {groupItems.map(renderStudentRow)}
+                            </tbody>
+                          </table>
                         </div>
-
-                        <div className="flex items-center justify-between">
-                          <span className="text-slate-500 text-[11px]">سجل الإنذارات:</span>
-                          <span
-                            className={`font-sans font-black text-xs ${
-                              session.violationsCount === 0
-                                ? "text-emerald-700"
-                                : "text-rose-700 font-extrabold"
-                            }`}
-                          >
-                            {session.violationsCount} من {session.maxViolations || 3}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Card Action Buttons */}
-                      <div className="flex items-center gap-1.5 pt-1 border-t border-slate-100">
-                        {/* View Violations Log */}
-                        <button
-                          type="button"
-                          onClick={() => setSelectedStudentForLogs(session)}
-                          className="flex-1 py-1.5 px-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-black rounded-lg transition flex items-center justify-center gap-1 cursor-pointer"
-                          title="عرض سجل مخالفات الطالب"
-                        >
-                          <Eye className="w-3 h-3 text-indigo-600" />
-                          <span>السجل ({session.violations?.length || 0})</span>
-                        </button>
-
-                        {/* Reset Strikes (Forgive) */}
-                        {session.violationsCount > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => handleResetStrikes(session)}
-                            className="py-1.5 px-2 bg-amber-50 hover:bg-amber-100 text-amber-800 text-[11px] font-black rounded-lg border border-amber-200 transition flex items-center justify-center gap-1 cursor-pointer"
-                            title="إعادة ضبط الإنذارات وإعطاء فرصة"
-                          >
-                            <RotateCcw className="w-3 h-3 text-amber-600" />
-                            <span>عفو</span>
-                          </button>
-                        )}
-
-                        {/* Disqualify student */}
-                        {!isDisq && (
-                          <button
-                            type="button"
-                            onClick={() => handleDisqualifyStudent(session)}
-                            className="py-1.5 px-2 bg-rose-50 hover:bg-rose-100 text-rose-700 text-[11px] font-black rounded-lg border border-rose-200 transition flex items-center justify-center gap-1 cursor-pointer"
-                            title="استبعاد الطالب وإنهاء الاختبار فوراً"
-                          >
-                            <UserX className="w-3 h-3" />
-                            <span>استبعاد</span>
-                          </button>
-                        )}
-
-                        {/* Delete Session */}
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteSession(session)}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-slate-100 transition cursor-pointer"
-                          title="مسح من القائمة"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
+                      )}
                     </div>
                   );
                 })}
+              </div>
+            ) : viewMode === "grid" ? (
+              /* Flat Grid View */
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredSessions.map(renderStudentCard)}
+              </div>
+            ) : (
+              /* Flat List View (عرض على شكل قائمة / جدول) */
+              <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-xs">
+                <table className="w-full text-right text-xs">
+                  <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 text-[11px] font-black">
+                    <tr>
+                      <th className="px-4 py-3">الطالب والصف</th>
+                      <th className="px-4 py-3">حالة الالتزام</th>
+                      <th className="px-4 py-3">وضع ملء الشاشة</th>
+                      <th className="px-4 py-3">موقع الطالب</th>
+                      <th className="px-4 py-3">سجل المخالفات</th>
+                      <th className="px-4 py-3 text-left">إجراءات المراقبة</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredSessions.map(renderStudentRow)}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>

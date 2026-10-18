@@ -62,6 +62,11 @@ export interface LiveStudentSession {
   violations: ProctoringViolation[];
   lastHeartbeat: number;
   startedAt: string;
+  isCompleted?: boolean;
+  score?: number;
+  maxScore?: number;
+  percentage?: number;
+  submittedAt?: number | string;
 }
 
 export interface StudentGrade {

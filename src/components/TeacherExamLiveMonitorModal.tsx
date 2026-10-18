@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   ShieldAlert,
   ShieldCheck,
@@ -37,13 +37,14 @@ import {
   deleteDoc,
 } from "firebase/firestore";
 import { db } from "../firebase";
-import { LiveStudentSession, Quiz } from "../types";
+import { LiveStudentSession, Quiz, Student } from "../types";
 
 interface TeacherExamLiveMonitorModalProps {
   isOpen: boolean;
   onClose: () => void;
   quiz?: Quiz | null;
   teacherId?: string;
+  students?: Student[];
   triggerToast: (msg: string, type: "success" | "error" | "info" | "warning") => void;
 }
 
@@ -52,6 +53,7 @@ export const TeacherExamLiveMonitorModal: React.FC<TeacherExamLiveMonitorModalPr
   onClose,
   quiz,
   teacherId,
+  students,
   triggerToast,
 }) => {
   const [sessions, setSessions] = useState<LiveStudentSession[]>([]);
@@ -65,8 +67,53 @@ export const TeacherExamLiveMonitorModal: React.FC<TeacherExamLiveMonitorModalPr
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"students" | "kiosk_setup">("students");
 
+  const [studentsList, setStudentsList] = useState<Student[]>(students || []);
+  const [standaloneResults, setStandaloneResults] = useState<any[]>([]);
+
   const prevViolationsCountRef = useRef<Record<string, number>>({});
   const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
+
+  // Sync passed students prop
+  useEffect(() => {
+    if (students && students.length > 0) {
+      setStudentsList(students);
+    }
+  }, [students]);
+
+  // Live Firestore subscription for Students collection (to detect recorded grades)
+  useEffect(() => {
+    if (!isOpen) return;
+    try {
+      const unsub = onSnapshot(collection(db, "students"), (snapshot) => {
+        const list: Student[] = [];
+        snapshot.forEach((docSnap) => {
+          list.push({ ...docSnap.data(), id: docSnap.id } as Student);
+        });
+        setStudentsList(list);
+      });
+      return () => unsub();
+    } catch (err) {
+      console.warn("Could not subscribe to students in proctoring modal:", err);
+    }
+  }, [isOpen]);
+
+  // Live Firestore subscription for Standalone results
+  useEffect(() => {
+    if (!isOpen) return;
+    try {
+      const q = quiz?.id
+        ? query(collection(db, "standalone_results"), where("quizId", "==", quiz.id))
+        : collection(db, "standalone_results");
+      const unsub = onSnapshot(q, (snapshot) => {
+        const list: any[] = [];
+        snapshot.forEach((docSnap) => {
+          list.push({ ...docSnap.data(), id: docSnap.id });
+        });
+        setStandaloneResults(list);
+      });
+      return () => unsub();
+    } catch {}
+  }, [isOpen, quiz?.id]);
 
   // Play Alert Beep for Teacher when a student violates
   const playAlertSound = () => {
@@ -238,6 +285,83 @@ export const TeacherExamLiveMonitorModal: React.FC<TeacherExamLiveMonitorModalPr
     return Array.from(set).sort((a, b) => a.localeCompare(b, "ar"));
   }, [sessions]);
 
+  // Check if a student has completed the quiz and get their recorded score
+  const getStudentCompletionData = useCallback(
+    (session: LiveStudentSession) => {
+      // 1. Direct fields on session from exam_proctoring document
+      if (
+        session.isCompleted ||
+        session.status === "submitted" ||
+        session.score !== undefined
+      ) {
+        const s = Number(session.score) || 0;
+        const ms = Number(session.maxScore) || session.totalQuestions || 10;
+        const pct = session.percentage ?? Math.round((s / (ms || 1)) * 100);
+        return {
+          isCompleted: true,
+          score: s,
+          maxScore: ms,
+          percentage: pct,
+        };
+      }
+
+      // 2. Check matched student in studentsList (detailedGrades recorded for this student)
+      const normName = session.studentName?.trim().toLowerCase();
+      const student = studentsList.find(
+        (st) =>
+          st.id === session.studentId ||
+          (st.name && normName && st.name.trim().toLowerCase() === normName)
+      );
+
+      if (student && Array.isArray(student.detailedGrades)) {
+        const grade = student.detailedGrades.find((g: any) => {
+          if (quiz && g.quizId && (g.quizId === quiz.id || g.quizId === (quiz as any).title)) return true;
+          if (quiz && g.quizTitle && quiz.title && g.quizTitle.trim() === quiz.title.trim()) return true;
+          if (session.quizId && g.quizId === session.quizId) return true;
+          if (session.quizTitle && g.quizTitle && g.quizTitle.trim() === session.quizTitle.trim()) return true;
+          return false;
+        });
+
+        if (grade) {
+          const s = Number(grade.score) || 0;
+          const ms = Number(grade.maxScore) || session.totalQuestions || 10;
+          const pct = Math.round((s / (ms || 1)) * 100);
+          return {
+            isCompleted: true,
+            score: s,
+            maxScore: ms,
+            percentage: pct,
+          };
+        }
+      }
+
+      // 3. Check standalone_results
+      const standalone = standaloneResults.find(
+        (sub) =>
+          (sub.studentId === session.studentId ||
+            (sub.studentName && normName && sub.studentName.trim().toLowerCase() === normName)) &&
+          ((quiz && (sub.quizId === quiz.id || sub.quizTitle === quiz.title)) ||
+            (session.quizId && sub.quizId === session.quizId) ||
+            (session.quizTitle && sub.quizTitle === session.quizTitle))
+      );
+
+      if (standalone) {
+        const s = Number(standalone.score) || 0;
+        const ms = Number(standalone.maxScore) || session.totalQuestions || 10;
+        const pct = standalone.percentage ?? Math.round((s / (ms || 1)) * 100);
+        return {
+          isCompleted: true,
+          score: s,
+          maxScore: ms,
+          percentage: pct,
+        };
+      }
+
+      return { isCompleted: false, score: 0, maxScore: 0, percentage: 0 };
+    },
+    [studentsList, standaloneResults, quiz]
+  );
+
   // Filtered Students
   const filteredSessions = useMemo(() => {
     return sessions.filter((s) => {
@@ -247,8 +371,11 @@ export const TeacherExamLiveMonitorModal: React.FC<TeacherExamLiveMonitorModalPr
 
       if (!matchesSearch) return false;
 
-      if (filterStatus === "active") return s.status === "active";
-      if (filterStatus === "warning") return s.status === "warning" || s.violationsCount > 0;
+      const comp = getStudentCompletionData(s);
+
+      if (filterStatus === "completed") return comp.isCompleted;
+      if (filterStatus === "active") return s.status === "active" && !comp.isCompleted;
+      if (filterStatus === "warning") return (s.status === "warning" || s.violationsCount > 0) && s.status !== "disqualified";
       if (filterStatus === "disqualified") return s.status === "disqualified";
 
       if (selectedGradeClass !== "all") {
@@ -258,7 +385,7 @@ export const TeacherExamLiveMonitorModal: React.FC<TeacherExamLiveMonitorModalPr
 
       return true;
     });
-  }, [sessions, searchQuery, filterStatus, selectedGradeClass]);
+  }, [sessions, searchQuery, filterStatus, selectedGradeClass, getStudentCompletionData]);
 
   // Grouped Students by Grade & Class
   const groupedSessions = useMemo(() => {
@@ -273,12 +400,19 @@ export const TeacherExamLiveMonitorModal: React.FC<TeacherExamLiveMonitorModalPr
 
   // Statistics
   const totalCount = sessions.length;
-  const compliantCount = sessions.filter(
-    (s) => s.status === "active" && s.isFullscreen && s.violationsCount === 0
-  ).length;
-  const warningCount = sessions.filter(
-    (s) => s.violationsCount > 0 && s.status !== "disqualified"
-  ).length;
+  const completedCount = useMemo(() => {
+    return sessions.filter((s) => getStudentCompletionData(s).isCompleted).length;
+  }, [sessions, getStudentCompletionData]);
+  const compliantCount = useMemo(() => {
+    return sessions.filter(
+      (s) => s.status === "active" && s.isFullscreen && s.violationsCount === 0 && !getStudentCompletionData(s).isCompleted
+    ).length;
+  }, [sessions, getStudentCompletionData]);
+  const warningCount = useMemo(() => {
+    return sessions.filter(
+      (s) => s.violationsCount > 0 && s.status !== "disqualified" && !getStudentCompletionData(s).isCompleted
+    ).length;
+  }, [sessions, getStudentCompletionData]);
   const disqualifiedCount = sessions.filter((s) => s.status === "disqualified").length;
 
   // Real Applet Platform URL for Kiosk shortcut
@@ -323,6 +457,7 @@ exit
   };
 
   const renderStudentCard = (session: LiveStudentSession) => {
+    const comp = getStudentCompletionData(session);
     const isWarned = session.violationsCount > 0;
     const isDisq = session.status === "disqualified";
     const isFs = session.isFullscreen;
@@ -333,6 +468,8 @@ exit
         className={`bg-white rounded-2xl border p-4 shadow-xs transition-all relative flex flex-col justify-between space-y-3.5 ${
           isDisq
             ? "border-rose-400 bg-rose-50/30"
+            : comp.isCompleted
+            ? "border-emerald-300 bg-emerald-50/20"
             : isWarned
             ? "border-amber-300 bg-amber-50/20"
             : "border-slate-200 hover:border-indigo-300"
@@ -356,6 +493,11 @@ exit
                 <UserX className="w-3 h-3 text-rose-600" />
                 <span>مستبعد 🛑</span>
               </span>
+            ) : comp.isCompleted ? (
+              <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-900 border border-emerald-300 flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                <span>تم التسليم والرصد 🎓</span>
+              </span>
             ) : isWarned ? (
               <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-200 flex items-center gap-1 animate-pulse">
                 <AlertTriangle className="w-3 h-3 text-amber-600" />
@@ -378,23 +520,43 @@ exit
         <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-150 space-y-2 text-xs font-bold text-slate-700">
           <div className="flex items-center justify-between">
             <span className="text-slate-500 text-[11px]">موقع الطالب:</span>
-            <span className="font-sans font-black text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
-              السؤال {(session.currentQuestionIdx || 0) + 1} من {session.totalQuestions || "—"}
-            </span>
+            {comp.isCompleted ? (
+              <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                  <span>انتهى الاختبار</span>
+                </span>
+                <span className="font-sans font-black text-xs text-indigo-900 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200">
+                  الدرجة: <strong className="text-emerald-700 font-extrabold">{comp.score}</strong>/{comp.maxScore}
+                  <span className="text-[10px] text-indigo-600 mr-1">({comp.percentage}%)</span>
+                </span>
+              </div>
+            ) : (
+              <span className="font-sans font-black text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
+                السؤال {(session.currentQuestionIdx || 0) + 1} من {session.totalQuestions || "—"}
+              </span>
+            )}
           </div>
 
           <div className="flex items-center justify-between">
             <span className="text-slate-500 text-[11px]">وضع ملء الشاشة:</span>
-            <span
-              className={`px-2 py-0.5 rounded-md text-[10px] font-black flex items-center gap-1 ${
-                isFs
-                  ? "bg-emerald-100 text-emerald-800"
-                  : "bg-rose-100 text-rose-800 animate-pulse"
-              }`}
-            >
-              <Maximize2 className="w-3 h-3" />
-              <span>{isFs ? "مفعل (داخل الاختبار)" : "معطل / خارج المتصفح"}</span>
-            </span>
+            {comp.isCompleted ? (
+              <span className="px-2 py-0.5 rounded-md text-[10px] font-black flex items-center gap-1 bg-slate-150 text-slate-600 border border-slate-200">
+                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                <span>اكتملت الجلسة بنجاح</span>
+              </span>
+            ) : (
+              <span
+                className={`px-2 py-0.5 rounded-md text-[10px] font-black flex items-center gap-1 ${
+                  isFs
+                    ? "bg-emerald-100 text-emerald-800"
+                    : "bg-rose-100 text-rose-800 animate-pulse"
+                }`}
+              >
+                <Maximize2 className="w-3 h-3" />
+                <span>{isFs ? "مفعل (داخل الاختبار)" : "معطل / خارج المتصفح"}</span>
+              </span>
+            )}
           </div>
 
           <div className="flex items-center justify-between">
@@ -461,6 +623,7 @@ exit
   };
 
   const renderStudentRow = (session: LiveStudentSession) => {
+    const comp = getStudentCompletionData(session);
     const isWarned = session.violationsCount > 0;
     const isDisq = session.status === "disqualified";
     const isFs = session.isFullscreen;
@@ -471,6 +634,8 @@ exit
         className={`border-b transition-colors ${
           isDisq
             ? "bg-rose-50/50 hover:bg-rose-50/80 border-rose-200"
+            : comp.isCompleted
+            ? "bg-emerald-50/30 hover:bg-emerald-50/70 border-emerald-100"
             : isWarned
             ? "bg-amber-50/40 hover:bg-amber-50/80 border-amber-200"
             : "bg-white hover:bg-slate-50/80 border-slate-150"
@@ -482,6 +647,8 @@ exit
               className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-xs shrink-0 ${
                 isDisq
                   ? "bg-rose-100 text-rose-800 border border-rose-200"
+                  : comp.isCompleted
+                  ? "bg-emerald-100 text-emerald-900 border border-emerald-300"
                   : isWarned
                   ? "bg-amber-100 text-amber-900 border border-amber-200"
                   : "bg-indigo-50 text-indigo-700 border border-indigo-100"
@@ -500,11 +667,17 @@ exit
           </div>
         </td>
 
+        {/* Status Badge */}
         <td className="px-4 py-3 whitespace-nowrap">
           {isDisq ? (
             <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-rose-100 text-rose-800 border border-rose-200 inline-flex items-center gap-1">
               <UserX className="w-3 h-3 text-rose-600" />
               <span>مستبعد 🛑</span>
+            </span>
+          ) : comp.isCompleted ? (
+            <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-900 border border-emerald-300 inline-flex items-center gap-1">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+              <span>تم التسليم والرصد 🎓</span>
             </span>
           ) : isWarned ? (
             <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-200 inline-flex items-center gap-1 animate-pulse">
@@ -523,25 +696,51 @@ exit
           )}
         </td>
 
+        {/* Fullscreen status */}
         <td className="px-4 py-3 whitespace-nowrap">
-          <span
-            className={`px-2.5 py-1 rounded-lg text-[10px] font-black inline-flex items-center gap-1 ${
-              isFs
-                ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
-                : "bg-rose-50 text-rose-800 border border-rose-200 animate-pulse"
-            }`}
-          >
-            <Maximize2 className="w-3 h-3" />
-            <span>{isFs ? "ملء الشاشة نشط" : "خارج المتصفح"}</span>
-          </span>
+          {comp.isCompleted ? (
+            <span className="px-2.5 py-1 rounded-lg text-[10px] font-black inline-flex items-center gap-1 bg-slate-100 text-slate-600 border border-slate-200">
+              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+              <span>اكتملت الجلسة</span>
+            </span>
+          ) : (
+            <span
+              className={`px-2.5 py-1 rounded-lg text-[10px] font-black inline-flex items-center gap-1 ${
+                isFs
+                  ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                  : "bg-rose-50 text-rose-800 border border-rose-200 animate-pulse"
+              }`}
+            >
+              <Maximize2 className="w-3 h-3" />
+              <span>{isFs ? "ملء الشاشة نشط" : "خارج المتصفح"}</span>
+            </span>
+          )}
         </td>
 
+        {/* موقع الطالب / النتيجة - CSS Selector 1 */}
         <td className="px-4 py-3 whitespace-nowrap">
-          <span className="font-sans font-bold text-xs text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-100 inline-block">
-            السؤال {(session.currentQuestionIdx || 0) + 1} من {session.totalQuestions || "—"}
-          </span>
+          {comp.isCompleted ? (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-black bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-2xs">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                <span>انتهى الاختبار</span>
+              </span>
+              <span className="font-sans font-black text-xs text-indigo-900 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200 inline-flex items-center gap-1 shadow-2xs">
+                <span className="text-slate-500 font-bold">الدرجة:</span>
+                <span className="text-emerald-700 text-sm font-extrabold">{comp.score}</span>
+                <span className="text-slate-400 font-normal">/</span>
+                <span className="text-slate-700">{comp.maxScore}</span>
+                <span className="text-[10px] text-indigo-600 font-bold mr-0.5">({comp.percentage}%)</span>
+              </span>
+            </div>
+          ) : (
+            <span className="font-sans font-bold text-xs text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-100 inline-block">
+              السؤال {(session.currentQuestionIdx || 0) + 1} من {session.totalQuestions || "—"}
+            </span>
+          )}
         </td>
 
+        {/* Violations Count */}
         <td className="px-4 py-3 whitespace-nowrap">
           <span
             className={`font-sans font-black text-xs ${
@@ -554,6 +753,7 @@ exit
           </span>
         </td>
 
+        {/* Actions */}
         <td className="px-4 py-3 whitespace-nowrap text-left">
           <div className="flex items-center justify-end gap-1.5">
             <button
@@ -703,8 +903,8 @@ exit
         {activeTab === "students" && (
           <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6">
             {/* Quick Metrics KPI cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-              <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl flex items-center justify-between">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+              <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-2xl flex items-center justify-between">
                 <div>
                   <span className="text-[11px] font-bold text-slate-500 block">إجمالي الطلاب</span>
                   <span className="text-2xl font-black text-slate-900 font-sans">{totalCount}</span>
@@ -714,17 +914,27 @@ exit
                 </div>
               </div>
 
-              <div className="bg-emerald-50/70 border border-emerald-200 p-4 rounded-2xl flex items-center justify-between">
+              <div className="bg-emerald-50/90 border border-emerald-300 p-3.5 rounded-2xl flex items-center justify-between shadow-2xs">
                 <div>
-                  <span className="text-[11px] font-bold text-emerald-700 block">ملتزمون (ملء الشاشة)</span>
-                  <span className="text-2xl font-black text-emerald-800 font-sans">{compliantCount}</span>
+                  <span className="text-[11px] font-black text-emerald-800 block">أتموا ورُصدت درجتهم</span>
+                  <span className="text-2xl font-black text-emerald-700 font-sans">{completedCount}</span>
                 </div>
-                <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold">
+                <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold border border-emerald-200">
+                  <CheckCircle2 className="w-5 h-5" />
+                </div>
+              </div>
+
+              <div className="bg-indigo-50/70 border border-indigo-200 p-3.5 rounded-2xl flex items-center justify-between">
+                <div>
+                  <span className="text-[11px] font-bold text-indigo-800 block">مستمرون بالحل (ملتزمون)</span>
+                  <span className="text-2xl font-black text-indigo-900 font-sans">{compliantCount}</span>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold">
                   <ShieldCheck className="w-5 h-5" />
                 </div>
               </div>
 
-              <div className="bg-amber-50/70 border border-amber-200 p-4 rounded-2xl flex items-center justify-between">
+              <div className="bg-amber-50/70 border border-amber-200 p-3.5 rounded-2xl flex items-center justify-between">
                 <div>
                   <span className="text-[11px] font-bold text-amber-800 block">لديهم إنذارات</span>
                   <span className="text-2xl font-black text-amber-800 font-sans">{warningCount}</span>
@@ -734,9 +944,9 @@ exit
                 </div>
               </div>
 
-              <div className="bg-rose-50/70 border border-rose-200 p-4 rounded-2xl flex items-center justify-between">
+              <div className="bg-rose-50/70 border border-rose-200 p-3.5 rounded-2xl flex items-center justify-between col-span-2 sm:col-span-1">
                 <div>
-                  <span className="text-[11px] font-bold text-rose-700 block">مستبعدون / مخالفون</span>
+                  <span className="text-[11px] font-bold text-rose-700 block">مستبعدون</span>
                   <span className="text-2xl font-black text-rose-800 font-sans">{disqualifiedCount}</span>
                 </div>
                 <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center font-bold">
@@ -769,9 +979,10 @@ exit
                   title="تصفية حسب حالة الالتزام"
                 >
                   <option value="all">كل الحالات ({sessions.length})</option>
-                  <option value="active">ملتزمون فقط 🟢</option>
-                  <option value="warning">لديهم مخالفات ⚠️</option>
-                  <option value="disqualified">مستبعدون 🛑</option>
+                  <option value="completed">أتموا الاختبار ورُصدت درجتهم ({completedCount}) 🎓</option>
+                  <option value="active">مستمرون في الحل ({compliantCount}) 🟢</option>
+                  <option value="warning">لديهم مخالفات ({warningCount}) ⚠️</option>
+                  <option value="disqualified">مستبعدون ({disqualifiedCount}) 🛑</option>
                 </select>
 
                 {/* Grade & Class Filter (عرض الطلاب بالصف والفصل) */}
@@ -919,7 +1130,7 @@ exit
                                 <th className="px-4 py-3">الطالب والصف</th>
                                 <th className="px-4 py-3">حالة الالتزام</th>
                                 <th className="px-4 py-3">وضع ملء الشاشة</th>
-                                <th className="px-4 py-3">موقع الطالب</th>
+                                <th className="px-4 py-3">موقع الطالب / النتيجة</th>
                                 <th className="px-4 py-3">سجل المخالفات</th>
                                 <th className="px-4 py-3 text-left">إجراءات المراقبة</th>
                               </tr>
@@ -948,7 +1159,7 @@ exit
                       <th className="px-4 py-3">الطالب والصف</th>
                       <th className="px-4 py-3">حالة الالتزام</th>
                       <th className="px-4 py-3">وضع ملء الشاشة</th>
-                      <th className="px-4 py-3">موقع الطالب</th>
+                      <th className="px-4 py-3">موقع الطالب / النتيجة</th>
                       <th className="px-4 py-3">سجل المخالفات</th>
                       <th className="px-4 py-3 text-left">إجراءات المراقبة</th>
                     </tr>

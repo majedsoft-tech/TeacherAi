@@ -1404,6 +1404,33 @@ ${JSON.stringify(questionsPayload, null, 2)}`;
         console.warn("Failed to archive submission in standalone_results:", subErr);
       }
 
+      // Update exam_proctoring collection so proctoring dashboard gets instant score & completion
+      const proctoringDocIds = [
+        `${quizId || ""}_${targetStudentId}`,
+        `${quizData.id || ""}_${targetStudentId}`,
+        `${quizData.title || ""}_${targetStudentId}`,
+      ];
+      for (const pId of proctoringDocIds) {
+        if (!pId || pId.startsWith("_")) continue;
+        try {
+          await setDoc(
+            doc(firestoreDb, "exam_proctoring", pId),
+            sanitizeForFirestore({
+              status: "submitted",
+              isCompleted: true,
+              score: earnedPoints,
+              maxScore: totalPoints,
+              percentage: pct,
+              submittedAt: Date.now(),
+              lastHeartbeat: Date.now(),
+            }),
+            { merge: true }
+          );
+        } catch (procErr) {
+          console.warn("Failed to update exam_proctoring on submission:", procErr);
+        }
+      }
+
       if (studentInfo.isNewStudent || !studentInfo.studentId) {
         const newStudentObj = {
           id: targetStudentId,

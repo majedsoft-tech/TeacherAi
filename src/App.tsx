@@ -2516,6 +2516,57 @@ export default function App() {
           localStorage.setItem(`seb_student_${targetStudentId}_quiz_${qKey}_finished`, "true");
           localStorage.setItem(`seb_student_${targetStudentId}_quiz_finished`, "true");
 
+          // Live proctoring session update
+          try {
+            const pDocId = `${studentQuiz.id}_${targetStudentId}`;
+            setDoc(
+              doc(db, "exam_proctoring", pDocId),
+              {
+                status: "submitted",
+                isCompleted: true,
+                score: resData.score,
+                maxScore: resData.totalPoints,
+                percentage: resData.percentage,
+                submittedAt: Date.now(),
+                lastHeartbeat: Date.now(),
+              },
+              { merge: true }
+            );
+            const pDocTitleId = `${studentQuiz.title}_${targetStudentId}`;
+            setDoc(
+              doc(db, "exam_proctoring", pDocTitleId),
+              {
+                status: "submitted",
+                isCompleted: true,
+                score: resData.score,
+                maxScore: resData.totalPoints,
+                percentage: resData.percentage,
+                submittedAt: Date.now(),
+                lastHeartbeat: Date.now(),
+              },
+              { merge: true }
+            );
+            const bc = new BroadcastChannel("exam_proctoring_channel");
+            bc.postMessage({
+              type: "STUDENT_HEARTBEAT",
+              data: {
+                id: pDocId,
+                quizId: studentQuiz.id,
+                quizTitle: studentQuiz.title,
+                studentId: targetStudentId,
+                studentName: currentStudentName,
+                gradeClass: currentStudentClass,
+                status: "submitted",
+                isCompleted: true,
+                score: resData.score,
+                maxScore: resData.totalPoints,
+                percentage: resData.percentage,
+                totalQuestions: studentQuiz.questions.length,
+                currentQuestionIdx: studentQuiz.questions.length - 1,
+              },
+            });
+          } catch {}
+
           if (resData.targetStudentId) {
             setStudentSelectedId(resData.targetStudentId);
             sessionStorage.setItem("seb_student_logged_id", resData.targetStudentId);
@@ -2621,6 +2672,57 @@ export default function App() {
       localStorage.setItem(`seb_student_${targetStudentId}_quiz_finished`, "true");
       localStorage.setItem(`seb_student_${targetStudentId}_quiz_${qKeyFallback}`, JSON.stringify({ ...studentQuiz, questions: updatedQsWithResults }));
       localStorage.setItem(`seb_student_${targetStudentId}_quiz`, JSON.stringify({ ...studentQuiz, questions: updatedQsWithResults }));
+
+      // Live proctoring session update
+      try {
+        const pDocId = `${studentQuiz.id}_${targetStudentId}`;
+        setDoc(
+          doc(db, "exam_proctoring", pDocId),
+          {
+            status: "submitted",
+            isCompleted: true,
+            score: earnedPoints,
+            maxScore: totalPoints,
+            percentage: pct,
+            submittedAt: Date.now(),
+            lastHeartbeat: Date.now(),
+          },
+          { merge: true }
+        );
+        const pDocTitleId = `${studentQuiz.title}_${targetStudentId}`;
+        setDoc(
+          doc(db, "exam_proctoring", pDocTitleId),
+          {
+            status: "submitted",
+            isCompleted: true,
+            score: earnedPoints,
+            maxScore: totalPoints,
+            percentage: pct,
+            submittedAt: Date.now(),
+            lastHeartbeat: Date.now(),
+          },
+          { merge: true }
+        );
+        const bc = new BroadcastChannel("exam_proctoring_channel");
+        bc.postMessage({
+          type: "STUDENT_HEARTBEAT",
+          data: {
+            id: pDocId,
+            quizId: studentQuiz.id,
+            quizTitle: studentQuiz.title,
+            studentId: targetStudentId,
+            studentName: currentStudentName,
+            gradeClass: currentStudentClass,
+            status: "submitted",
+            isCompleted: true,
+            score: earnedPoints,
+            maxScore: totalPoints,
+            percentage: pct,
+            totalQuestions: studentQuiz.questions.length,
+            currentQuestionIdx: studentQuiz.questions.length - 1,
+          },
+        });
+      } catch {}
 
       const gRecord = {
         quizTitle: studentQuiz.title,
@@ -20098,6 +20200,7 @@ export default function App() {
         }}
         quiz={proctoringSelectedQuiz}
         teacherId={currentUser?.uid}
+        students={students}
         triggerToast={triggerToast}
       />
 

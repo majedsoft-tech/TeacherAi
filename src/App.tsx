@@ -12035,6 +12035,136 @@ export default function App() {
 
 
 
+            {/* Dedicated Preview Zone (Moved above Registered Teachers) */}
+            <div
+              className={`space-y-2 p-3 rounded-2xl transition-all duration-300 my-2.5 relative ${
+                isStudentLinkActive
+                  ? "bg-slate-50/90 border border-slate-200/60 shadow-3xs"
+                  : "bg-red-50/40 border-2 border-red-500 ring-2 ring-red-400/50 shadow-md shadow-red-500/25 animate-pulse"
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setTeacherPreviewActive(true);
+                  triggerToast(
+                    "تم تشغيل محاكي الطالب بنجاح، استمتع بالمعاينة",
+                    "info",
+                  );
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-black bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200/50 transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer shadow-3xs"
+                title="معاينة البوابة من منظور الطلاب"
+              >
+                <Eye className="w-4 h-4 shrink-0 text-rose-600 animate-pulse" />
+                <span>معاينة بوابة الطالب</span>
+              </button>
+
+              {/* 1. Copy Student Portal Link Button */}
+              <button
+                type="button"
+                onClick={() => copyStudentPortalLink()}
+                className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-black border transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer shadow-3xs ${
+                  copiedStudentLink
+                    ? "bg-emerald-600 text-white border-emerald-600 shadow-emerald-200"
+                    : "bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200/70"
+                }`}
+                title="نسخ رابط صفحة الطالب المشفر كاملة"
+              >
+                {copiedStudentLink ? (
+                  <Check className="w-4 h-4 shrink-0 text-white" />
+                ) : (
+                  <Copy className="w-4 h-4 shrink-0 text-emerald-600" />
+                )}
+                <span className="truncate">{copiedStudentLink ? "تم النسخ! ✓" : "نسخ رابط صفحة الطالب"}</span>
+              </button>
+
+              {/* 2. Open Student Portal Link Button (Shortened text: فتح الرابط) */}
+              <button
+                type="button"
+                onClick={() => openStudentPortalLink()}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-black bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200/80 transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer shadow-3xs"
+                title="فتح صفحة الطالب في نافذة جديدة مباشرة"
+              >
+                <ExternalLink className="w-4 h-4 shrink-0 text-blue-600" />
+                <span>فتح الرابط ↗️</span>
+              </button>
+
+              {/* 3. Link Status Toggle Button (Compact single button with dark red when stopped) */}
+              <button
+                type="button"
+                onClick={() => toggleStudentPortalLink()}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-black border transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer shadow-3xs ${
+                  isStudentLinkActive
+                    ? "bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border-emerald-300"
+                    : "bg-red-900 hover:bg-red-950 text-white border-red-950 shadow-xs"
+                }`}
+                title={
+                  isStudentLinkActive
+                    ? "الرابط يعمل - اضغط لإيقاف الرابط مؤقتاً"
+                    : "الرابط متوقف - اضغط لتشغيل الرابط للطلاب"
+                }
+              >
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`w-2 h-2 rounded-full ${
+                      isStudentLinkActive
+                        ? "bg-emerald-500 animate-pulse"
+                        : "bg-rose-400"
+                    }`}
+                  />
+                  <span className="text-[11px] font-black">حالة الرابط:</span>
+                  <span
+                    className={`text-[10px] font-black px-2 py-0.5 rounded-md ${
+                      isStudentLinkActive
+                        ? "bg-emerald-600 text-white"
+                        : "bg-red-950 text-rose-100 border border-red-800"
+                    }`}
+                  >
+                    {isStudentLinkActive ? "تشغيل 🟢" : "إيقاف 🛑"}
+                  </span>
+                </div>
+
+                {/* Master Toggle Switch Visual */}
+                <div
+                  className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border transition-colors duration-200 ease-in-out items-center ${
+                    isStudentLinkActive
+                      ? "bg-emerald-600 border-emerald-500"
+                      : "bg-red-950 border-red-800"
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none flex items-center justify-center h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                      isStudentLinkActive
+                        ? "-translate-x-[20px] text-emerald-600"
+                        : "translate-x-0 text-red-900"
+                    }`}
+                  >
+                    {isStudentLinkActive ? (
+                      <Unlock className="w-2.5 h-2.5 text-emerald-600" />
+                    ) : (
+                      <Lock className="w-2.5 h-2.5 text-red-900" />
+                    )}
+                  </span>
+                </div>
+              </button>
+
+              {/* 4. Regenerate and Invalidate Previous Link Button */}
+              <button
+                type="button"
+                onClick={handleRegenerateStudentLink}
+                className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-[11px] font-black border border-amber-200/90 bg-amber-50/70 hover:bg-amber-100/90 text-amber-900 transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer shadow-3xs group"
+                title="تغيير وإنشاء رابط مشفر جديد وإلغاء الرابط القديم نهائياً لمنع وصول الطلاب السابقين"
+              >
+                <div className="flex items-center gap-2">
+                  <RotateCcw className="w-3.5 h-3.5 shrink-0 text-amber-600 group-hover:rotate-180 transition-transform duration-500" />
+                  <span>تغيير وإنشاء رابط جديد</span>
+                </div>
+                <span className="text-[10px] font-bold bg-amber-200/70 text-amber-950 px-2 py-0.5 rounded-md">
+                  تجديد 🔄
+                </span>
+              </button>
+            </div>
+
             {currentUser && currentUser.email?.trim().toLowerCase() === "majedsoft@gmail.com" && (
               <div className="space-y-1.5 pt-1">
                 <button
@@ -12075,112 +12205,6 @@ export default function App() {
               </div>
             )}
           </nav>
-
-          {/* Dedicated Preview Zone */}
-          <div className="space-y-2 bg-slate-50/90 p-3.5 rounded-2xl border border-slate-200/60 shadow-3xs">
-            <button
-              type="button"
-              onClick={() => {
-                setTeacherPreviewActive(true);
-                triggerToast(
-                  "تم تشغيل محاكي الطالب بنجاح، استمتع بالمعاينة",
-                  "info",
-                );
-              }}
-              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-black bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200/50 transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer shadow-3xs"
-              title="معاينة البوابة من منظور الطلاب"
-            >
-              <Eye className="w-4 h-4 shrink-0 text-rose-600 animate-pulse" />
-              <span>معاينة بوابة الطالب</span>
-            </button>
-
-            <div className="flex items-center gap-1.5 w-full">
-              <button
-                type="button"
-                onClick={() => copyStudentPortalLink()}
-                className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-xs font-black border transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer shadow-3xs ${
-                  copiedStudentLink
-                    ? "bg-emerald-600 text-white border-emerald-600 shadow-emerald-200"
-                    : "bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200/70"
-                }`}
-                title="نسخ رابط صفحة الطالب المشفر كاملة"
-              >
-                {copiedStudentLink ? (
-                  <Check className="w-4 h-4 shrink-0 text-white" />
-                ) : (
-                  <Copy className="w-4 h-4 shrink-0 text-emerald-600" />
-                )}
-                <span className="truncate">{copiedStudentLink ? "تم النسخ! ✓" : "نسخ رابط الطالب"}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => openStudentPortalLink()}
-                className="px-3 py-2.5 rounded-xl text-xs font-black bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200/80 transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer shadow-3xs flex items-center gap-1 shrink-0"
-                title="فتح صفحة الطالب في نافذة جديدة مباشرة"
-              >
-                <ExternalLink className="w-3.5 h-3.5 shrink-0 text-blue-600" />
-                <span>فتح ↗️</span>
-              </button>
-            </div>
-
-            {/* Toggle Student Portal Link On / Off Switch */}
-            <button
-              type="button"
-              onClick={() => toggleStudentPortalLink()}
-              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-black border transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer shadow-3xs ${
-                isStudentLinkActive
-                  ? "bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-800 border-emerald-300/80"
-                  : "bg-rose-50 hover:bg-rose-100 text-rose-800 border-rose-300"
-              }`}
-              title={
-                isStudentLinkActive
-                  ? "رابط الطالب يعمل حالياً - اضغط لإيقاف الرابط مؤقتاً"
-                  : "رابط الطالب متوقف حالياً - اضغط لتشغيل وتفعيل الرابط للطلاب"
-              }
-            >
-              <div className="flex items-center gap-2">
-                <Power
-                  className={`w-4 h-4 shrink-0 ${
-                    isStudentLinkActive ? "text-emerald-600" : "text-rose-600"
-                  }`}
-                />
-                <span className="text-[11px]">حالة الرابط:</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span
-                  className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black ${
-                    isStudentLinkActive
-                      ? "bg-emerald-600 text-white shadow-xs"
-                      : "bg-rose-600 text-white shadow-xs"
-                  }`}
-                >
-                  <span
-                    className={`w-1.5 h-1.5 rounded-full bg-white ${
-                      isStudentLinkActive ? "animate-pulse" : ""
-                    }`}
-                  />
-                  <span>{isStudentLinkActive ? "تشغيل 🟢" : "إيقاف 🛑"}</span>
-                </span>
-              </div>
-            </button>
-
-            {/* Regenerate and Invalidate Previous Link Button */}
-            <button
-              type="button"
-              onClick={handleRegenerateStudentLink}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-[11px] font-black border border-amber-200/90 bg-amber-50/70 hover:bg-amber-100/90 text-amber-900 transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer shadow-3xs group"
-              title="تغيير وإنشاء رابط مشفر جديد وإلغاء الرابط القديم نهائياً لمنع وصول الطلاب السابقين"
-            >
-              <div className="flex items-center gap-2">
-                <RotateCcw className="w-3.5 h-3.5 shrink-0 text-amber-600 group-hover:rotate-180 transition-transform duration-500" />
-                <span>تغيير وإنشاء رابط جديد</span>
-              </div>
-              <span className="text-[10px] font-bold bg-amber-200/70 text-amber-950 px-2 py-0.5 rounded-md">
-                تجديد 🔄
-              </span>
-            </button>
-          </div>
         </div>
 
         {/* Sidebar bottom teacher profile card & logout */}
@@ -20685,86 +20709,122 @@ export default function App() {
                   </>
                 )}
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTeacherPreviewActive(true);
-                    setMobileMoreDrawerOpen(false);
-                    triggerToast("تم تشغيل محاكي الطالب بنجاح", "info");
-                  }}
-                  className="w-full flex items-center gap-3 p-3 rounded-2xl text-xs font-black bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 cursor-pointer"
+                {/* Mobile Student Portal Zone Wrapper */}
+                <div
+                  className={`space-y-2 p-2.5 rounded-2xl transition-all duration-300 ${
+                    isStudentLinkActive
+                      ? "border border-slate-150 bg-slate-50/50"
+                      : "bg-red-50/40 border-2 border-red-500 ring-2 ring-red-400/50 shadow-md shadow-red-500/25 animate-pulse"
+                  }`}
                 >
-                  <Eye className="w-4 h-4 text-rose-600" />
-                  <span>معاينة بوابة الطالب الإلكترونية</span>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTeacherPreviewActive(true);
+                      setMobileMoreDrawerOpen(false);
+                      triggerToast("تم تشغيل محاكي الطالب بنجاح", "info");
+                    }}
+                    className="w-full flex items-center gap-3 p-3 rounded-2xl text-xs font-black bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 cursor-pointer"
+                  >
+                    <Eye className="w-4 h-4 text-rose-600" />
+                    <span>معاينة بوابة الطالب الإلكترونية</span>
+                  </button>
 
-                <div className="flex items-center gap-2">
+                  {/* 1. Mobile Copy Student Portal Link Button */}
                   <button
                     type="button"
                     onClick={() => {
                       copyStudentPortalLink();
                       setMobileMoreDrawerOpen(false);
                     }}
-                    className="flex-1 flex items-center justify-center gap-2 p-3 rounded-2xl text-xs font-black bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 cursor-pointer"
+                    className="w-full flex items-center justify-center gap-2 p-3 rounded-2xl text-xs font-black bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 cursor-pointer shadow-3xs"
                   >
                     <Copy className="w-4 h-4 text-emerald-600" />
                     <span>نسخ رابط صفحة الطالب</span>
                   </button>
 
+                  {/* 2. Mobile Open Student Portal Link Button (moved below copy button) */}
                   <button
                     type="button"
                     onClick={() => {
                       openStudentPortalLink();
                       setMobileMoreDrawerOpen(false);
                     }}
-                    className="p-3 rounded-2xl text-xs font-black bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 cursor-pointer flex items-center gap-1.5"
+                    className="w-full flex items-center justify-center gap-2 p-3 rounded-2xl text-xs font-black bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 cursor-pointer shadow-3xs"
                     title="فتح صفحة الطالب"
                   >
                     <ExternalLink className="w-4 h-4 text-blue-600" />
-                    <span>فتح ↗️</span>
+                    <span>فتح الرابط ↗️</span>
+                  </button>
+
+                  {/* 3. Mobile Student Link Status Toggle Button (Compact single button with dark red when stopped) */}
+                  <button
+                    type="button"
+                    onClick={() => toggleStudentPortalLink()}
+                    className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all cursor-pointer shadow-3xs ${
+                      isStudentLinkActive
+                        ? "bg-emerald-50 text-emerald-800 border-emerald-300"
+                        : "bg-red-900 hover:bg-red-950 text-white border-red-950"
+                    }`}
+                    title={isStudentLinkActive ? "انقر لإيقاف الرابط مؤقتاً" : "انقر لتشغيل وتفعيل الرابط"}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`w-2 h-2 rounded-full ${
+                          isStudentLinkActive ? "bg-emerald-500 animate-pulse" : "bg-rose-400"
+                        }`}
+                      />
+                      <span className="text-[11px] font-black">حالة الرابط:</span>
+                      <span
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-black ${
+                          isStudentLinkActive
+                            ? "bg-emerald-600 text-white"
+                            : "bg-red-950 text-rose-100 border border-red-800"
+                        }`}
+                      >
+                        {isStudentLinkActive ? "تشغيل 🟢" : "إيقاف 🛑"}
+                      </span>
+                    </div>
+
+                    <div
+                      className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border transition-colors duration-200 ease-in-out items-center ${
+                        isStudentLinkActive
+                          ? "bg-emerald-600 border-emerald-500"
+                          : "bg-red-950 border-red-800"
+                      }`}
+                    >
+                      <span
+                        className={`pointer-events-none flex items-center justify-center h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                          isStudentLinkActive ? "-translate-x-[20px] text-emerald-600" : "translate-x-0 text-red-900"
+                        }`}
+                      >
+                        {isStudentLinkActive ? (
+                          <Unlock className="w-2.5 h-2.5 text-emerald-600" />
+                        ) : (
+                          <Lock className="w-2.5 h-2.5 text-red-900" />
+                        )}
+                      </span>
+                    </div>
+                  </button>
+
+                  {/* Mobile Student Link Regenerate Button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleRegenerateStudentLink();
+                    }}
+                    className="w-full flex items-center justify-between p-3 rounded-2xl text-xs font-black border border-amber-200/90 bg-amber-50/70 hover:bg-amber-100/90 text-amber-900 transition-all cursor-pointer group"
+                    title="تغيير وإنشاء رابط مشفر جديد وإلغاء الرابط القديم نهائياً لمنع وصول الطلاب السابقين"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <RotateCcw className="w-4 h-4 text-amber-600 group-hover:rotate-180 transition-transform duration-500" />
+                      <span className="text-[11px]">تغيير وإنشاء رابط جديد</span>
+                    </div>
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-200/80 text-amber-950">
+                      تجديد 🔄
+                    </span>
                   </button>
                 </div>
-
-                {/* Mobile Student Link Status Toggle Switch */}
-                <button
-                  type="button"
-                  onClick={() => toggleStudentPortalLink()}
-                  className={`w-full flex items-center justify-between p-3 rounded-2xl text-xs font-black border transition-all cursor-pointer ${
-                    isStudentLinkActive
-                      ? "bg-emerald-50 text-emerald-800 border-emerald-300"
-                      : "bg-rose-50 text-rose-800 border-rose-300"
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <Power className={`w-4 h-4 ${isStudentLinkActive ? "text-emerald-600" : "text-rose-600"}`} />
-                    <span className="text-[11px]">حالة رابط الطالب:</span>
-                  </div>
-                  <span
-                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-black text-white ${
-                      isStudentLinkActive ? "bg-emerald-600" : "bg-rose-600"
-                    }`}
-                  >
-                    {isStudentLinkActive ? "تشغيل 🟢" : "إيقاف 🛑"}
-                  </span>
-                </button>
-
-                {/* Mobile Student Link Regenerate Button */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    handleRegenerateStudentLink();
-                  }}
-                  className="w-full flex items-center justify-between p-3 rounded-2xl text-xs font-black border border-amber-200/90 bg-amber-50/70 hover:bg-amber-100/90 text-amber-900 transition-all cursor-pointer group"
-                  title="تغيير وإنشاء رابط مشفر جديد وإلغاء الرابط القديم نهائياً لمنع وصول الطلاب السابقين"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <RotateCcw className="w-4 h-4 text-amber-600 group-hover:rotate-180 transition-transform duration-500" />
-                    <span className="text-[11px]">تغيير وإنشاء رابط جديد</span>
-                  </div>
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-200/80 text-amber-950">
-                    تجديد 🔄
-                  </span>
-                </button>
 
                 {/* Profile card & logout */}
                 <div className="pt-3 border-t border-slate-100 flex items-center justify-between">

@@ -835,12 +835,39 @@ export default function App() {
   const [showStandaloneReviewModal, setShowStandaloneReviewModal] = useState<boolean>(false);
 
   // --- Encrypted Student Portal Access & Tamper Protection ---
+  const [studentLinkVersion, setStudentLinkVersion] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem("seb_student_link_active_version");
+      if (saved) {
+        const parsed = parseInt(saved, 10);
+        if (!isNaN(parsed) && parsed > 0) return parsed;
+      }
+    } catch {}
+    return 1;
+  });
+
   const initialStudentToken = extractStudentPortalToken();
   const initialStudentVerification = initialStudentToken
-    ? verifyStudentPortalToken(initialStudentToken)
+    ? verifyStudentPortalToken(
+        initialStudentToken,
+        typeof window !== "undefined"
+          ? parseInt(localStorage.getItem("seb_student_link_active_version") || "1", 10)
+          : 1
+      )
     : null;
 
+  const [isStudentLinkRevoked, setIsStudentLinkRevoked] = useState<boolean>(() => {
+    if (initialStudentToken && initialStudentVerification && initialStudentVerification.isRevoked) {
+      return true;
+    }
+    return false;
+  });
+
   const [isStudentTokenTampered, setIsStudentTokenTampered] = useState<boolean>(() => {
+    // If token is revoked by teacher, handle via revoked screen
+    if (initialStudentToken && initialStudentVerification?.isRevoked) {
+      return false;
+    }
     // If student token is supplied in URL/hash but verification failed (tampered/truncated)
     if (initialStudentToken && (!initialStudentVerification || !initialStudentVerification.valid)) {
       return true;
@@ -3845,7 +3872,7 @@ export default function App() {
       localStorage.getItem("seb_student_teacher_id") ||
       "gNenrTIs1ZfsGZQmPxIEQNJPyIy1";
     const userEmail = currentUser?.email ? currentUser.email.toLowerCase().trim() : "majedsoft@gmail.com";
-    const link = buildEncryptedStudentPortalUrl(tId, window.location.origin, userEmail);
+    const link = buildEncryptedStudentPortalUrl(tId, window.location.origin, userEmail, studentLinkVersion);
     
     // Robust clipboard copy with textarea fallback for iframes
     let copySuccessful = false;
@@ -3890,7 +3917,7 @@ export default function App() {
       );
     }
     return link;
-  }, [currentUser?.uid, currentUser?.email]);
+  }, [currentUser?.uid, currentUser?.email, studentLinkVersion]);
 
   const openStudentPortalLink = useCallback(() => {
     const tId =
@@ -3899,9 +3926,81 @@ export default function App() {
       localStorage.getItem("seb_student_teacher_id") ||
       "gNenrTIs1ZfsGZQmPxIEQNJPyIy1";
     const userEmail = currentUser?.email ? currentUser.email.toLowerCase().trim() : "majedsoft@gmail.com";
-    const link = buildEncryptedStudentPortalUrl(tId, window.location.origin, userEmail);
+    const link = buildEncryptedStudentPortalUrl(tId, window.location.origin, userEmail, studentLinkVersion);
     window.open(link, "_blank");
-  }, [currentUser?.uid, currentUser?.email]);
+  }, [currentUser?.uid, currentUser?.email, studentLinkVersion]);
+
+  const handleRegenerateStudentLink = useCallback(() => {
+    triggerConfirm(
+      "تغيير وإنشاء رابط جديد لبوابة الطلاب",
+      "هل أنت متأكد من رغبتك في توليد رابط مشفر جديد؟ سيتم إبطال الرابط القديم فوراً وبشكل نهائي، ولن يتمكن أي طالب يحمل الرابط القديم من الوصول للبوابة مجدداً وسيتعين عليك إرسال الرابط الجديد لهم.",
+      async () => {
+        const tId =
+          currentUser?.uid ||
+          localStorage.getItem("platform_teacher_uid") ||
+          "gNenrTIs1ZfsGZQmPxIEQNJPyIy1";
+        const newVersion = (studentLinkVersion || 1) + 1;
+        setStudentLinkVersion(newVersion);
+
+        try {
+          localStorage.setItem("seb_student_link_active_version", String(newVersion));
+          localStorage.setItem(`seb_student_link_version_${tId}`, String(newVersion));
+
+          const userEmail = currentUser?.email ? currentUser.email.toLowerCase().trim() : "majedsoft@gmail.com";
+          const newToken = generateStudentPortalToken(tId, userEmail, newVersion);
+
+          // Update Firestore link version and token
+          await Promise.allSettled([
+            setDoc(
+              doc(db, "secure_link_settings", `student_link_${tId}`),
+              {
+                linkVersion: newVersion,
+                token: newToken,
+                teacherId: tId,
+                updatedAt: Date.now(),
+              },
+              { merge: true }
+            ),
+            setDoc(
+              doc(db, "secure_link_settings", "student_link_demo_teacher"),
+              {
+                linkVersion: newVersion,
+                token: newToken,
+                teacherId: tId,
+                updatedAt: Date.now(),
+              },
+              { merge: true }
+            ),
+          ]);
+
+          // Broadcast to tabs
+          try {
+            const bc = new BroadcastChannel("student_portal_link_channel");
+            bc.postMessage({ type: "LINK_VERSION_CHANGED", teacherId: tId, linkVersion: newVersion });
+            bc.close();
+          } catch {}
+
+          const newLink = buildEncryptedStudentPortalUrl(tId, window.location.origin, userEmail, newVersion);
+          try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(newLink);
+            }
+          } catch {}
+
+          triggerToast(
+            "🎉 تم إنشاء رابط جديد بنجاح وإلغاء الرابط السابق نهائياً! تم نسخ الرابط الجديد للحافظة.",
+            "success"
+          );
+        } catch (err) {
+          console.error("Error regenerating student link:", err);
+          triggerToast("تم إنشاء الرابط الجديد بنجاح", "info");
+        }
+      },
+      undefined,
+      "نعم، إنشاء رابط جديد وإلغاء القديم",
+      "تراجع"
+    );
+  }, [currentUser?.uid, currentUser?.email, studentLinkVersion, triggerConfirm, triggerToast]);
 
   const toggleStudentPortalLink = async () => {
     const tId =
@@ -4025,6 +4124,18 @@ export default function App() {
               localStorage.setItem(`seb_student_link_status_${tid}`, JSON.stringify({ isEnabled: data.isEnabled }));
             } catch {}
           }
+          if (typeof data.linkVersion === "number") {
+            setStudentLinkVersion(data.linkVersion);
+            try {
+              localStorage.setItem("seb_student_link_active_version", String(data.linkVersion));
+            } catch {}
+            if (initialStudentToken) {
+              const freshVer = verifyStudentPortalToken(initialStudentToken, data.linkVersion);
+              if (freshVer.isRevoked) {
+                setIsStudentLinkRevoked(true);
+              }
+            }
+          }
         }
       },
       (err) => console.warn("Student link status listener error:", err)
@@ -4039,6 +4150,17 @@ export default function App() {
           if (!ev.data.teacherId || ev.data.teacherId === tid || ev.data.teacherId === "demo_teacher") {
             setIsStudentLinkActive(Boolean(ev.data.isEnabled));
           }
+        } else if (ev.data?.type === "LINK_VERSION_CHANGED" && typeof ev.data.linkVersion === "number") {
+          setStudentLinkVersion(ev.data.linkVersion);
+          try {
+            localStorage.setItem("seb_student_link_active_version", String(ev.data.linkVersion));
+          } catch {}
+          if (initialStudentToken) {
+            const freshVer = verifyStudentPortalToken(initialStudentToken, ev.data.linkVersion);
+            if (freshVer.isRevoked) {
+              setIsStudentLinkRevoked(true);
+            }
+          }
         }
       };
     } catch {}
@@ -4047,7 +4169,7 @@ export default function App() {
       unsub();
       if (bc) bc.close();
     };
-  }, [studentPortalTeacherId, initialStudentVerification?.teacherId, studentPortalActive]);
+  }, [studentPortalTeacherId, initialStudentVerification?.teacherId, studentPortalActive, initialStudentToken]);
 
   const copyStandaloneReviewLink = useCallback((showToast = true) => {
     const tId = currentUser?.uid || "demo_teacher";
@@ -7413,6 +7535,50 @@ export default function App() {
             className="w-full py-3 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-black transition-colors cursor-pointer"
           >
             العودة للصفحة الرئيسية
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // --- REVOKED / EXPIRED STUDENT PORTAL LINK SCREEN ---
+  if (isStudentLinkRevoked) {
+    return (
+      <div
+        className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-6 font-sans select-none"
+        dir="rtl"
+      >
+        <div className="max-w-md w-full bg-slate-900 border-2 border-amber-500/40 rounded-3xl p-8 text-center shadow-2xl space-y-6">
+          <div className="w-20 h-20 bg-amber-500/10 border-2 border-amber-500/30 rounded-3xl flex items-center justify-center mx-auto text-amber-400">
+            <RotateCcw className="w-10 h-10 animate-spin-slow" />
+          </div>
+
+          <div className="space-y-2">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-500/20 text-amber-300 rounded-full text-xs font-black">
+              <Lock className="w-3.5 h-3.5" />
+              <span>رابط تم إبطاله واستبداله</span>
+            </span>
+            <h2 className="text-xl font-black text-white">
+              تم استبدال هذا الرابط برابط جديد
+            </h2>
+            <p className="text-xs text-slate-400 leading-relaxed font-bold">
+              قام المعلم بإلغاء وإبطال رابط بوابة الطالب السابق وتوليد رابط جديد كلياً لمنع الوصول القديم. لا يمكن استخدام هذا الرابط بعد الآن؛ يرجى مراجعة المعلم للحصول على الرابط الأحدث والمعتمد.
+            </p>
+          </div>
+
+          <div className="p-4 bg-slate-800/80 rounded-2xl border border-slate-700 text-center text-xs text-slate-300 space-y-1 font-bold">
+            <p className="text-amber-400 font-black">🔒 أمان المنصة:</p>
+            <p>يتم إلغاء صلاحية الروابط السابقة نهائياً وفورياً فور توليد المعلم لرابط جديد.</p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              window.location.reload();
+            }}
+            className="w-full py-3 px-4 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-xl text-xs font-black transition-colors cursor-pointer shadow-lg shadow-amber-500/20"
+          >
+            إعادة تحميل الصفحة
           </button>
         </div>
       </div>
@@ -11999,6 +12165,21 @@ export default function App() {
               </div>
             </button>
 
+            {/* Regenerate and Invalidate Previous Link Button */}
+            <button
+              type="button"
+              onClick={handleRegenerateStudentLink}
+              className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-[11px] font-black border border-amber-200/90 bg-amber-50/70 hover:bg-amber-100/90 text-amber-900 transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer shadow-3xs group"
+              title="تغيير وإنشاء رابط مشفر جديد وإلغاء الرابط القديم نهائياً لمنع وصول الطلاب السابقين"
+            >
+              <div className="flex items-center gap-2">
+                <RotateCcw className="w-3.5 h-3.5 shrink-0 text-amber-600 group-hover:rotate-180 transition-transform duration-500" />
+                <span>تغيير وإنشاء رابط جديد</span>
+              </div>
+              <span className="text-[10px] font-bold bg-amber-200/70 text-amber-950 px-2 py-0.5 rounded-md">
+                تجديد 🔄
+              </span>
+            </button>
           </div>
         </div>
 
@@ -20567,6 +20748,23 @@ export default function App() {
                   </span>
                 </button>
 
+                {/* Mobile Student Link Regenerate Button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleRegenerateStudentLink();
+                  }}
+                  className="w-full flex items-center justify-between p-3 rounded-2xl text-xs font-black border border-amber-200/90 bg-amber-50/70 hover:bg-amber-100/90 text-amber-900 transition-all cursor-pointer group"
+                  title="تغيير وإنشاء رابط مشفر جديد وإلغاء الرابط القديم نهائياً لمنع وصول الطلاب السابقين"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <RotateCcw className="w-4 h-4 text-amber-600 group-hover:rotate-180 transition-transform duration-500" />
+                    <span className="text-[11px]">تغيير وإنشاء رابط جديد</span>
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-200/80 text-amber-950">
+                    تجديد 🔄
+                  </span>
+                </button>
 
                 {/* Profile card & logout */}
                 <div className="pt-3 border-t border-slate-100 flex items-center justify-between">

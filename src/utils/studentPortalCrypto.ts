@@ -223,19 +223,26 @@ export interface StudentPortalVerificationResult {
   valid: boolean;
   teacherId?: string;
   teacherEmail?: string;
+  version?: number;
   isTampered?: boolean;
+  isRevoked?: boolean;
   error?: string;
 }
 
 /**
  * Generate an encrypted access token for the complete student portal.
  */
-export function generateStudentPortalToken(teacherId: string, teacherEmail?: string): string {
+export function generateStudentPortalToken(
+  teacherId: string,
+  teacherEmail?: string,
+  linkVersion?: number
+): string {
   const payload = {
     m: "SEB_STUDENT_FULL_PORTAL_V1",
     t: teacherId || "gNenrTIs1ZfsGZQmPxIEQNJPyIy1",
     e: teacherEmail ? teacherEmail.toLowerCase().trim() : "majedsoft@gmail.com",
     scope: "full_student_portal",
+    v: typeof linkVersion === "number" ? linkVersion : 1,
     ts: Date.now(),
     r: Math.random().toString(36).slice(2, 9),
   };
@@ -244,9 +251,12 @@ export function generateStudentPortalToken(teacherId: string, teacherEmail?: str
 
 /**
  * Verify an encrypted student portal token.
- * Detects tampering, truncating, or parameter removal.
+ * Detects tampering, truncating, parameter removal, or token revocation.
  */
-export function verifyStudentPortalToken(token: string | null | undefined): StudentPortalVerificationResult {
+export function verifyStudentPortalToken(
+  token: string | null | undefined,
+  minActiveVersion?: number
+): StudentPortalVerificationResult {
   if (!token) {
     return { valid: false, error: "NO_TOKEN" };
   }
@@ -255,18 +265,42 @@ export function verifyStudentPortalToken(token: string | null | undefined): Stud
   // Check known registered legacy tokens directly
   if (LEGACY_KNOWN_TOKENS[clean]) {
     const known = LEGACY_KNOWN_TOKENS[clean];
+    const legacyVer = 1;
+    if (typeof minActiveVersion === "number" && legacyVer < minActiveVersion) {
+      return {
+        valid: false,
+        isRevoked: true,
+        teacherId: known.teacherId,
+        teacherEmail: known.teacherEmail,
+        version: legacyVer,
+        error: "LINK_REVOKED_BY_TEACHER",
+      };
+    }
     return {
       valid: true,
       teacherId: known.teacherId,
       teacherEmail: known.teacherEmail,
+      version: legacyVer,
     };
   }
 
   if (clean.includes("7MQ9SR") || clean.includes("svxvEiES1KWU5ZbNWlJvu6mHXWgU3fLBVmILo")) {
+    const legacyVer = 1;
+    if (typeof minActiveVersion === "number" && legacyVer < minActiveVersion) {
+      return {
+        valid: false,
+        isRevoked: true,
+        teacherId: "gNenrTIs1ZfsGZQmPxIEQNJPyIy1",
+        teacherEmail: "majedsoft@gmail.com",
+        version: legacyVer,
+        error: "LINK_REVOKED_BY_TEACHER",
+      };
+    }
     return {
       valid: true,
       teacherId: "gNenrTIs1ZfsGZQmPxIEQNJPyIy1",
       teacherEmail: "majedsoft@gmail.com",
+      version: legacyVer,
     };
   }
 
@@ -279,7 +313,7 @@ export function verifyStudentPortalToken(token: string | null | undefined): Stud
     };
   }
 
-  const { m, t, e, scope } = result.data;
+  const { m, t, e, scope, v } = result.data;
   if (m !== "SEB_STUDENT_FULL_PORTAL_V1" || scope !== "full_student_portal" || !t) {
     return {
       valid: false,
@@ -288,10 +322,23 @@ export function verifyStudentPortalToken(token: string | null | undefined): Stud
     };
   }
 
+  const tokenVer = typeof v === "number" ? v : 1;
+  if (typeof minActiveVersion === "number" && tokenVer < minActiveVersion) {
+    return {
+      valid: false,
+      isRevoked: true,
+      teacherId: t,
+      teacherEmail: e || undefined,
+      version: tokenVer,
+      error: "LINK_REVOKED_BY_TEACHER",
+    };
+  }
+
   return {
     valid: true,
     teacherId: t,
     teacherEmail: e || undefined,
+    version: tokenVer,
   };
 }
 
@@ -338,10 +385,11 @@ export function extractStudentPortalToken(urlSearchOrHash?: string): string | nu
 export function buildEncryptedStudentPortalUrl(
   teacherId: string,
   origin: string,
-  teacherEmail?: string
+  teacherEmail?: string,
+  linkVersion?: number
 ): string {
   const tId = teacherId || "gNenrTIs1ZfsGZQmPxIEQNJPyIy1";
-  const token = generateStudentPortalToken(tId, teacherEmail);
+  const token = generateStudentPortalToken(tId, teacherEmail, linkVersion);
   const cleanOrigin = (origin || (typeof window !== "undefined" ? window.location.origin : "")).replace(/\/+$/, "");
   return `${cleanOrigin}/?portal=student&stoken=${encodeURIComponent(token)}`;
 }

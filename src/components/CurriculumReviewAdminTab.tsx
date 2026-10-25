@@ -133,6 +133,11 @@ export default function CurriculumReviewAdminTab({
   // Per-subject lock list: subjects that the teacher closed/locked individually
   const [lockedSubjects, setLockedSubjects] = useState<string[]>([]);
   const [lockingSubjectId, setLockingSubjectId] = useState<string | null>(null);
+  // Per-unit and per-lesson lock lists: specific units/lessons that the teacher closed/locked individually
+  const [lockedUnits, setLockedUnits] = useState<string[]>([]);
+  const [lockedLessons, setLockedLessons] = useState<string[]>([]);
+  const [lockingUnitKey, setLockingUnitKey] = useState<string | null>(null);
+  const [lockingLessonKey, setLockingLessonKey] = useState<string | null>(null);
   const [subjectTargets, setSubjectTargets] = useState<Record<string, { targetGrade?: string; targetClass?: string; questionsPerLesson?: string | number; updatedAt?: string; isCustomized?: boolean; isLocked?: boolean }>>({});
   const [configuredGradeSubjects, setConfiguredGradeSubjects] = useState<Record<string, boolean>>({});
   const [configuredQLimitSubjects, setConfiguredQLimitSubjects] = useState<Record<string, boolean>>({});
@@ -204,6 +209,8 @@ export default function CurriculumReviewAdminTab({
           }
         });
         setLockedSubjects(lockedList);
+        setLockedUnits(Array.isArray(data.lockedUnits) ? data.lockedUnits : []);
+        setLockedLessons(Array.isArray(data.lockedLessons) ? data.lockedLessons : []);
         setLoading(false);
       } else if (userEmail) {
         // If not found under UID, check under email or by teacherEmail
@@ -222,6 +229,8 @@ export default function CurriculumReviewAdminTab({
               }
             });
             setLockedSubjects(lockedList);
+            setLockedUnits(Array.isArray(data.lockedUnits) ? data.lockedUnits : []);
+            setLockedLessons(Array.isArray(data.lockedLessons) ? data.lockedLessons : []);
             // Migrate to UID doc
             setDoc(uidRef, {
               ...data,
@@ -232,6 +241,8 @@ export default function CurriculumReviewAdminTab({
             setVisibleSubjects([]);
             setSubjectTargets({});
             setLockedSubjects([]);
+            setLockedUnits([]);
+            setLockedLessons([]);
           }
           setLoading(false);
         }, () => {
@@ -241,6 +252,8 @@ export default function CurriculumReviewAdminTab({
         setVisibleSubjects([]);
         setSubjectTargets({});
         setLockedSubjects([]);
+        setLockedUnits([]);
+        setLockedLessons([]);
         setLoading(false);
       }
     }, (error) => {
@@ -476,6 +489,82 @@ export default function CurriculumReviewAdminTab({
       triggerToast("فشل تحديث حالة قفل المادة", "error");
     } finally {
       setLockingSubjectId(null);
+    }
+  };
+
+  // Toggle per-unit lock status (disables/locks the whole unit for students)
+  const toggleUnitLock = async (unitName: string) => {
+    if (!currentUser?.uid || !selectedSubject || lockingUnitKey) return;
+    const unitKey = `${selectedSubject}___${unitName}`;
+    setLockingUnitKey(unitKey);
+
+    const isCurrentlyLocked = lockedUnits.includes(unitKey);
+    const newLockedUnits = isCurrentlyLocked
+      ? lockedUnits.filter((k) => k !== unitKey)
+      : [...lockedUnits, unitKey];
+
+    // Optimistic UI update
+    setLockedUnits(newLockedUnits);
+
+    try {
+      const ref = doc(db, "curriculum_settings", currentUser.uid);
+      await setDoc(ref, {
+        teacherId: currentUser.uid,
+        teacherEmail: currentUser.email?.toLowerCase().trim() || "",
+        lockedUnits: newLockedUnits,
+        lastUpdated: new Date().toISOString(),
+      }, { merge: true });
+
+      triggerToast(
+        isCurrentlyLocked
+          ? `تم فتح الوحدة "${unitName}" للطلاب بنجاح 🔓`
+          : `تم قفل الوحدة "${unitName}" ومنع وصول الطلاب إليها 🔒`,
+        isCurrentlyLocked ? "success" : "warning"
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `curriculum_settings/${currentUser.uid}`);
+      setLockedUnits(lockedUnits);
+      triggerToast("فشل تحديث حالة قفل الوحدة", "error");
+    } finally {
+      setLockingUnitKey(null);
+    }
+  };
+
+  // Toggle per-lesson lock status (disables/locks specific lesson for students)
+  const toggleLessonLock = async (unitName: string, lessonName: string) => {
+    if (!currentUser?.uid || !selectedSubject || lockingLessonKey) return;
+    const lessonKey = `${selectedSubject}___${unitName}___${lessonName}`;
+    setLockingLessonKey(lessonKey);
+
+    const isCurrentlyLocked = lockedLessons.includes(lessonKey);
+    const newLockedLessons = isCurrentlyLocked
+      ? lockedLessons.filter((k) => k !== lessonKey)
+      : [...lockedLessons, lessonKey];
+
+    // Optimistic UI update
+    setLockedLessons(newLockedLessons);
+
+    try {
+      const ref = doc(db, "curriculum_settings", currentUser.uid);
+      await setDoc(ref, {
+        teacherId: currentUser.uid,
+        teacherEmail: currentUser.email?.toLowerCase().trim() || "",
+        lockedLessons: newLockedLessons,
+        lastUpdated: new Date().toISOString(),
+      }, { merge: true });
+
+      triggerToast(
+        isCurrentlyLocked
+          ? `تم فتح الدرس "${lessonName}" للطلاب بنجاح 🔓`
+          : `تم قفل الدرس "${lessonName}" ومنع وصول الطلاب إليه 🔒`,
+        isCurrentlyLocked ? "success" : "warning"
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `curriculum_settings/${currentUser.uid}`);
+      setLockedLessons(lockedLessons);
+      triggerToast("فشل تحديث حالة قفل الدرس", "error");
+    } finally {
+      setLockingLessonKey(null);
     }
   };
 
@@ -2234,13 +2323,60 @@ export default function CurriculumReviewAdminTab({
                         
                         {activeSyllabus.units.map((unit, index) => {
                           const colColor = UNIT_COLORS[index % UNIT_COLORS.length];
+                          const unitKey = selectedSubject ? `${selectedSubject}___${unit.name}` : "";
+                          const isUnitLocked = lockedUnits.includes(unitKey);
+                          const isPending = lockingUnitKey === unitKey;
+
                           return (
                             <th
                               key={unit.name}
                               colSpan={unit.lessons.length}
-                              className={`${tableClasses.thUnit} text-center font-black border-l border-slate-200 ${colColor} sticky top-0 z-30`}
+                              className={`${tableClasses.thUnit} text-center font-black border-l border-slate-200 ${
+                                isUnitLocked ? "bg-rose-100/90 text-rose-950 border-rose-300" : colColor
+                              } sticky top-0 z-30 transition-colors py-2`}
                             >
-                              {unit.name}
+                              <div className="flex flex-col items-center justify-center gap-1.5 px-1">
+                                <div className="flex items-center justify-center gap-1.5 leading-tight">
+                                  {isUnitLocked && (
+                                    <Lock className="w-3.5 h-3.5 text-rose-600 shrink-0 inline-block animate-pulse" />
+                                  )}
+                                  <span className={isUnitLocked ? "text-rose-950 font-black" : ""}>
+                                    {unit.name}
+                                  </span>
+                                </div>
+
+                                {/* Unit Lock Toggle Button below unit title */}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleUnitLock(unit.name);
+                                  }}
+                                  disabled={isPending}
+                                  title={
+                                    isUnitLocked
+                                      ? "الوحدة مغلقة للطلاب حالياً - اضغط لإعادة الفتح"
+                                      : "الوحدة مفتوحة للطلاب - اضغط لإغلاق الوحدة بالكامل"
+                                  }
+                                  className={`cursor-pointer inline-flex items-center justify-center gap-1 px-2 py-0.5 rounded text-[9.5px] sm:text-[10px] font-black transition-all shadow-xs border ${
+                                    isUnitLocked
+                                      ? "bg-rose-600 hover:bg-rose-700 text-white border-rose-700 ring-2 ring-rose-300/80"
+                                      : "bg-white/95 hover:bg-white text-slate-700 hover:text-rose-600 border-slate-300 hover:border-rose-400"
+                                  } ${isPending ? "opacity-60 cursor-wait" : ""}`}
+                                >
+                                  {isUnitLocked ? (
+                                    <>
+                                      <Lock className="w-2.5 h-2.5 text-white shrink-0" />
+                                      <span>مغلقة 🔒 (فتح)</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Unlock className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
+                                      <span>إغلاق الوحدة</span>
+                                    </>
+                                  )}
+                                </button>
+                              </div>
                             </th>
                           );
                         })}
@@ -2248,21 +2384,98 @@ export default function CurriculumReviewAdminTab({
 
                       {/* Row 2: Lessons Headers */}
                       <tr className={`bg-slate-50 border-b border-slate-250 ${tableClasses.trLesson}`}>
-                        {flatLessons.map((lesson, idx) => (
-                          <th
-                            key={`${lesson.unitName}-${lesson.lessonName}-${idx}`}
-                            className={`${tableClasses.thLesson} text-center border-l border-slate-200 align-top sticky ${tableClasses.lessonTop} z-20 bg-slate-50`}
-                          >
-                            <div className="flex flex-col items-center justify-between h-full gap-1.5">
-                              <span className={`${tableDensity === "ultra-compact" ? "text-[8.5px]" : tableDensity === "compact" ? "text-[9px]" : "text-[10px]"} font-black text-slate-700 leading-snug line-clamp-3 block max-h-[48px] overflow-hidden`} title={lesson.lessonName}>
-                                {lesson.lessonName}
-                              </span>
-                              <span className={`${tableDensity === "ultra-compact" ? "text-[7.5px] px-1 py-0" : "text-[8.5px] px-1.5 py-0.5"} font-bold bg-slate-100 text-slate-500 rounded-md border border-slate-200 select-none shrink-0 font-sans`}>
-                                {lesson.questionsCount} أسئلة
-                              </span>
-                            </div>
-                          </th>
-                        ))}
+                        {flatLessons.map((lesson, idx) => {
+                          const lessonKey = selectedSubject ? `${selectedSubject}___${lesson.unitName}___${lesson.lessonName}` : "";
+                          const unitKey = selectedSubject ? `${selectedSubject}___${lesson.unitName}` : "";
+                          const isUnitLocked = lockedUnits.includes(unitKey);
+                          const isLessonLocked = lockedLessons.includes(lessonKey);
+                          const isLockedEffective = isUnitLocked || isLessonLocked;
+                          const isPending = lockingLessonKey === lessonKey;
+
+                          return (
+                            <th
+                              key={`${lesson.unitName}-${lesson.lessonName}-${idx}`}
+                              className={`${tableClasses.thLesson} text-center border-l border-slate-200 align-top sticky ${
+                                tableClasses.lessonTop
+                              } z-20 ${isLockedEffective ? "bg-rose-50/90" : "bg-slate-50"}`}
+                            >
+                              <div className="flex flex-col items-center justify-between h-full gap-1.5 p-1">
+                                <div className="flex flex-col items-center gap-1 w-full">
+                                  <div className="flex items-center justify-center gap-1 w-full">
+                                    {isLockedEffective && (
+                                      <Lock className="w-2.5 h-2.5 text-rose-600 shrink-0" />
+                                    )}
+                                    <span
+                                      className={`${
+                                        tableDensity === "ultra-compact"
+                                          ? "text-[8.5px]"
+                                          : tableDensity === "compact"
+                                          ? "text-[9px]"
+                                          : "text-[10px]"
+                                      } font-black ${
+                                        isLockedEffective ? "text-rose-900" : "text-slate-700"
+                                      } leading-snug line-clamp-3 block max-h-[48px] overflow-hidden`}
+                                      title={lesson.lessonName}
+                                    >
+                                      {lesson.lessonName}
+                                    </span>
+                                  </div>
+                                  <span
+                                    className={`${
+                                      tableDensity === "ultra-compact"
+                                        ? "text-[7.5px] px-1 py-0"
+                                        : "text-[8.5px] px-1.5 py-0.5"
+                                    } font-bold bg-slate-100 text-slate-500 rounded-md border border-slate-200 select-none shrink-0 font-sans`}
+                                  >
+                                    {lesson.questionsCount} أسئلة
+                                  </span>
+                                </div>
+
+                                {/* Lesson Lock Toggle Button */}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (isUnitLocked) return;
+                                    toggleLessonLock(lesson.unitName, lesson.lessonName);
+                                  }}
+                                  disabled={isPending || isUnitLocked}
+                                  title={
+                                    isUnitLocked
+                                      ? "مغلق تلقائياً لأن الوحدة بأكملها مغلقة"
+                                      : isLessonLocked
+                                      ? "الدرس مغلق للطلاب - اضغط لإعادة الفتح"
+                                      : "الدرس مفتوح للطلاب - اضغط للإغلاق"
+                                  }
+                                  className={`cursor-pointer inline-flex items-center justify-center gap-1 px-1.5 py-0.5 rounded text-[8px] sm:text-[8.5px] font-black transition-all shadow-2xs border w-full ${
+                                    isUnitLocked
+                                      ? "bg-slate-200 text-slate-500 border-slate-300 cursor-not-allowed opacity-80"
+                                      : isLessonLocked
+                                      ? "bg-rose-600 hover:bg-rose-700 text-white border-rose-700 ring-1 ring-rose-400"
+                                      : "bg-white hover:bg-rose-50 text-slate-600 hover:text-rose-600 border-slate-250 hover:border-rose-300"
+                                  } ${isPending ? "opacity-60 cursor-wait" : ""}`}
+                                >
+                                  {isUnitLocked ? (
+                                    <>
+                                      <Lock className="w-2.5 h-2.5 text-slate-500 shrink-0" />
+                                      <span>مقفل بالوحدة</span>
+                                    </>
+                                  ) : isLessonLocked ? (
+                                    <>
+                                      <Lock className="w-2.5 h-2.5 text-white shrink-0" />
+                                      <span>مغلق 🔒</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Unlock className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
+                                      <span>إغلاق</span>
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            </th>
+                          );
+                        })}
                       </tr>
                     </thead>
 

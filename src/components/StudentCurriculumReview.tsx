@@ -562,6 +562,8 @@ export default function StudentCurriculumReview({
   const [isSettingsLoaded, setIsSettingsLoaded] = useState<boolean>(false);
   const [visibleSubjects, setVisibleSubjects] = useState<string[]>([]);
   const [lockedSubjects, setLockedSubjects] = useState<string[]>([]);
+  const [lockedUnits, setLockedUnits] = useState<string[]>([]);
+  const [lockedLessons, setLockedLessons] = useState<string[]>([]);
   const [subjectTargets, setSubjectTargets] = useState<Record<string, { targetGrade?: string; targetClass?: string; questionsPerLesson?: string | number; isLocked?: boolean }>>({});
 
   // Ongoing quizzes state to strictly enforce subject locking during active exams
@@ -649,12 +651,16 @@ export default function StudentCurriculumReview({
           }
         });
         setLockedSubjects(lockedList);
+        setLockedUnits(Array.isArray(data.lockedUnits) ? data.lockedUnits : []);
+        setLockedLessons(Array.isArray(data.lockedLessons) ? data.lockedLessons : []);
         setIsSettingsLoaded(true);
       } else {
         setIsReviewEnabled(true);
         setVisibleSubjects([]); // Default is empty, meaning all subjects are hidden
         setSubjectTargets({});
         setLockedSubjects([]);
+        setLockedUnits([]);
+        setLockedLessons([]);
         setIsSettingsLoaded(true);
       }
     }, (error) => {
@@ -671,6 +677,21 @@ export default function StudentCurriculumReview({
     if (lockedSubjects.includes(subName)) return true;
     if (subjectTargets[subName]?.isLocked) return true;
     return false;
+  };
+
+  // Helper to check if a unit is locked by teacher individually
+  const isUnitTeacherLocked = (unitName?: string | null): boolean => {
+    if (!unitName || !selectedSubject) return false;
+    const key = `${selectedSubject}___${unitName}`;
+    return lockedUnits.includes(key);
+  };
+
+  // Helper to check if a lesson is locked by teacher individually (or if its unit is locked)
+  const isLessonTeacherLocked = (unitName?: string | null, lessonName?: string | null): boolean => {
+    if (!unitName || !lessonName || !selectedSubject) return false;
+    if (isUnitTeacherLocked(unitName)) return true;
+    const key = `${selectedSubject}___${unitName}___${lessonName}`;
+    return lockedLessons.includes(key);
   };
 
   // Helper to check if subject targeting matches current student's grade and class
@@ -1228,6 +1249,17 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
     }
   }, [activeLesson, selectedSubject, isPlaying]);
 
+  // If currently solving a lesson or unit that becomes locked by the teacher, exit lesson safely
+  useEffect(() => {
+    if (isPlaying && activeUnit && activeLesson) {
+      if (isLessonTeacherLocked(activeUnit.name, activeLesson.name)) {
+        setIsPlaying(false);
+        setShowCompletionModal(false);
+        triggerToast("تم إغلاق هذا الدرس أو الوحدة من قبل المعلم حالياً 🔒", "warning");
+      }
+    }
+  }, [lockedUnits, lockedLessons, isPlaying, activeUnit?.name, activeLesson?.name]);
+
   // Toggle accordions
   const toggleUnit = (idx: number) => {
     synth.playClick();
@@ -1236,6 +1268,14 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
 
   // Select Lesson from Sidebar
   const selectLesson = (unitIdx: number, lessonIdx: number) => {
+    const targetUnit = activeSubjectData?.units[unitIdx];
+    const targetLesson = targetUnit?.lessons[lessonIdx];
+    if (isLessonTeacherLocked(targetUnit?.name, targetLesson?.name)) {
+      synth.playIncorrect();
+      triggerToast("عذراً، هذا الدرس أو الوحدة مقفلة حالياً من قِبل المعلم 🔒", "warning");
+      return;
+    }
+
     if (autoNextTimeoutRef.current) {
       clearTimeout(autoNextTimeoutRef.current);
       autoNextTimeoutRef.current = null;
@@ -1244,8 +1284,6 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
     setActiveUnitIdx(unitIdx);
     setActiveLessonIdx(lessonIdx);
     
-    const targetUnit = activeSubjectData?.units[unitIdx];
-    const targetLesson = targetUnit?.lessons[lessonIdx];
     if (targetLesson?.questions) {
       initializeLesson(targetLesson.questions);
     }
@@ -2695,32 +2733,62 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
 
                     const theme = UNIT_COLOR_SCHEMES[uIdx % UNIT_COLOR_SCHEMES.length];
                     
+                    const isThisUnitLocked = isUnitTeacherLocked(unit.name);
+
                     return (
                       <div key={`unit-${uIdx}`} className="bg-white">
                         {/* Unit Accordion Trigger */}
                         <button
                           type="button"
-                          onClick={() => toggleUnit(uIdx)}
-                          className={`w-full p-4 text-right font-black text-xs md:text-sm flex justify-between items-center transition-all duration-200 cursor-pointer ${
-                            isExpanded ? theme.expanded : theme.collapsed
+                          disabled={isThisUnitLocked}
+                          onClick={() => {
+                            if (isThisUnitLocked) {
+                              synth.playIncorrect();
+                              triggerToast("عذراً، هذه الوحدة مقفلة حالياً من قِبل المعلم 🔒", "warning");
+                              return;
+                            }
+                            toggleUnit(uIdx);
+                          }}
+                          className={`w-full p-4 text-right font-black text-xs md:text-sm flex justify-between items-center transition-all duration-200 ${
+                            isThisUnitLocked
+                              ? "bg-slate-800/95 text-slate-300 border-r-4 border-rose-500 cursor-not-allowed opacity-85 shadow-inner"
+                              : isExpanded 
+                              ? `${theme.expanded} cursor-pointer` 
+                              : `${theme.collapsed} cursor-pointer`
                           }`}
                         >
                           <div className="flex items-center gap-2 flex-wrap text-right">
-                            <span className={`w-2.5 h-2.5 rounded-full ${theme.accentDot} inline-block shrink-0 shadow-xs`} />
-                            <span className="leading-tight">{unit.name}</span>
-                            {!isExpanded && isCurrentlySolvingInThisUnit && (
+                            {isThisUnitLocked ? (
+                              <Lock className="w-3.5 h-3.5 text-rose-400 shrink-0 inline-block animate-pulse" />
+                            ) : (
+                              <span className={`w-2.5 h-2.5 rounded-full ${theme.accentDot} inline-block shrink-0 shadow-xs`} />
+                            )}
+                            <span className={`leading-tight ${isThisUnitLocked ? "text-slate-200" : ""}`}>{unit.name}</span>
+                            
+                            {isThisUnitLocked && (
+                              <span className="bg-rose-500/20 text-rose-300 border border-rose-500/50 text-[10px] font-black px-2 py-0.5 rounded-full flex items-center gap-1 shadow-2xs">
+                                <Lock className="w-2.5 h-2.5 text-rose-300" />
+                                <span>مقفلة 🔒</span>
+                              </span>
+                            )}
+
+                            {!isThisUnitLocked && !isExpanded && isCurrentlySolvingInThisUnit && (
                               <span className="bg-amber-400 text-slate-950 px-2.5 py-1 rounded-lg text-[11px] font-black border border-amber-300 animate-pulse flex items-center gap-1.5 shadow-sm">
                                 <span>✏️</span>
                                 <span>ملاحظة: جاري الحل في هذه الوحدة</span>
                               </span>
                             )}
                           </div>
-                          <ChevronDown className={`w-4 h-4 transition-transform duration-200 shrink-0 mr-2 ${isExpanded ? "rotate-180 text-white" : "text-slate-300"}`} />
+                          {isThisUnitLocked ? (
+                            <Lock className="w-4 h-4 text-rose-400 shrink-0 mr-2" />
+                          ) : (
+                            <ChevronDown className={`w-4 h-4 transition-transform duration-200 shrink-0 mr-2 ${isExpanded ? "rotate-180 text-white" : "text-slate-300"}`} />
+                          )}
                         </button>
 
                         {/* Lessons Stack */}
                         <AnimatePresence initial={false}>
-                          {isExpanded && (
+                          {isExpanded && !isThisUnitLocked && (
                             <motion.div
                               initial={{ height: 0, opacity: 0 }}
                               animate={{ height: "auto", opacity: 1 }}
@@ -2729,6 +2797,7 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
                             >
                               <div className="p-2 space-y-1">
                                 {matchingLessons.map(({ lesson, lIdx }) => {
+                                  const isThisLessonLocked = isLessonTeacherLocked(unit.name, lesson.name);
                                   const isActive = isPlaying && activeUnitIdx === uIdx && activeLessonIdx === lIdx;
                                   const statsKey = `${selectedSubject}_${unit.name}_${lesson.name}`;
                                   const stat = lessonStats[statsKey];
@@ -2736,7 +2805,15 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
                                   let statusText: React.ReactNode = "لم يحل";
                                   let badgeColor = "bg-rose-50 text-rose-600 border border-rose-500 font-bold shadow-xs";
                                   
-                                  if (isActive) {
+                                  if (isThisLessonLocked) {
+                                    statusText = (
+                                      <span className="flex items-center gap-1">
+                                        <Lock className="w-3 h-3 text-rose-600 shrink-0" />
+                                        <span>مغلق</span>
+                                      </span>
+                                    );
+                                    badgeColor = "bg-rose-50 text-rose-700 border border-rose-300 font-extrabold shadow-2xs";
+                                  } else if (isActive) {
                                     statusText = "جاري الحل";
                                     badgeColor = "bg-blue-50 text-blue-600 border border-blue-500 font-black animate-pulse shadow-xs";
                                   } else if (stat?.solved) {
@@ -2758,17 +2835,32 @@ ${Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0 ?
                                     <button
                                       key={`lesson-${lIdx}`}
                                       type="button"
-                                      onClick={() => selectLesson(uIdx, lIdx)}
-                                      className={`w-full p-3 rounded-xl text-right text-xs font-extrabold transition-all duration-200 cursor-pointer flex items-center justify-between gap-3 ${
-                                        isActive 
-                                          ? "bg-indigo-100/40 border border-indigo-200 text-indigo-800 shadow-xs font-black" 
-                                          : "hover:bg-slate-100 text-slate-700"
+                                      disabled={isThisLessonLocked}
+                                      onClick={() => {
+                                        if (isThisLessonLocked) {
+                                          synth.playIncorrect();
+                                          triggerToast("عذراً، هذا الدرس مغلق حالياً من قِبل المعلم 🔒", "warning");
+                                          return;
+                                        }
+                                        selectLesson(uIdx, lIdx);
+                                      }}
+                                      className={`w-full p-3 rounded-xl text-right text-xs font-extrabold transition-all duration-200 flex items-center justify-between gap-3 ${
+                                        isThisLessonLocked
+                                          ? "bg-slate-100/90 text-slate-400 border border-slate-200 cursor-not-allowed opacity-70"
+                                          : isActive 
+                                          ? "bg-indigo-100/40 border border-indigo-200 text-indigo-800 shadow-xs font-black cursor-pointer" 
+                                          : "hover:bg-slate-100 text-slate-700 cursor-pointer"
                                       }`}
                                     >
                                       <div className="flex flex-col text-right">
                                         <div className="flex items-center gap-1.5">
-                                          <span className="font-bold text-xs md:text-sm text-slate-800">{lesson.name}</span>
-                                          {normalizedLessonSearch && normalizeArabic(lesson.name).includes(normalizedLessonSearch) && (
+                                          {isThisLessonLocked && (
+                                            <Lock className="w-3.5 h-3.5 text-rose-500 shrink-0 inline-block" />
+                                          )}
+                                          <span className={`font-bold text-xs md:text-sm ${isThisLessonLocked ? "text-slate-500" : "text-slate-800"}`}>
+                                            {lesson.name}
+                                          </span>
+                                          {!isThisLessonLocked && normalizedLessonSearch && normalizeArabic(lesson.name).includes(normalizedLessonSearch) && (
                                             <span className="bg-indigo-100 text-indigo-700 text-[10px] font-black px-1.5 py-0.2 rounded border border-indigo-200">
                                               مطابق 🎯
                                             </span>

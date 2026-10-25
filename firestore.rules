@@ -76,5 +76,11 @@ service cloud.firestore {
     match /exam_proctoring/{sessionId} {
       allow read, write: if true;
     }
+
+    // Secure Full Site Link Settings (Teacher site control for student platform)
+    match /secure_link_settings/{docId} {
+      allow read, write: if true;
+    }
   }
 }
+

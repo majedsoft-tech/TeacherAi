@@ -65,7 +65,10 @@ import {
   Menu,
   Hourglass,
   ShieldAlert,
+  ShieldCheck,
   ExternalLink,
+  Power,
+  PowerOff,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import * as XLSX from "xlsx";
@@ -120,6 +123,12 @@ import {
   buildReviewPortalUrl,
   extractReviewTokenFromUrl,
 } from "./utils/reviewAccessCrypto";
+import {
+  generateStudentPortalToken,
+  verifyStudentPortalToken,
+  extractStudentPortalToken,
+  buildEncryptedStudentPortalUrl,
+} from "./utils/studentPortalCrypto";
 import { initializeApp, getApp, getApps } from "firebase/app";
 import {
   GoogleAuthProvider,
@@ -825,9 +834,72 @@ export default function App() {
   const [standaloneReviewSelectedSubject, setStandaloneReviewSelectedSubject] = useState<string | null>(null);
   const [showStandaloneReviewModal, setShowStandaloneReviewModal] = useState<boolean>(false);
 
+  // --- Encrypted Student Portal Access & Tamper Protection ---
+  const initialStudentToken = extractStudentPortalToken();
+  const initialStudentVerification = initialStudentToken
+    ? verifyStudentPortalToken(initialStudentToken)
+    : null;
+
+  const [isStudentTokenTampered, setIsStudentTokenTampered] = useState<boolean>(() => {
+    // If student token is supplied in URL/hash but verification failed (tampered/truncated)
+    if (initialStudentToken && (!initialStudentVerification || !initialStudentVerification.valid)) {
+      return true;
+    }
+    return false;
+  });
+
+  // Track if this browser tab/client originated from student portal to prevent elevation to teacher portal
+  const [isStudentSession, setIsStudentSession] = useState<boolean>(() => {
+    if (initialStudentToken || urlParams.get("portal") === "student" || urlParams.get("stoken")) {
+      try {
+        sessionStorage.setItem("seb_student_session", "true");
+        localStorage.setItem("seb_student_session", "true");
+      } catch {}
+      return true;
+    }
+    try {
+      if (sessionStorage.getItem("seb_student_session") === "true") return true;
+    } catch {}
+    return false;
+  });
+
+  // Student link Enabled/Disabled status (Default true)
+  const [isStudentLinkActive, setIsStudentLinkActive] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem("seb_student_link_global_status");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed.isEnabled === "boolean") return parsed.isEnabled;
+      }
+    } catch {}
+    return true;
+  });
+  const [isCheckingLinkStatus, setIsCheckingLinkStatus] = useState(false);
+
   // Student Portal-wide states
   const [studentPortalActive, setStudentPortalActive] = useState<boolean>(
     () => {
+      // If student token is tampered with, keep studentPortalActive false to show Security Tampered Screen
+      if (initialStudentToken && (!initialStudentVerification || !initialStudentVerification.valid)) {
+        return false;
+      }
+
+      // If valid encrypted student token exists in URL, activate student portal immediately!
+      if (initialStudentToken && initialStudentVerification?.valid) {
+        try {
+          sessionStorage.removeItem("seb_standalone_review_token");
+        } catch {}
+        return true;
+      }
+
+      // If student portal is explicitly requested in URL (?portal=student), activate immediately!
+      if (urlParams.get("portal") === "student") {
+        try {
+          sessionStorage.removeItem("seb_standalone_review_token");
+        } catch {}
+        return true;
+      }
+
       // If review token is present or review portal is active, do not activate student portal!
       if (initialReviewToken || reviewTokenTampered) {
         return false;
@@ -838,9 +910,16 @@ export default function App() {
         }
       } catch {}
 
+      // If this browser was in student session and student is NOT an authenticated teacher:
+      // Prevent student from deleting URL query to get into teacher login!
+      try {
+        if (sessionStorage.getItem("seb_student_session") === "true" && !urlParams.get("teacher")) {
+          return true;
+        }
+      } catch {}
+
       // Student portal is active ONLY if student parameters or quiz link are explicitly provided in URL
       if (
-        urlParams.get("portal") === "student" ||
         urlParams.get("quizId") ||
         urlParams.get("quizid") ||
         urlParams.get("quizID") ||
@@ -873,6 +952,14 @@ export default function App() {
   const [studentPortalTeacherId, setStudentPortalTeacherId] = useState<
     string | null
   >(() => {
+    // 1. If valid encrypted student token, use the decrypted teacherId!
+    if (initialStudentVerification?.valid && initialStudentVerification.teacherId) {
+      try {
+        localStorage.setItem("seb_student_teacher_id", initialStudentVerification.teacherId);
+      } catch {}
+      return initialStudentVerification.teacherId;
+    }
+
     const params = new URLSearchParams(window.location.search);
     const urlTId = params.get("teacherId");
     if (urlTId) {
@@ -880,15 +967,18 @@ export default function App() {
       return urlTId;
     }
     
-    // If there's no teacherId and no quizId in the URL parameters and no portal param,
-    // we should NOT use a cached teacherId. This forces the code entry screen.
     const quizId = params.get("quizId") || params.get("quizid") || params.get("quizID");
-    const hasPortalParam = params.get("portal") === "student";
+    const hasPortalParam = params.get("portal") === "student" || Boolean(initialStudentToken);
+    if (hasPortalParam) {
+      const cached = localStorage.getItem("seb_student_teacher_id") || localStorage.getItem("platform_teacher_uid");
+      if (cached) return cached;
+      return "gNenrTIs1ZfsGZQmPxIEQNJPyIy1";
+    }
     if (!quizId && !hasPortalParam && params.toString() === "") {
       return null;
     }
     
-    return localStorage.getItem("seb_student_teacher_id");
+    return localStorage.getItem("seb_student_teacher_id") || "gNenrTIs1ZfsGZQmPxIEQNJPyIy1";
   });
 
   const [studentPortalTeacherName, setStudentPortalTeacherName] = useState<string>("");
@@ -926,6 +1016,7 @@ export default function App() {
     
     getTeacherName();
   }, [studentPortalTeacherId, currentUser]);
+
   const [studentLoggedInId, setStudentLoggedInId] = useState<string | null>(
     () => {
       return sessionStorage.getItem("seb_student_logged_id");
@@ -2007,11 +2098,16 @@ export default function App() {
     }
 
     const urlParamsObj = new URLSearchParams(window.location.search);
-    const cachedTeacherId = urlParamsObj.get("teacherId") || localStorage.getItem("seb_student_teacher_id");
+    const resolvedTeacherId =
+      studentPortalTeacherId ||
+      initialStudentVerification?.teacherId ||
+      urlParamsObj.get("teacherId") ||
+      localStorage.getItem("seb_student_teacher_id") ||
+      (teacherPreviewActive && currentUser ? currentUser.uid : "gNenrTIs1ZfsGZQmPxIEQNJPyIy1");
     const targetQuizId = studentQuizId;
 
     // Determine the active teacher UID for loading students/grades in Student Mode
-    let tUid = cachedTeacherId;
+    let tUid = resolvedTeacherId;
     if (teacherPreviewActive && currentUser) {
       tUid = currentUser.uid;
     } else if (studentPortalActive && currentUser && !tUid) {
@@ -2115,47 +2211,115 @@ export default function App() {
 
             // Subscribe to students list in real-time
             try {
-              unsubStudents = onSnapshot(
+              let teacherProfileEmail = urlParamsObj.get("tEmail")?.toLowerCase().trim() || "";
+              try {
+                const tDocSnap = await getDoc(doc(db, "teachers", currentTuid));
+                if (tDocSnap.exists()) {
+                  const tData = tDocSnap.data();
+                  if (tData.email && !teacherProfileEmail) {
+                    teacherProfileEmail = tData.email.toLowerCase().trim();
+                  }
+                  if (tData.displayName) {
+                    setStudentPortalTeacherName(tData.displayName);
+                  }
+                }
+              } catch {}
+
+              const studentMap = new Map<string, Student>();
+              const processAndSetStudents = () => {
+                const list: Student[] = Array.from(studentMap.values());
+                list.forEach((data) => {
+                  if (data.detailedGrades) {
+                    const originalLength = data.detailedGrades.length;
+                    data.detailedGrades = data.detailedGrades.filter(
+                      (g) => g.quizTitle !== "اختبار تجريبي تمهيدي",
+                    );
+                    if (originalLength !== data.detailedGrades.length) {
+                      let sumEarned = 0;
+                      let sumMax = 0;
+                      data.detailedGrades.forEach((g) => {
+                        sumEarned += g.score;
+                        sumMax += g.maxScore;
+                      });
+                      data.averageScore =
+                        data.detailedGrades.length > 0
+                          ? Math.round((sumEarned / (sumMax || 1)) * 100)
+                          : 0;
+                      data.status =
+                        data.averageScore >= 90
+                          ? "excellent"
+                          : data.averageScore >= 75
+                            ? "good"
+                            : data.averageScore >= 60
+                              ? "average"
+                              : "needs_improvement";
+                    }
+                  }
+                });
+                list.sort((a, b) => (a.name || "").localeCompare(b.name || "", "ar"));
+                setStudents(list);
+
+                if (list.length > 0) {
+                  setStudentSelectedGrade((currGrade) => {
+                    const hasStudents = list.some((s) => {
+                      const sGrade = s.grade || (s.gradeClass && s.gradeClass.includes(" - ") ? s.gradeClass.split(" - ")[0].trim() : "");
+                      return normalizeGradeName(sGrade) === normalizeGradeName(currGrade);
+                    });
+                    if (!hasStudents) {
+                      const fStudent = list[0];
+                      const fGrade = fStudent.grade || (fStudent.gradeClass && fStudent.gradeClass.includes(" - ") ? fStudent.gradeClass.split(" - ")[0].trim() : "");
+                      return fGrade || currGrade;
+                    }
+                    return currGrade;
+                  });
+                  setStudentSelectedSemester((currSem) => {
+                    const hasStudents = list.some((s) => {
+                      const sSem = s.semester || (s.gradeClass && s.gradeClass.includes(" - ") ? s.gradeClass.split(" - ")[1].trim() : "");
+                      return normalizeSemesterName(sSem) === normalizeSemesterName(currSem);
+                    });
+                    if (!hasStudents) {
+                      const fStudent = list[0];
+                      const fSem = fStudent.semester || (fStudent.gradeClass && fStudent.gradeClass.includes(" - ") ? fStudent.gradeClass.split(" - ")[1].trim() : "");
+                      return fSem || currSem;
+                    }
+                    return currSem;
+                  });
+                }
+              };
+
+              const unsub1 = onSnapshot(
                 query(collection(db, "students"), where("teacherId", "==", currentTuid)),
                 (snapshot) => {
-                  const list: Student[] = [];
                   snapshot.forEach((doc) => {
-                    const data = doc.data() as Student;
-                    if (data.detailedGrades) {
-                      const originalLength = data.detailedGrades.length;
-                      data.detailedGrades = data.detailedGrades.filter(
-                        (g) => g.quizTitle !== "اختبار تجريبي تمهيدي",
-                      );
-                      if (originalLength !== data.detailedGrades.length) {
-                        let sumEarned = 0;
-                        let sumMax = 0;
-                        data.detailedGrades.forEach((g) => {
-                          sumEarned += g.score;
-                          sumMax += g.maxScore;
-                        });
-                        data.averageScore =
-                          data.detailedGrades.length > 0
-                            ? Math.round((sumEarned / (sumMax || 1)) * 100)
-                            : 0;
-                        data.status =
-                          data.averageScore >= 90
-                            ? "excellent"
-                            : data.averageScore >= 75
-                              ? "good"
-                              : data.averageScore >= 60
-                                ? "average"
-                                : "needs_improvement";
-                      }
-                    }
-                    list.push(data);
+                    studentMap.set(doc.id, { id: doc.id, ...doc.data() } as Student);
                   });
-                  list.sort((a, b) => a.name.localeCompare(b.name, "ar"));
-                  setStudents(list);
+                  processAndSetStudents();
                 },
                 (studentsErr) => {
-                  console.warn("Failed to listen to students in student portal:", studentsErr);
+                  console.warn("Failed to listen to students by teacherId in student portal:", studentsErr);
                 }
               );
+
+              let unsub2: (() => void) | null = null;
+              if (teacherProfileEmail) {
+                unsub2 = onSnapshot(
+                  query(collection(db, "students"), where("teacherEmail", "==", teacherProfileEmail)),
+                  (snapshot) => {
+                    snapshot.forEach((doc) => {
+                      studentMap.set(doc.id, { id: doc.id, ...doc.data() } as Student);
+                    });
+                    processAndSetStudents();
+                  },
+                  (emailErr) => {
+                    console.warn("Failed to listen to students by email in student portal:", emailErr);
+                  }
+                );
+              }
+
+              unsubStudents = () => {
+                unsub1();
+                if (unsub2) unsub2();
+              };
             } catch (studentsErr) {
               console.warn("Failed to set up student listener in student portal:", studentsErr);
             }
@@ -3671,6 +3835,219 @@ export default function App() {
       setToastMessage(null);
     }, 4000);
   };
+
+  const [copiedStudentLink, setCopiedStudentLink] = useState(false);
+
+  const copyStudentPortalLink = useCallback((showToast = true) => {
+    const tId =
+      currentUser?.uid ||
+      localStorage.getItem("platform_teacher_uid") ||
+      localStorage.getItem("seb_student_teacher_id") ||
+      "gNenrTIs1ZfsGZQmPxIEQNJPyIy1";
+    const userEmail = currentUser?.email ? currentUser.email.toLowerCase().trim() : "majedsoft@gmail.com";
+    const link = buildEncryptedStudentPortalUrl(tId, window.location.origin, userEmail);
+    
+    // Robust clipboard copy with textarea fallback for iframes
+    let copySuccessful = false;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(link).catch(() => {
+          const textArea = document.createElement("textarea");
+          textArea.value = link;
+          textArea.style.position = "fixed";
+          textArea.style.left = "-9999px";
+          document.body.appendChild(textArea);
+          textArea.focus();
+          textArea.select();
+          document.execCommand("copy");
+          document.body.removeChild(textArea);
+        });
+        copySuccessful = true;
+      } else {
+        const textArea = document.createElement("textarea");
+        textArea.value = link;
+        textArea.style.position = "fixed";
+        textArea.style.left = "-9999px";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        copySuccessful = document.execCommand("copy");
+        document.body.removeChild(textArea);
+      }
+    } catch {
+      copySuccessful = false;
+    }
+
+    setCopiedStudentLink(true);
+    setTimeout(() => {
+      setCopiedStudentLink(false);
+    }, 2000);
+
+    if (showToast) {
+      triggerToast(
+        "تم نسخ رابط صفحة الطالب المشفّر بنجاح! 🔒 رابط محمي بالكامل يمنع التلاعب للوصول لصفحة المعلم.",
+        "success"
+      );
+    }
+    return link;
+  }, [currentUser?.uid, currentUser?.email]);
+
+  const openStudentPortalLink = useCallback(() => {
+    const tId =
+      currentUser?.uid ||
+      localStorage.getItem("platform_teacher_uid") ||
+      localStorage.getItem("seb_student_teacher_id") ||
+      "gNenrTIs1ZfsGZQmPxIEQNJPyIy1";
+    const userEmail = currentUser?.email ? currentUser.email.toLowerCase().trim() : "majedsoft@gmail.com";
+    const link = buildEncryptedStudentPortalUrl(tId, window.location.origin, userEmail);
+    window.open(link, "_blank");
+  }, [currentUser?.uid, currentUser?.email]);
+
+  const toggleStudentPortalLink = async () => {
+    const tId =
+      currentUser?.uid ||
+      localStorage.getItem("platform_teacher_uid") ||
+      "gNenrTIs1ZfsGZQmPxIEQNJPyIy1";
+    const nextStatus = !isStudentLinkActive;
+    setIsStudentLinkActive(nextStatus);
+
+    try {
+      localStorage.setItem(
+        `seb_student_link_status_${tId}`,
+        JSON.stringify({ isEnabled: nextStatus })
+      );
+      localStorage.setItem(
+        "seb_student_link_status_demo_teacher",
+        JSON.stringify({ isEnabled: nextStatus })
+      );
+      localStorage.setItem(
+        "seb_student_link_global_status",
+        JSON.stringify({ isEnabled: nextStatus })
+      );
+
+      // Save to Firestore secure_link_settings for both active teacher and demo_teacher doc
+      await Promise.allSettled([
+        setDoc(
+          doc(db, "secure_link_settings", `student_link_${tId}`),
+          {
+            isEnabled: nextStatus,
+            teacherId: tId,
+            updatedAt: Date.now(),
+          },
+          { merge: true }
+        ),
+        setDoc(
+          doc(db, "secure_link_settings", "student_link_demo_teacher"),
+          {
+            isEnabled: nextStatus,
+            teacherId: tId,
+            updatedAt: Date.now(),
+          },
+          { merge: true }
+        ),
+      ]);
+
+      // Broadcast to other open tabs
+      try {
+        const bc = new BroadcastChannel("student_portal_link_channel");
+        bc.postMessage({ type: "LINK_STATUS_CHANGED", teacherId: tId, isEnabled: nextStatus });
+        bc.close();
+      } catch {}
+
+      if (nextStatus) {
+        triggerToast("تم تشغيل وتفعيل رابط صفحة الطالب بنجاح! 🟢 أصبح الرابط متاحاً للطلاب الآن.", "success");
+      } else {
+        triggerToast("تم إيقاف رابط صفحة الطالب مؤقتاً! 🛑 تم إغلاق دخول الطلاب عبر الرابط.", "info");
+      }
+    } catch (err) {
+      console.warn("Could not sync link status to Firestore:", err);
+      if (nextStatus) {
+        triggerToast("تم تشغيل الرابط 🟢", "success");
+      } else {
+        triggerToast("تم إيقاف الرابط 🛑", "info");
+      }
+    }
+  };
+
+  const checkStudentLinkStatusManually = async () => {
+    const tid = studentPortalTeacherId || initialStudentVerification?.teacherId || "gNenrTIs1ZfsGZQmPxIEQNJPyIy1";
+    setIsCheckingLinkStatus(true);
+    try {
+      const docSnap = await getDoc(doc(db, "secure_link_settings", `student_link_${tid}`));
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        const enabled = data.isEnabled !== false;
+        setIsStudentLinkActive(enabled);
+        if (enabled) {
+          triggerToast("تم تشغيل الرابط من قِبل المعلم! 🟢 جاري فتح صفحة الطالب", "success");
+        } else {
+          triggerToast("الرابط لا يزال متوقفاً من قِبل المعلم 🛑", "info");
+        }
+      } else {
+        triggerToast("تم فحص حالة الرابط", "info");
+      }
+    } catch {
+      triggerToast("تعذر فحص حالة الرابط، يرجى المحاولة بعد قليل", "error");
+    } finally {
+      setTimeout(() => setIsCheckingLinkStatus(false), 500);
+    }
+  };
+
+  // Real-time synchronization of teacher's student link status (On / Off)
+  useEffect(() => {
+    const activeTid = studentPortalTeacherId || initialStudentVerification?.teacherId;
+    if (!activeTid && !studentPortalActive) return;
+    const tid = activeTid || "gNenrTIs1ZfsGZQmPxIEQNJPyIy1";
+
+    // 1. Initial cached check
+    try {
+      const cached =
+        localStorage.getItem(`seb_student_link_status_${tid}`) ||
+        localStorage.getItem("seb_student_link_global_status");
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (typeof parsed.isEnabled === "boolean") {
+          setIsStudentLinkActive(parsed.isEnabled);
+        }
+      }
+    } catch {}
+
+    // 2. Real-time Firestore snapshot listener
+    const docRef = doc(db, "secure_link_settings", `student_link_${tid}`);
+    const unsub = onSnapshot(
+      docRef,
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (typeof data.isEnabled === "boolean") {
+            setIsStudentLinkActive(data.isEnabled);
+            try {
+              localStorage.setItem(`seb_student_link_status_${tid}`, JSON.stringify({ isEnabled: data.isEnabled }));
+            } catch {}
+          }
+        }
+      },
+      (err) => console.warn("Student link status listener error:", err)
+    );
+
+    // 3. BroadcastChannel listener for local instantaneous tab-to-tab sync
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel("student_portal_link_channel");
+      bc.onmessage = (ev) => {
+        if (ev.data?.type === "LINK_STATUS_CHANGED") {
+          if (!ev.data.teacherId || ev.data.teacherId === tid || ev.data.teacherId === "demo_teacher") {
+            setIsStudentLinkActive(Boolean(ev.data.isEnabled));
+          }
+        }
+      };
+    } catch {}
+
+    return () => {
+      unsub();
+      if (bc) bc.close();
+    };
+  }, [studentPortalTeacherId, initialStudentVerification?.teacherId, studentPortalActive]);
 
   const copyStandaloneReviewLink = useCallback((showToast = true) => {
     const tId = currentUser?.uid || "demo_teacher";
@@ -7042,6 +7419,50 @@ export default function App() {
     );
   }
 
+  // --- TAMPERED / INVALID SECURED STUDENT PORTAL LINK SECURITY SCREEN ---
+  if (isStudentTokenTampered) {
+    return (
+      <div
+        className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-6 font-sans select-none"
+        dir="rtl"
+      >
+        <div className="max-w-md w-full bg-slate-900 border-2 border-rose-500/40 rounded-3xl p-8 text-center shadow-2xl space-y-6">
+          <div className="w-20 h-20 bg-rose-500/10 border-2 border-rose-500/30 rounded-3xl flex items-center justify-center mx-auto text-rose-400">
+            <ShieldAlert className="w-10 h-10 animate-pulse" />
+          </div>
+
+          <div className="space-y-2">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-rose-500/20 text-rose-300 rounded-full text-xs font-black">
+              <Lock className="w-3.5 h-3.5" />
+              <span>تنبيه أمان رابط بوابة الطالب المشفر</span>
+            </span>
+            <h2 className="text-xl font-black text-white">
+              رابط بوابة الطالب غير صالح أو تم التعديل عليه
+            </h2>
+            <p className="text-xs text-slate-400 leading-relaxed font-bold">
+              تم رصد حذف أو تعديل أو تلف في شفرة التحقق الأمنية في رابط المتصفح. تم إيقاف الوصول لمنع التلاعب وحماية خصوصية منصة المعلم وبيانات الطلاب.
+            </p>
+          </div>
+
+          <div className="p-4 bg-slate-800/80 rounded-2xl border border-slate-700 text-right text-xs text-slate-300 space-y-1.5 font-bold">
+            <p className="text-amber-400 font-black">💡 إرشادات مهمة للطلاب:</p>
+            <p>يرجى فتح الرابط الأصلي المعتمد بالكامل كما استلمته من معلمك دون مسح أو تغيير أي حرف من عنوان الرابط.</p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              window.location.reload();
+            }}
+            className="w-full py-3 px-4 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black transition-colors cursor-pointer shadow-lg shadow-rose-900/30"
+          >
+            إعادة تحميل الصفحة
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // --- STANDALONE COMPREHENSIVE CURRICULUM REVIEW PORTAL VIEW RENDER ---
   // Pure standalone view: Direct review, no login required, no sidebars, no access to other site features
   if (reviewPortalActive) {
@@ -7429,6 +7850,7 @@ export default function App() {
     );
   }
 
+
   // --- STUDENT MODE VIEW RENDER ---
   if (
     studentQuizId ||
@@ -7447,6 +7869,57 @@ export default function App() {
               جاري تحميل البوابة التعليمية للطلاب...
             </p>
           </div>
+        </div>
+      );
+    }
+
+    // B0. STUDENT PORTAL LINK PAUSED BY TEACHER (LINK IS TURNED OFF)
+    if (!isStudentLinkActive && !teacherPreviewActive) {
+      return (
+        <div
+          className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center justify-center p-6 font-sans select-none"
+          dir="rtl"
+        >
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="max-w-md w-full bg-slate-950 border-2 border-amber-500/40 rounded-3xl p-8 text-center shadow-2xl space-y-6"
+          >
+            <div className="w-20 h-20 bg-amber-500/10 border-2 border-amber-500/30 rounded-3xl flex items-center justify-center mx-auto text-amber-400">
+              <PowerOff className="w-10 h-10 animate-pulse" />
+            </div>
+
+            <div className="space-y-2">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-500/20 text-amber-300 rounded-full text-xs font-black">
+                <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                <span>رابط البوابة متوقف مؤقتاً</span>
+              </span>
+              <h2 className="text-xl font-black text-white">
+                بوابة الطالب غير متاحة حالياً
+              </h2>
+              <p className="text-xs text-slate-400 leading-relaxed font-bold">
+                قام المعلم بإيقاف رابط بوابة الطالب مؤقتاً. سيتم إعادة تفعيل الصفحة تلقائياً بمجرد أن يقوم المعلم بتشغيل الرابط مجدداً.
+              </p>
+            </div>
+
+            <div className="p-4 bg-slate-900 rounded-2xl border border-slate-800 text-center text-xs text-slate-300 space-y-2 font-bold">
+              <div className="flex items-center justify-center gap-2 text-amber-400">
+                <span className="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-amber-400"></span>
+                <span className="text-[11px]">في انتظار إعادة تشغيل الرابط من قِبل المعلم...</span>
+              </div>
+              <p className="text-[10px] text-slate-400">يتم التحديث تلقائياً وفورياً فور تشغيل المعلم للرابط</p>
+            </div>
+
+            <button
+              type="button"
+              disabled={isCheckingLinkStatus}
+              onClick={checkStudentLinkStatusManually}
+              className="w-full py-3 px-4 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 rounded-xl text-xs font-black transition-all cursor-pointer shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2"
+            >
+              <RefreshCw className={`w-4 h-4 ${isCheckingLinkStatus ? "animate-spin" : ""}`} />
+              <span>{isCheckingLinkStatus ? "جاري فحص الحالة..." : "فحص حالة الرابط الآن 🔄"}</span>
+            </button>
+          </motion.div>
         </div>
       );
     }
@@ -7786,13 +8259,23 @@ export default function App() {
                   </label>
                   <select
                     value={studentLoginSelectId}
-                    onChange={(e) => setStudentLoginSelectId(e.target.value)}
+                    onChange={(e) => {
+                      const selId = e.target.value;
+                      setStudentLoginSelectId(selId);
+                      const foundSt = students.find((s) => s.id === selId);
+                      if (foundSt) {
+                        const sGrade = foundSt.grade || (foundSt.gradeClass && foundSt.gradeClass.includes(" - ") ? foundSt.gradeClass.split(" - ")[0].trim() : "");
+                        const sSem = foundSt.semester || (foundSt.gradeClass && foundSt.gradeClass.includes(" - ") ? foundSt.gradeClass.split(" - ")[1].trim() : "");
+                        if (sGrade) setStudentSelectedGrade(sGrade);
+                        if (sSem) setStudentSelectedSemester(sSem);
+                      }
+                    }}
                     className="w-full bg-slate-50 border border-slate-205 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-sans cursor-pointer font-bold transition-all hover:bg-slate-100"
                   >
                     <option value="">-- اختر اسمك للبدء الفوري --</option>
-                    {classFilteredStudents.map((student) => (
+                    {(classFilteredStudents.length > 0 ? classFilteredStudents : students).map((student) => (
                       <option key={student.id} value={student.id}>
-                        {student.name}
+                        {student.name} {classFilteredStudents.length === 0 ? `(${student.grade || student.gradeClass || "عام"})` : ""}
                       </option>
                     ))}
                   </select>
@@ -11427,9 +11910,6 @@ export default function App() {
             )}
           </nav>
 
-          {/* Distinct divider to separate student action area */}
-          <div className="my-3 border-t border-slate-150"></div>
-
           {/* Dedicated Preview Zone */}
           <div className="space-y-2 bg-slate-50/90 p-3.5 rounded-2xl border border-slate-200/60 shadow-3xs">
             <button
@@ -11448,32 +11928,77 @@ export default function App() {
               <span>معاينة بوابة الطالب</span>
             </button>
 
+            <div className="flex items-center gap-1.5 w-full">
+              <button
+                type="button"
+                onClick={() => copyStudentPortalLink()}
+                className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-xs font-black border transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer shadow-3xs ${
+                  copiedStudentLink
+                    ? "bg-emerald-600 text-white border-emerald-600 shadow-emerald-200"
+                    : "bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200/70"
+                }`}
+                title="نسخ رابط صفحة الطالب المشفر كاملة"
+              >
+                {copiedStudentLink ? (
+                  <Check className="w-4 h-4 shrink-0 text-white" />
+                ) : (
+                  <Copy className="w-4 h-4 shrink-0 text-emerald-600" />
+                )}
+                <span className="truncate">{copiedStudentLink ? "تم النسخ! ✓" : "نسخ رابط الطالب"}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => openStudentPortalLink()}
+                className="px-3 py-2.5 rounded-xl text-xs font-black bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200/80 transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer shadow-3xs flex items-center gap-1 shrink-0"
+                title="فتح صفحة الطالب في نافذة جديدة مباشرة"
+              >
+                <ExternalLink className="w-3.5 h-3.5 shrink-0 text-blue-600" />
+                <span>فتح ↗️</span>
+              </button>
+            </div>
+
+            {/* Toggle Student Portal Link On / Off Switch */}
             <button
               type="button"
-              onClick={() => {
-                const portalLink = `${window.location.origin}/?portal=student&teacherId=${currentUser?.uid || "demo_teacher"}`;
-                navigator.clipboard.writeText(portalLink);
-                triggerToast(
-                  "تم نسخ رابط بوابة الطلاب بنجاح! يمكنك إرساله للطلاب ليفتح صفحة القوائم مباشرة.",
-                  "success",
-                );
-              }}
-              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-black bg-emerald-55 hover:bg-emerald-100 text-emerald-800 border border-emerald-250/50 transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer shadow-3xs"
-              title="نسخ رابط بوابة الطلاب لمشاركته معهم"
+              onClick={() => toggleStudentPortalLink()}
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-black border transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer shadow-3xs ${
+                isStudentLinkActive
+                  ? "bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-800 border-emerald-300/80"
+                  : "bg-rose-50 hover:bg-rose-100 text-rose-800 border-rose-300"
+              }`}
+              title={
+                isStudentLinkActive
+                  ? "رابط الطالب يعمل حالياً - اضغط لإيقاف الرابط مؤقتاً"
+                  : "رابط الطالب متوقف حالياً - اضغط لتشغيل وتفعيل الرابط للطلاب"
+              }
             >
-              <Copy className="w-4 h-4 shrink-0 text-emerald-600 animate-bounce" style={{ animationDuration: '3s' }} />
-              <span>نسخ رابط صفحة الطلاب</span>
+              <div className="flex items-center gap-2">
+                <Power
+                  className={`w-4 h-4 shrink-0 ${
+                    isStudentLinkActive ? "text-emerald-600" : "text-rose-600"
+                  }`}
+                />
+                <span className="text-[11px]">حالة الرابط:</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span
+                  className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black ${
+                    isStudentLinkActive
+                      ? "bg-emerald-600 text-white shadow-xs"
+                      : "bg-rose-600 text-white shadow-xs"
+                  }`}
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full bg-white ${
+                      isStudentLinkActive ? "animate-pulse" : ""
+                    }`}
+                  />
+                  <span>{isStudentLinkActive ? "تشغيل 🟢" : "إيقاف 🛑"}</span>
+                </span>
+              </div>
             </button>
 
-            <button
-              type="button"
-              onClick={() => copyStandaloneReviewLink()}
-              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-black bg-gradient-to-r from-amber-50 to-orange-50 hover:from-amber-100 hover:to-orange-100 text-amber-900 border border-amber-300/70 transition-all duration-200 transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 cursor-pointer shadow-3xs"
-              title="نسخ رابط المراجعة الشاملة المستقل والمشفر (بدون تسجيل دخول وبدون قوائم)"
-            >
-              <ExternalLink className="w-4 h-4 shrink-0 text-amber-700" />
-              <span>نسخ رابط المراجعة المستقل (مشفر)</span>
-            </button>
           </div>
         </div>
 
@@ -19992,31 +20517,56 @@ export default function App() {
                   <span>معاينة بوابة الطالب الإلكترونية</span>
                 </button>
 
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      copyStudentPortalLink();
+                      setMobileMoreDrawerOpen(false);
+                    }}
+                    className="flex-1 flex items-center justify-center gap-2 p-3 rounded-2xl text-xs font-black bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 cursor-pointer"
+                  >
+                    <Copy className="w-4 h-4 text-emerald-600" />
+                    <span>نسخ رابط صفحة الطالب</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      openStudentPortalLink();
+                      setMobileMoreDrawerOpen(false);
+                    }}
+                    className="p-3 rounded-2xl text-xs font-black bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 cursor-pointer flex items-center gap-1.5"
+                    title="فتح صفحة الطالب"
+                  >
+                    <ExternalLink className="w-4 h-4 text-blue-600" />
+                    <span>فتح ↗️</span>
+                  </button>
+                </div>
+
+                {/* Mobile Student Link Status Toggle Switch */}
                 <button
                   type="button"
-                  onClick={() => {
-                    const portalLink = `${window.location.origin}/?portal=student&teacherId=${currentUser?.uid || "demo_teacher"}`;
-                    navigator.clipboard.writeText(portalLink);
-                    setMobileMoreDrawerOpen(false);
-                    triggerToast("تم نسخ رابط بوابة الطلاب بنجاح! 📋", "success");
-                  }}
-                  className="w-full flex items-center gap-3 p-3 rounded-2xl text-xs font-black bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-250 cursor-pointer"
+                  onClick={() => toggleStudentPortalLink()}
+                  className={`w-full flex items-center justify-between p-3 rounded-2xl text-xs font-black border transition-all cursor-pointer ${
+                    isStudentLinkActive
+                      ? "bg-emerald-50 text-emerald-800 border-emerald-300"
+                      : "bg-rose-50 text-rose-800 border-rose-300"
+                  }`}
                 >
-                  <Copy className="w-4 h-4 text-emerald-600" />
-                  <span>نسخ رابط صفحة الطلاب</span>
+                  <div className="flex items-center gap-2.5">
+                    <Power className={`w-4 h-4 ${isStudentLinkActive ? "text-emerald-600" : "text-rose-600"}`} />
+                    <span className="text-[11px]">حالة رابط الطالب:</span>
+                  </div>
+                  <span
+                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-black text-white ${
+                      isStudentLinkActive ? "bg-emerald-600" : "bg-rose-600"
+                    }`}
+                  >
+                    {isStudentLinkActive ? "تشغيل 🟢" : "إيقاف 🛑"}
+                  </span>
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    copyStandaloneReviewLink();
-                    setMobileMoreDrawerOpen(false);
-                  }}
-                  className="w-full flex items-center gap-3 p-3 rounded-2xl text-xs font-black bg-gradient-to-r from-amber-50 to-orange-50 hover:from-amber-100 hover:to-orange-100 text-amber-900 border border-amber-300/70 cursor-pointer"
-                >
-                  <ExternalLink className="w-4 h-4 text-amber-700" />
-                  <span>نسخ رابط المراجعة المستقل (مشفر)</span>
-                </button>
 
                 {/* Profile card & logout */}
                 <div className="pt-3 border-t border-slate-100 flex items-center justify-between">

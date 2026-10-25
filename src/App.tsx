@@ -12039,7 +12039,7 @@ export default function App() {
             <div
               className={`space-y-2 p-3 rounded-2xl transition-all duration-300 my-2.5 relative ${
                 isStudentLinkActive
-                  ? "bg-slate-50/90 border border-slate-200/60 shadow-3xs"
+                  ? "bg-slate-50/90 border-2 border-blue-500/80 shadow-xs ring-1 ring-blue-400/20"
                   : "bg-red-50/40 border-2 border-red-500 ring-2 ring-red-400/50 shadow-md shadow-red-500/25 animate-pulse"
               }`}
             >
@@ -20713,7 +20713,7 @@ export default function App() {
                 <div
                   className={`space-y-2 p-2.5 rounded-2xl transition-all duration-300 ${
                     isStudentLinkActive
-                      ? "border border-slate-150 bg-slate-50/50"
+                      ? "border-2 border-blue-500/80 bg-slate-50/50 shadow-xs ring-1 ring-blue-400/20"
                       : "bg-red-50/40 border-2 border-red-500 ring-2 ring-red-400/50 shadow-md shadow-red-500/25 animate-pulse"
                   }`}
                 >

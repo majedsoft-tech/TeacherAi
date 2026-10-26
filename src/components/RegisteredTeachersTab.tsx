@@ -28,7 +28,7 @@ import {
   AlertTriangle,
   Trash2
 } from "lucide-react";
-import { collection, getDocs, doc, setDoc, deleteDoc } from "firebase/firestore";
+import { collection, getDocs, doc, setDoc, deleteDoc, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase";
 
 interface RegisteredTeacher {
@@ -75,6 +75,93 @@ export const RegisteredTeachersTab: React.FC<RegisteredTeachersTabProps> = ({
   });
 
   const isAdmin = currentUser?.email?.trim().toLowerCase() === "majedsoft@gmail.com";
+
+  // System registration open/closed state
+  const [isRegistrationEnabled, setIsRegistrationEnabled] = useState<boolean>(() => {
+    try {
+      const cached = localStorage.getItem("app_isRegistrationEnabled");
+      return cached !== null ? JSON.parse(cached) : true;
+    } catch {
+      return true;
+    }
+  });
+  const [isTogglingRegistration, setIsTogglingRegistration] = useState<boolean>(false);
+  const [registrationDetails, setRegistrationDetails] = useState<{
+    updatedAt?: string;
+    updatedBy?: string;
+  } | null>(null);
+
+  // Subscribe to real-time system registration status
+  useEffect(() => {
+    const unsub = onSnapshot(
+      doc(db, "system_settings", "registration"),
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          const enabled = data.isRegistrationEnabled !== false;
+          setIsRegistrationEnabled(enabled);
+          try {
+            localStorage.setItem("app_isRegistrationEnabled", JSON.stringify(enabled));
+          } catch (e) {
+            console.warn("Could not cache registration status to localStorage", e);
+          }
+          setRegistrationDetails({
+            updatedAt: data.updatedAt,
+            updatedBy: data.updatedBy,
+          });
+        } else {
+          setIsRegistrationEnabled(true);
+        }
+      },
+      (err) => {
+        console.error("Error listening to registration settings:", err);
+      }
+    );
+    return () => unsub();
+  }, []);
+
+  // Toggle registration on/off with Firestore persistence and toast notification
+  const handleToggleRegistration = async () => {
+    if (!isAdmin) {
+      triggerToast("عذراً، صلاحية إيقاف أو تفعيل التسجيل في الموقع مخصصة للمسؤول الرئيسي فقط", "error");
+      return;
+    }
+    const nextState = !isRegistrationEnabled;
+    setIsTogglingRegistration(true);
+    try {
+      const payload = {
+        isRegistrationEnabled: nextState,
+        updatedAt: new Date().toISOString(),
+        updatedBy: currentUser?.email || "majedsoft@gmail.com",
+        noticeMessage: "عذراً، التسجيل في المنصة متوقف حالياً للإيميلات والحسابات الجديدة من قِبل إدارة النظام."
+      };
+
+      await setDoc(doc(db, "system_settings", "registration"), payload, { merge: true });
+
+      // Also persist to current user teacher doc as secondary backup
+      if (currentUser?.uid) {
+        setDoc(doc(db, "teachers", currentUser.uid), { systemRegistrationEnabled: nextState }, { merge: true }).catch(() => {});
+      }
+
+      setIsRegistrationEnabled(nextState);
+      try {
+        localStorage.setItem("app_isRegistrationEnabled", JSON.stringify(nextState));
+      } catch (e) {
+        console.warn("Could not write registration status to localStorage", e);
+      }
+
+      if (nextState) {
+        triggerToast("تم تفعيل وفتح التسجيل لجميع الإيميلات الجديدة في الموقع بنجاح 🟢", "success");
+      } else {
+        triggerToast("تم إيقاف التسجيل للإيميلات الجديدة في الموقع بنجاح 🔒", "info");
+      }
+    } catch (error: any) {
+      console.error("Failed to update registration status:", error);
+      triggerToast(`فشل تحديث حالة التسجيل: ${error.message || error}`, "error");
+    } finally {
+      setIsTogglingRegistration(false);
+    }
+  };
 
   // Fetch registered teachers and overall activity stats from Firestore
   const fetchTeachersAndStats = async () => {
@@ -293,6 +380,79 @@ export const RegisteredTeachersTab: React.FC<RegisteredTeachersTabProps> = ({
                 Majedsoft@gmail.com
               </span>
             </h1>
+
+            {/* Registration Stop/Start Toggle Bar - Directly beneath Registered Teachers title */}
+            <div className="pt-2 pb-1 flex flex-wrap items-center gap-3">
+              {/* Registration Status Indicator Badge */}
+              <div
+                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-black border transition-all ${
+                  isRegistrationEnabled
+                    ? "bg-emerald-500/20 text-emerald-300 border-emerald-400/40 shadow-xs"
+                    : "bg-rose-500/25 text-rose-200 border-rose-400/50 shadow-xs ring-2 ring-rose-400/30 animate-pulse"
+                }`}
+              >
+                <span className="relative flex h-2.5 w-2.5">
+                  <span
+                    className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                      isRegistrationEnabled ? "bg-emerald-400" : "bg-rose-400"
+                    }`}
+                  ></span>
+                  <span
+                    className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+                      isRegistrationEnabled ? "bg-emerald-400" : "bg-rose-500"
+                    }`}
+                  ></span>
+                </span>
+                <span>
+                  {isRegistrationEnabled
+                    ? "التسجيل في الموقع: مفتوح للإيميلات الجديدة 🟢"
+                    : "التسجيل في الموقع: مغلق ومتوقف للإيميلات الجديدة 🛑"}
+                </span>
+              </div>
+
+              {/* Stop / Start Toggle Button */}
+              {isAdmin ? (
+                <button
+                  type="button"
+                  onClick={handleToggleRegistration}
+                  disabled={isTogglingRegistration}
+                  className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black transition-all duration-200 cursor-pointer shadow-md active:scale-95 disabled:opacity-60 ${
+                    isRegistrationEnabled
+                      ? "bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white border border-rose-400/50 shadow-rose-950/40 hover:shadow-lg hover:shadow-rose-600/30"
+                      : "bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white border border-emerald-400/50 shadow-emerald-950/40 hover:shadow-lg hover:shadow-emerald-600/30"
+                  }`}
+                  title={
+                    isRegistrationEnabled
+                      ? "اضغط لإيقاف تسجيل الإيميلات الجديدة على الموقع"
+                      : "اضغط لإعادة فتح وتفعيل التسجيل لجميع الإيميلات الجديدة"
+                  }
+                >
+                  {isTogglingRegistration ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-white" />
+                  ) : isRegistrationEnabled ? (
+                    <Lock className="w-3.5 h-3.5 text-rose-200" />
+                  ) : (
+                    <Unlock className="w-3.5 h-3.5 text-emerald-200" />
+                  )}
+                  <span>
+                    {isRegistrationEnabled
+                      ? "إيقاف تسجيل الإيميلات الجديدة في الموقع 🚫"
+                      : "تفعيل وفتح التسجيل للإيميلات الجديدة 🟢"}
+                  </span>
+                </button>
+              ) : (
+                <span className="text-[11px] text-slate-300 font-bold bg-white/10 px-2.5 py-1 rounded-lg border border-white/10">
+                  (التحكم بالتسجيل مخصص للمسؤول Majedsoft@gmail.com)
+                </span>
+              )}
+
+              {registrationDetails?.updatedAt && !isRegistrationEnabled && (
+                <span className="text-[10px] text-rose-300 font-sans block bg-rose-950/40 px-2 py-1 rounded-md border border-rose-800/40">
+                  تم الإيقاف بواسطة {registrationDetails.updatedBy || "الإدارة"}
+                </span>
+              )}
+            </div>
+
             <p className="text-slate-300 text-xs sm:text-sm font-medium leading-relaxed max-w-2xl">
               استعرض كافة حسابات المعلمين المعتمَدين والمسجلين في النظام، وتابع إحصائيات ونشاط الاختبارات المدرسية المضافة بكل سهولة.
             </p>

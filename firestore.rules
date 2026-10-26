@@ -81,6 +81,11 @@ service cloud.firestore {
     match /secure_link_settings/{docId} {
       allow read, write: if true;
     }
+
+    // System Settings (Global platform configuration like registration toggle)
+    match /system_settings/{settingId} {
+      allow read, write: if true;
+    }
   }
 }
 

@@ -743,7 +743,25 @@ export default function App() {
   const [customFirebaseInput, setCustomFirebaseInput] = useState("");
   const [customFirebaseError, setCustomFirebaseError] = useState("");
 
-
+  // System registration open/stopped state (controlled from Registered Teachers Management tab)
+  const [isRegistrationEnabled, setIsRegistrationEnabled] = useState<boolean>(() => {
+    try {
+      const cached = localStorage.getItem("app_isRegistrationEnabled");
+      return cached !== null ? JSON.parse(cached) : true;
+    } catch {
+      return true;
+    }
+  });
+  const [registrationNotice, setRegistrationNotice] = useState<string>("");
+  const [registrationBlockedModal, setRegistrationBlockedModal] = useState<{
+    isOpen: boolean;
+    email?: string;
+    message?: string;
+  }>({
+    isOpen: false,
+    email: "",
+    message: "",
+  });
 
   // Check for student mode in URL params
   const urlParams = new URLSearchParams(window.location.search);
@@ -1796,11 +1814,85 @@ export default function App() {
     }
   }, []);
 
+  // Subscribe to real-time system registration status
   useEffect(() => {
+    const unsub = onSnapshot(
+      doc(db, "system_settings", "registration"),
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          const isEnabled = data.isRegistrationEnabled !== false;
+          setIsRegistrationEnabled(isEnabled);
+          try {
+            localStorage.setItem("app_isRegistrationEnabled", JSON.stringify(isEnabled));
+          } catch (e) {
+            console.warn("Could not cache registration status to localStorage", e);
+          }
+          if (data.noticeMessage) {
+            setRegistrationNotice(data.noticeMessage);
+          }
+        } else {
+          setIsRegistrationEnabled(true);
+        }
+      },
+      (error) => {
+        console.error("Error subscribing to registration status:", error);
+      }
+    );
+    return () => unsub();
+  }, []);
+
+  // Check if a user is permitted to sign in (blocks new emails when registration is stopped)
+  const checkIsUserAllowedToLogin = async (user: User): Promise<boolean> => {
+    const userEmail = (user.email || "").trim().toLowerCase();
+    const isAdmin = userEmail === "majedsoft@gmail.com";
+    if (isAdmin) return true;
+
+    try {
+      const regDoc = await getDoc(doc(db, "system_settings", "registration"));
+      const regEnabled = !regDoc.exists() || regDoc.data().isRegistrationEnabled !== false;
+      if (regEnabled) return true;
+
+      // Registration is stopped: only already-registered teachers may log in
+      const teacherDoc = await getDoc(doc(db, "teachers", user.uid));
+      if (teacherDoc.exists()) return true;
+
+      if (userEmail) {
+        const q = query(collection(db, "teachers"), where("email", "==", user.email));
+        const qSnap = await getDocs(q);
+        if (!qSnap.empty) return true;
+      }
+
+      // User is unregistered and registration is closed
+      return false;
+    } catch (err) {
+      console.error("Error verifying registration status:", err);
+      return true;
+    }
+  };
+
+  useEffect(() => {
+    // Safety fallback: Ensure user is never stuck in undefined loading state
+    const authTimeout = setTimeout(() => {
+      setCurrentUser((prev) => (prev === undefined ? null : prev));
+    }, 2500);
+
     // Check for redirect login result on mount
     getRedirectResult(auth)
-      .then((result) => {
+      .then(async (result) => {
         if (result?.user) {
+          const isAllowed = await checkIsUserAllowedToLogin(result.user);
+          if (!isAllowed) {
+            await signOut(auth);
+            setCurrentUser(null);
+            setRegistrationBlockedModal({
+              isOpen: true,
+              email: result.user.email || "",
+              message: "عذراً، التسجيل في المنصة متوقف حالياً لحسابات المعلمين الجديدة من قِبل إدارة النظام."
+            });
+            triggerToast("⚠️ التسجيل في المنصة متوقف حالياً للإيميلات الجديدة", "error");
+            return;
+          }
           setActiveTab("dashboard");
           triggerToast(
             "مرحباً بك مجدداً دكتور! تم تسجيل الدخول بنجاح.",
@@ -1817,9 +1909,24 @@ export default function App() {
         });
       });
 
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setCurrentUser(user);
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      clearTimeout(authTimeout);
       if (user) {
+        const isAllowed = await checkIsUserAllowedToLogin(user);
+        if (!isAllowed) {
+          console.warn("New registration attempted while registrations are disabled:", user.email);
+          await signOut(auth);
+          setCurrentUser(null);
+          setRegistrationBlockedModal({
+            isOpen: true,
+            email: user.email || "",
+            message: "عذراً، التسجيل في المنصة متوقف حالياً لحسابات المعلمين الجديدة من قِبل إدارة النظام."
+          });
+          triggerToast("⚠️ التسجيل في المنصة متوقف حالياً للإيميلات الجديدة", "error");
+          return;
+        }
+
+        setCurrentUser(user);
         setActiveTab("dashboard");
         localStorage.setItem("seb_student_teacher_id", user.uid);
         sessionStorage.removeItem("seb_student_logged_id"); localStorage.removeItem("seb_student_logged_id");
@@ -1843,6 +1950,8 @@ export default function App() {
         // Automatically trigger data reconciliation in background
         reconcileUserData(user, false);
       } else {
+        // Set currentUser to null so the app renders the public/teacher login view immediately
+        setCurrentUser(null);
         // Reset all teacher state and clear student teacher cache when logged out
         setQuizzes([]);
         setStudents([]);
@@ -1857,7 +1966,10 @@ export default function App() {
         sessionStorage.removeItem("seb_student_logged_id"); localStorage.removeItem("seb_student_logged_id");
       }
     });
-    return () => unsubscribe();
+    return () => {
+      clearTimeout(authTimeout);
+      unsubscribe();
+    };
   }, []);
 
   const isAuthInProgressRef = useRef(false);
@@ -1875,6 +1987,22 @@ export default function App() {
     try {
       // Authenticate directly using the active Firebase project's Auth instance
       const result = await signInWithPopup(auth, provider);
+      
+      // Verify registration authorization for new emails
+      const isAllowed = await checkIsUserAllowedToLogin(result.user);
+      if (!isAllowed) {
+        console.warn("New registration blocked during Google login:", result.user.email);
+        await signOut(auth);
+        setCurrentUser(null);
+        setRegistrationBlockedModal({
+          isOpen: true,
+          email: result.user.email || "",
+          message: "عذراً، التسجيل في المنصة متوقف حالياً لحسابات المعلمين الجديدة من قِبل إدارة النظام."
+        });
+        triggerToast("⚠️ التسجيل في المنصة متوقف حالياً للإيميلات الجديدة", "error");
+        return null;
+      }
+
       setActiveTab("dashboard");
       triggerToast(
         customMessage || "مرحباً بك مجدداً دكتور! تم تسجيل الدخول بنجاح.",
@@ -11793,6 +11921,13 @@ export default function App() {
           <p className="text-sm font-bold text-slate-500">
             جاري تحميل لوحة التحكم وأمن Firebase...
           </p>
+          <button
+            type="button"
+            onClick={() => setCurrentUser(null)}
+            className="mt-2 px-4 py-2 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-xl transition-all cursor-pointer border border-blue-200 shadow-xs"
+          >
+            متابعة لصفحة الدخول مباشرة ⚡
+          </button>
         </div>
       </div>
     );
@@ -12366,9 +12501,27 @@ export default function App() {
                   </p>
                 </div>
 
-                <p className="text-slate-600 text-sm mb-8 font-medium leading-relaxed">
+                <p className="text-slate-600 text-sm mb-6 font-medium leading-relaxed">
                   قم بتسجيل الدخول السريع باستخدام حساب جوجل للوصول إلى كافة الأقسام وإدارة اختباراتك، شؤون طلابك، وتحليلات العملية التعليمية بأمان عبر السحاب
                 </p>
+
+                {/* Registration Disabled Notice Banner for Public Users */}
+                {!isRegistrationEnabled && (
+                  <div className="mb-6 p-4 bg-rose-50 border-2 border-rose-300 rounded-2xl text-right flex items-start gap-3 shadow-xs">
+                    <div className="w-8 h-8 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-sm shadow-rose-400/40">
+                      <Lock className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-black text-rose-900 mb-1 flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping"></span>
+                        <span>تنبيه: التسجيل في الموقع متوقف حالياً للإيميلات الجديدة 🔒</span>
+                      </h4>
+                      <p className="text-[11px] font-bold text-rose-700 leading-relaxed">
+                        نعتذر منكم، تم إيقاف استقبال وتسجيل الحسابات والإيميلات الجديدة في الموقع حالياً. يتاح تسجيل الدخول فقط للمعلمين المسجلين مسبقاً والمسؤول الرئيسي.
+                      </p>
+                    </div>
+                  </div>
+                )}
 
                 {/* Login Action Buttons */}
                 <div className="space-y-3">
@@ -21011,6 +21164,53 @@ export default function App() {
         students={students}
         triggerToast={triggerToast}
       />
+
+      {/* Registration Blocked Modal - Informing user that registration is closed */}
+      <AnimatePresence>
+        {registrationBlockedModal.isOpen && (
+          <div className="fixed inset-0 z-[160] flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs animate-fade-in">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-rose-200 overflow-hidden text-right"
+              dir="rtl"
+            >
+              <div className="p-6 bg-gradient-to-br from-rose-50 via-red-50/50 to-white border-b border-rose-100 flex flex-col items-center text-center">
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-rose-600 to-red-700 text-white flex items-center justify-center shadow-lg shadow-rose-500/30 mb-3 animate-bounce">
+                  <Lock className="w-8 h-8" />
+                </div>
+                <h3 className="text-lg font-black text-slate-900">
+                  التسجيل في الموقع متوقف حالياً 🔒
+                </h3>
+                <span className="mt-1 text-xs font-bold text-rose-700 bg-rose-100 px-3 py-1 rounded-full border border-rose-200">
+                  إشعار من إدارة النظام
+                </span>
+              </div>
+
+              <div className="p-6 space-y-4">
+                <div className="p-3.5 bg-rose-50/80 rounded-2xl border border-rose-200/80 text-xs font-bold text-rose-900 leading-relaxed">
+                  نعتذر منك، لقد تم إيقاف استقبال وتسجيل الحسابات والإيميلات الجديدة في منصة Teacher.AI حالياً بقرار من إدارة النظام. لا يمكن تسجيل حساب جديد في الوقت الراهن.
+                </div>
+
+                <div className="text-xs text-slate-600 leading-relaxed font-medium">
+                  <p>
+                    💡 <strong>إذا كنت معلماً مسجلاً مسبقاً:</strong> يرجى التأكد من اختيار وتسجيل الدخول بنفس بريدك الإلكتروني المعتمد الذي تم تسجيله سابقاً.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setRegistrationBlockedModal({ isOpen: false, email: "", message: "" })}
+                  className="w-full mt-2 py-3 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-black shadow-md cursor-pointer transition-all active:scale-[0.98]"
+                >
+                  حسناً، فهمت ذلك
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

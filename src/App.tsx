@@ -2094,11 +2094,20 @@ export default function App() {
     }
   }, [teacherPreviewActive]);
 
-  // Dynamic Title and Favicon based on studentPortalActive
+  // Dynamic Title and Favicon based on student portal context
   useEffect(() => {
+    const isStudentContext = Boolean(
+      studentPortalActive ||
+      isStudentLinkRevoked ||
+      isStudentTokenTampered ||
+      teacherPreviewActive ||
+      hasStudentPortalParam ||
+      (isStudentSession && !currentUser)
+    );
+
     // 1. Update Title dynamically
-    if (studentPortalActive) {
-      document.title = "بوابة الطالب | معلم | Teacher.AI";
+    if (isStudentContext) {
+      document.title = "بوابة الطالب";
     } else {
       document.title = "معلم | Teacher.AI";
     }
@@ -2107,7 +2116,7 @@ export default function App() {
     const studentFaviconMedia = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="%2310b981"/><path d="M16 8 L6 13 L16 18 L26 13 Z" fill="%23ffffff"/><path d="M10 16.5 V21.5 C10 23 12 24 16 24 C20 24 22 23 22 21.5 V16.5" fill="none" stroke="%23ffffff" stroke-width="2" stroke-linecap="round"/><circle cx="16" cy="13" r="2" fill="%23fcd34d"/></svg>`;
     const teacherFaviconMedia = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="%234f46e5"/><path d="M16 6 L6 11 L16 16 L26 11 Z" fill="%23ffffff"/><path d="M11 15 V19 C11 20.5 13 21.5 16 21.5 C19 21.5 21 20.5 21 19 V15" fill="none" stroke="%23ffffff" stroke-width="2" stroke-linecap="round"/><path d="M23 12 V18" fill="none" stroke="%23fcd34d" stroke-width="2" stroke-linecap="round"/><circle cx="23" cy="19.5" r="1.5" fill="%23fcd34d"/></svg>`;
 
-    const faviconUrl = studentPortalActive
+    const faviconUrl = isStudentContext
       ? studentFaviconMedia
       : teacherFaviconMedia;
 
@@ -2121,7 +2130,7 @@ export default function App() {
     }
     link.type = "image/svg+xml";
     link.href = faviconUrl;
-  }, [studentPortalActive]);
+  }, [studentPortalActive, isStudentLinkRevoked, isStudentTokenTampered, teacherPreviewActive, hasStudentPortalParam, isStudentSession, currentUser]);
 
   // Note: Disabled auto-switch so main page always lands on main home portal first
 

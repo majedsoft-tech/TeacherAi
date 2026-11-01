@@ -128,6 +128,7 @@ import {
   verifyStudentPortalToken,
   extractStudentPortalToken,
   buildEncryptedStudentPortalUrl,
+  hasStudentPortalQuery,
 } from "./utils/studentPortalCrypto";
 import { initializeApp, getApp, getApps } from "firebase/app";
 import {
@@ -865,37 +866,12 @@ export default function App() {
   });
 
   const initialStudentToken = extractStudentPortalToken();
-  const initialStudentVerification = initialStudentToken
-    ? verifyStudentPortalToken(
-        initialStudentToken,
-        typeof window !== "undefined"
-          ? parseInt(localStorage.getItem("seb_student_link_active_version") || "1", 10)
-          : 1
-      )
-    : null;
-
-  const [isStudentLinkRevoked, setIsStudentLinkRevoked] = useState<boolean>(() => {
-    if (initialStudentToken && initialStudentVerification && initialStudentVerification.isRevoked) {
-      return true;
-    }
-    return false;
-  });
-
-  const [isStudentTokenTampered, setIsStudentTokenTampered] = useState<boolean>(() => {
-    // If token is revoked by teacher, handle via revoked screen
-    if (initialStudentToken && initialStudentVerification?.isRevoked) {
-      return false;
-    }
-    // If student token is supplied in URL/hash but verification failed (tampered/truncated)
-    if (initialStudentToken && (!initialStudentVerification || !initialStudentVerification.valid)) {
-      return true;
-    }
-    return false;
-  });
+  const rawUrlParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
+  const hasStudentPortalParam = rawUrlParams.get("portal") === "student" || rawUrlParams.has("stoken") || hasStudentPortalQuery();
 
   // Track if this browser tab/client originated from student portal to prevent elevation to teacher portal
   const [isStudentSession, setIsStudentSession] = useState<boolean>(() => {
-    if (initialStudentToken || urlParams.get("portal") === "student" || urlParams.get("stoken")) {
+    if (initialStudentToken || hasStudentPortalParam) {
       try {
         sessionStorage.setItem("seb_student_session", "true");
         localStorage.setItem("seb_student_session", "true");
@@ -905,6 +881,73 @@ export default function App() {
     try {
       if (sessionStorage.getItem("seb_student_session") === "true") return true;
     } catch {}
+    return false;
+  });
+
+  // Effective token to evaluate (either directly from URL, or from the active student session)
+  const effectiveStudentToken = initialStudentToken || (typeof window !== "undefined" ? sessionStorage.getItem("seb_student_active_token") : null);
+
+  // Cached active link version
+  const currentActiveLinkVersion = (() => {
+    try {
+      const v = localStorage.getItem("seb_student_link_active_version");
+      if (v) {
+        const parsed = parseInt(v, 10);
+        if (!isNaN(parsed) && parsed > 0) return parsed;
+      }
+    } catch {}
+    return 1;
+  })();
+
+  const initialStudentVerification = effectiveStudentToken
+    ? verifyStudentPortalToken(effectiveStudentToken, currentActiveLinkVersion)
+    : null;
+
+  // Persist valid active token details into session storage if token is strictly valid
+  if (initialStudentToken && initialStudentVerification?.valid && !initialStudentVerification.isRevoked) {
+    try {
+      sessionStorage.setItem("seb_student_active_token", initialStudentToken);
+      sessionStorage.setItem("seb_student_token_version", String(initialStudentVerification.version || 1));
+      if (initialStudentVerification.teacherId) {
+        sessionStorage.setItem("seb_student_teacher_id", initialStudentVerification.teacherId);
+        localStorage.setItem("seb_student_teacher_id", initialStudentVerification.teacherId);
+      }
+    } catch {}
+  }
+
+  const [isStudentLinkRevoked, setIsStudentLinkRevoked] = useState<boolean>(() => {
+    // 1. If effective token verification explicitly says revoked
+    if (initialStudentVerification && initialStudentVerification.isRevoked) {
+      return true;
+    }
+    // 2. If token version is less than active link version
+    if (effectiveStudentToken && initialStudentVerification?.version && initialStudentVerification.version < currentActiveLinkVersion) {
+      return true;
+    }
+    return false;
+  });
+
+  const [isStudentTokenTampered, setIsStudentTokenTampered] = useState<boolean>(() => {
+    // If revoked, handled by revoked screen
+    if (initialStudentVerification?.isRevoked) {
+      return false;
+    }
+    // If user requested student portal in URL (?portal=student or has token query param), but token is missing, truncated, or invalid
+    if (hasStudentPortalParam) {
+      if (!initialStudentToken || !initialStudentVerification || !initialStudentVerification.valid) {
+        return true;
+      }
+    }
+    // If effective token is present but failed verification (tampered, malformed, or invalid prefix)
+    if (effectiveStudentToken && (!initialStudentVerification || !initialStudentVerification.valid)) {
+      return true;
+    }
+    // If browser was in student session and user stripped query params to access root without valid active token
+    if (typeof window !== "undefined" && sessionStorage.getItem("seb_student_session") === "true" && !rawUrlParams.get("teacher")) {
+      if (!effectiveStudentToken || !initialStudentVerification || !initialStudentVerification.valid) {
+        return true;
+      }
+    }
     return false;
   });
 
@@ -924,21 +967,13 @@ export default function App() {
   // Student Portal-wide states
   const [studentPortalActive, setStudentPortalActive] = useState<boolean>(
     () => {
-      // If student token is tampered with, keep studentPortalActive false to show Security Tampered Screen
-      if (initialStudentToken && (!initialStudentVerification || !initialStudentVerification.valid)) {
+      // If student link is revoked or token is tampered/truncated, NEVER activate student portal!
+      if (isStudentLinkRevoked || isStudentTokenTampered) {
         return false;
       }
 
-      // If valid encrypted student token exists in URL, activate student portal immediately!
-      if (initialStudentToken && initialStudentVerification?.valid) {
-        try {
-          sessionStorage.removeItem("seb_standalone_review_token");
-        } catch {}
-        return true;
-      }
-
-      // If student portal is explicitly requested in URL (?portal=student), activate immediately!
-      if (urlParams.get("portal") === "student") {
+      // If valid encrypted student token exists and is not revoked, activate student portal!
+      if (effectiveStudentToken && initialStudentVerification?.valid && !initialStudentVerification.isRevoked) {
         try {
           sessionStorage.removeItem("seb_standalone_review_token");
         } catch {}
@@ -955,23 +990,15 @@ export default function App() {
         }
       } catch {}
 
-      // If this browser was in student session and student is NOT an authenticated teacher:
-      // Prevent student from deleting URL query to get into teacher login!
-      try {
-        if (sessionStorage.getItem("seb_student_session") === "true" && !urlParams.get("teacher")) {
-          return true;
-        }
-      } catch {}
-
-      // Student portal is active ONLY if student parameters or quiz link are explicitly provided in URL
+      // Standalone quiz link
       if (
-        urlParams.get("quizId") ||
-        urlParams.get("quizid") ||
-        urlParams.get("quizID") ||
-        urlParams.get("teacherId")
+        rawUrlParams.get("quizId") ||
+        rawUrlParams.get("quizid") ||
+        rawUrlParams.get("quizID")
       ) {
         return true;
       }
+
       // Default home page opens directly to Teacher Portal / Google Login
       return false;
     },
@@ -997,33 +1024,25 @@ export default function App() {
   const [studentPortalTeacherId, setStudentPortalTeacherId] = useState<
     string | null
   >(() => {
+    if (isStudentLinkRevoked || isStudentTokenTampered) {
+      return null;
+    }
     // 1. If valid encrypted student token, use the decrypted teacherId!
-    if (initialStudentVerification?.valid && initialStudentVerification.teacherId) {
+    if (initialStudentVerification?.valid && !initialStudentVerification.isRevoked && initialStudentVerification.teacherId) {
       try {
         localStorage.setItem("seb_student_teacher_id", initialStudentVerification.teacherId);
+        sessionStorage.setItem("seb_student_teacher_id", initialStudentVerification.teacherId);
       } catch {}
       return initialStudentVerification.teacherId;
     }
 
-    const params = new URLSearchParams(window.location.search);
-    const urlTId = params.get("teacherId");
-    if (urlTId) {
-      localStorage.setItem("seb_student_teacher_id", urlTId);
-      return urlTId;
-    }
-    
+    const params = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
     const quizId = params.get("quizId") || params.get("quizid") || params.get("quizID");
-    const hasPortalParam = params.get("portal") === "student" || Boolean(initialStudentToken);
-    if (hasPortalParam) {
-      const cached = localStorage.getItem("seb_student_teacher_id") || localStorage.getItem("platform_teacher_uid");
-      if (cached) return cached;
-      return "gNenrTIs1ZfsGZQmPxIEQNJPyIy1";
+    if (quizId) {
+      return localStorage.getItem("seb_student_teacher_id") || null;
     }
-    if (!quizId && !hasPortalParam && params.toString() === "") {
-      return null;
-    }
-    
-    return localStorage.getItem("seb_student_teacher_id") || "gNenrTIs1ZfsGZQmPxIEQNJPyIy1";
+
+    return null;
   });
 
   const [studentPortalTeacherName, setStudentPortalTeacherName] = useState<string>("");
@@ -2248,6 +2267,12 @@ export default function App() {
 
   // Student Loader Hook
   useEffect(() => {
+    if (isStudentLinkRevoked || isStudentTokenTampered) {
+      setStudents([]);
+      setStudentQuizLoading(false);
+      return;
+    }
+
     if (!studentPortalActive && !teacherPreviewActive && !studentQuizId) {
       return;
     }
@@ -2256,9 +2281,7 @@ export default function App() {
     const resolvedTeacherId =
       studentPortalTeacherId ||
       initialStudentVerification?.teacherId ||
-      urlParamsObj.get("teacherId") ||
-      localStorage.getItem("seb_student_teacher_id") ||
-      (teacherPreviewActive && currentUser ? currentUser.uid : "gNenrTIs1ZfsGZQmPxIEQNJPyIy1");
+      (teacherPreviewActive && currentUser ? currentUser.uid : null);
     const targetQuizId = studentQuizId;
 
     // Determine the active teacher UID for loading students/grades in Student Mode
@@ -4256,12 +4279,26 @@ export default function App() {
             setStudentLinkVersion(data.linkVersion);
             try {
               localStorage.setItem("seb_student_link_active_version", String(data.linkVersion));
+              localStorage.setItem(`seb_student_link_version_${tid}`, String(data.linkVersion));
             } catch {}
-            if (initialStudentToken) {
-              const freshVer = verifyStudentPortalToken(initialStudentToken, data.linkVersion);
+            const tokenToVerify = initialStudentToken || sessionStorage.getItem("seb_student_active_token");
+            if (tokenToVerify) {
+              const freshVer = verifyStudentPortalToken(tokenToVerify, data.linkVersion);
               if (freshVer.isRevoked) {
                 setIsStudentLinkRevoked(true);
+                setStudentPortalActive(false);
+                setStudentSelectedId("");
+                setStudents([]);
+                try {
+                  sessionStorage.removeItem("seb_student_logged_id");
+                  localStorage.removeItem("seb_student_logged_id");
+                } catch {}
               }
+            } else if (isStudentSession && !teacherPreviewActive && !currentUser) {
+              setIsStudentLinkRevoked(true);
+              setStudentPortalActive(false);
+              setStudentSelectedId("");
+              setStudents([]);
             }
           }
         }
@@ -4282,12 +4319,26 @@ export default function App() {
           setStudentLinkVersion(ev.data.linkVersion);
           try {
             localStorage.setItem("seb_student_link_active_version", String(ev.data.linkVersion));
+            localStorage.setItem(`seb_student_link_version_${tid}`, String(ev.data.linkVersion));
           } catch {}
-          if (initialStudentToken) {
-            const freshVer = verifyStudentPortalToken(initialStudentToken, ev.data.linkVersion);
+          const tokenToVerify = initialStudentToken || sessionStorage.getItem("seb_student_active_token");
+          if (tokenToVerify) {
+            const freshVer = verifyStudentPortalToken(tokenToVerify, ev.data.linkVersion);
             if (freshVer.isRevoked) {
               setIsStudentLinkRevoked(true);
+              setStudentPortalActive(false);
+              setStudentSelectedId("");
+              setStudents([]);
+              try {
+                sessionStorage.removeItem("seb_student_logged_id");
+                localStorage.removeItem("seb_student_logged_id");
+              } catch {}
             }
+          } else if (isStudentSession && !teacherPreviewActive && !currentUser) {
+            setIsStudentLinkRevoked(true);
+            setStudentPortalActive(false);
+            setStudentSelectedId("");
+            setStudents([]);
           }
         }
       };
@@ -4297,7 +4348,66 @@ export default function App() {
       unsub();
       if (bc) bc.close();
     };
-  }, [studentPortalTeacherId, initialStudentVerification?.teacherId, studentPortalActive, initialStudentToken]);
+  }, [studentPortalTeacherId, initialStudentVerification?.teacherId, studentPortalActive, initialStudentToken, isStudentSession, teacherPreviewActive, currentUser]);
+
+  // Immediate async verification against Firestore for secure_link_settings on initial mount
+  useEffect(() => {
+    if (currentUser && !teacherPreviewActive) return;
+
+    const tidToCheck =
+      initialStudentVerification?.teacherId ||
+      studentPortalTeacherId ||
+      (typeof window !== "undefined" ? sessionStorage.getItem("seb_student_teacher_id") : null) ||
+      (typeof window !== "undefined" ? localStorage.getItem("seb_student_teacher_id") : null) ||
+      "gNenrTIs1ZfsGZQmPxIEQNJPyIy1";
+
+    const verifyFreshLink = async () => {
+      try {
+        const snap = await getDoc(doc(db, "secure_link_settings", `student_link_${tidToCheck}`));
+        if (snap.exists()) {
+          const sData = snap.data();
+          if (typeof sData.isEnabled === "boolean") {
+            setIsStudentLinkActive(sData.isEnabled);
+            try {
+              localStorage.setItem(`seb_student_link_status_${tidToCheck}`, JSON.stringify({ isEnabled: sData.isEnabled }));
+            } catch {}
+          }
+          if (typeof sData.linkVersion === "number") {
+            setStudentLinkVersion(sData.linkVersion);
+            try {
+              localStorage.setItem("seb_student_link_active_version", String(sData.linkVersion));
+              localStorage.setItem(`seb_student_link_version_${tidToCheck}`, String(sData.linkVersion));
+            } catch {}
+
+            const activeTok = initialStudentToken || (typeof window !== "undefined" ? sessionStorage.getItem("seb_student_active_token") : null);
+            if (activeTok) {
+              const res = verifyStudentPortalToken(activeTok, sData.linkVersion);
+              if (res.isRevoked) {
+                setIsStudentLinkRevoked(true);
+                setStudentPortalActive(false);
+                setStudentSelectedId("");
+                setStudents([]);
+              } else if (!res.valid) {
+                setIsStudentTokenTampered(true);
+                setStudentPortalActive(false);
+                setStudentSelectedId("");
+                setStudents([]);
+              }
+            } else if ((isStudentSession || hasStudentPortalParam) && !teacherPreviewActive && !currentUser) {
+              setIsStudentTokenTampered(true);
+              setStudentPortalActive(false);
+              setStudentSelectedId("");
+              setStudents([]);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Immediate secure link verification error:", err);
+      }
+    };
+
+    verifyFreshLink();
+  }, [currentUser, teacherPreviewActive, initialStudentToken, isStudentSession, hasStudentPortalParam]);
 
   const copyStandaloneReviewLink = useCallback((showToast = true) => {
     const tId = currentUser?.uid || "demo_teacher";
@@ -7670,7 +7780,7 @@ export default function App() {
   }
 
   // --- REVOKED / EXPIRED STUDENT PORTAL LINK SCREEN ---
-  if (isStudentLinkRevoked) {
+  if (isStudentLinkRevoked && (!currentUser || teacherPreviewActive)) {
     return (
       <div
         className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-6 font-sans select-none"
@@ -7708,13 +7818,29 @@ export default function App() {
           >
             إعادة تحميل الصفحة
           </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              try {
+                sessionStorage.removeItem("seb_student_session");
+                sessionStorage.removeItem("seb_student_active_token");
+                sessionStorage.removeItem("seb_student_teacher_id");
+                localStorage.removeItem("seb_student_session");
+              } catch {}
+              window.location.href = window.location.origin + "/?teacher=true";
+            }}
+            className="w-full py-2.5 px-4 bg-transparent hover:bg-slate-800 text-slate-400 hover:text-slate-200 rounded-xl text-[11px] font-bold transition-colors cursor-pointer border border-slate-800"
+          >
+            هل أنت معلم وتريد الدخول للوحة التحكم؟ اضغط هنا
+          </button>
         </div>
       </div>
     );
   }
 
   // --- TAMPERED / INVALID SECURED STUDENT PORTAL LINK SECURITY SCREEN ---
-  if (isStudentTokenTampered) {
+  if (isStudentTokenTampered && (!currentUser || teacherPreviewActive)) {
     return (
       <div
         className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-6 font-sans select-none"
@@ -7751,6 +7877,22 @@ export default function App() {
             className="w-full py-3 px-4 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black transition-colors cursor-pointer shadow-lg shadow-rose-900/30"
           >
             إعادة تحميل الصفحة
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              try {
+                sessionStorage.removeItem("seb_student_session");
+                sessionStorage.removeItem("seb_student_active_token");
+                sessionStorage.removeItem("seb_student_teacher_id");
+                localStorage.removeItem("seb_student_session");
+              } catch {}
+              window.location.href = window.location.origin + "/?teacher=true";
+            }}
+            className="w-full py-2.5 px-4 bg-transparent hover:bg-slate-800 text-slate-400 hover:text-slate-200 rounded-xl text-[11px] font-bold transition-colors cursor-pointer border border-slate-800"
+          >
+            هل أنت معلم وتريد الدخول للوحة التحكم؟ اضغط هنا
           </button>
         </div>
       </div>

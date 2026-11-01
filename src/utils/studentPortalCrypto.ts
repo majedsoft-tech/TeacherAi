@@ -257,8 +257,8 @@ export function verifyStudentPortalToken(
   token: string | null | undefined,
   minActiveVersion?: number
 ): StudentPortalVerificationResult {
-  if (!token) {
-    return { valid: false, error: "NO_TOKEN" };
+  if (!token || typeof token !== "string" || !token.trim()) {
+    return { valid: false, isTampered: true, error: "NO_TOKEN" };
   }
 
   const clean = token.trim();
@@ -355,9 +355,9 @@ export function extractStudentPortalToken(urlSearchOrHash?: string): string | nu
       params.get("student_token") ||
       params.get("s_token");
 
-    if (token) {
+    if (token !== null && token !== undefined) {
       const trimmed = token.trim();
-      if (trimmed.startsWith(TOKEN_PREFIX) || trimmed.startsWith(ALT_TOKEN_PREFIX)) {
+      if (trimmed.length > 0) {
         return trimmed;
       }
     }
@@ -368,8 +368,8 @@ export function extractStudentPortalToken(urlSearchOrHash?: string): string | nu
       if (hash.includes("stoken=") || hash.includes("token=")) {
         const match = hash.match(/(?:stoken|token)=([^&]+)/);
         if (match && match[1]) {
-          const decoded = decodeURIComponent(match[1]);
-          if (decoded.startsWith(TOKEN_PREFIX) || decoded.startsWith(ALT_TOKEN_PREFIX)) {
+          const decoded = decodeURIComponent(match[1]).trim();
+          if (decoded.length > 0) {
             return decoded;
           }
         }
@@ -377,6 +377,23 @@ export function extractStudentPortalToken(urlSearchOrHash?: string): string | nu
     }
   } catch {}
   return null;
+}
+
+/**
+ * Check whether the current URL contains student portal queries or token attempts
+ */
+export function hasStudentPortalQuery(urlSearchOrHash?: string): boolean {
+  try {
+    const search = urlSearchOrHash !== undefined ? urlSearchOrHash : (typeof window !== "undefined" ? window.location.search : "");
+    const params = new URLSearchParams(search.startsWith("?") ? search : `?${search}`);
+    if (params.get("portal") === "student") return true;
+    if (params.has("stoken") || params.has("token") || params.has("student_token") || params.has("s_token")) return true;
+    if (typeof window !== "undefined" && window.location.hash) {
+      const hash = window.location.hash || "";
+      if (hash.includes("portal=student") || hash.includes("stoken=") || hash.includes("token=")) return true;
+    }
+  } catch {}
+  return false;
 }
 
 /**

@@ -12122,8 +12122,8 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Modern Right side menu for teacher (similar structure to Student portal) */}
-      {!(isCurriculumAdminFullScreen && activeTab === "curriculum_review_admin") && (
+      {/* Modern Right side menu for teacher - rendered only after teacher logs in */}
+      {Boolean(currentUser) && !(isCurriculumAdminFullScreen && activeTab === "curriculum_review_admin") && (
         <aside
           onClickCapture={(e) => {
             if (currentUser) return;

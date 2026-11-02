@@ -25,6 +25,8 @@ import {
   List,
   Layers,
   GraduationCap,
+  Activity,
+  Zap,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -66,6 +68,16 @@ export const TeacherExamLiveMonitorModal: React.FC<TeacherExamLiveMonitorModalPr
   const [selectedStudentForLogs, setSelectedStudentForLogs] = useState<LiveStudentSession | null>(null);
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"students" | "kiosk_setup">("students");
+  const [now, setNow] = useState<number>(Date.now());
+
+  // Real-time ticking interval for live in-the-moment calculations
+  useEffect(() => {
+    if (!isOpen) return;
+    const timer = setInterval(() => {
+      setNow(Date.now());
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [isOpen]);
 
   const [studentsList, setStudentsList] = useState<Student[]>(students || []);
   const [standaloneResults, setStandaloneResults] = useState<any[]>([]);
@@ -362,6 +374,37 @@ export const TeacherExamLiveMonitorModal: React.FC<TeacherExamLiveMonitorModalPr
     [studentsList, standaloneResults, quiz]
   );
 
+  // Check if a student is actively taking the exam right now in real time
+  const isSessionTestingNow = useCallback(
+    (session: LiveStudentSession) => {
+      const comp = getStudentCompletionData(session);
+      // If completed, submitted, disqualified, or explicitly flagged as completed -> not testing now
+      if (
+        comp.isCompleted ||
+        session.isCompleted ||
+        session.status === "submitted" ||
+        session.status === "disqualified"
+      ) {
+        return false;
+      }
+
+      // Heartbeat recency check (ExamSecurityGuard pulses every 4 seconds)
+      // Allow up to 45 seconds for network hiccups or device tab background throttling
+      if (session.lastHeartbeat) {
+        return now - session.lastHeartbeat <= 45000;
+      }
+
+      // If no heartbeat timestamp recorded yet, fall back to active status
+      return (
+        session.status === "active" ||
+        session.status === "warning" ||
+        session.status === "blurred" ||
+        session.status === "tab_left"
+      );
+    },
+    [getStudentCompletionData, now]
+  );
+
   // Filtered Students
   const filteredSessions = useMemo(() => {
     return sessions.filter((s) => {
@@ -373,6 +416,7 @@ export const TeacherExamLiveMonitorModal: React.FC<TeacherExamLiveMonitorModalPr
 
       const comp = getStudentCompletionData(s);
 
+      if (filterStatus === "testing_now") return isSessionTestingNow(s);
       if (filterStatus === "completed") return comp.isCompleted;
       if (filterStatus === "active") return s.status === "active" && !comp.isCompleted;
       if (filterStatus === "warning") return (s.status === "warning" || s.violationsCount > 0) && s.status !== "disqualified";
@@ -385,7 +429,7 @@ export const TeacherExamLiveMonitorModal: React.FC<TeacherExamLiveMonitorModalPr
 
       return true;
     });
-  }, [sessions, searchQuery, filterStatus, selectedGradeClass, getStudentCompletionData]);
+  }, [sessions, searchQuery, filterStatus, selectedGradeClass, getStudentCompletionData, isSessionTestingNow]);
 
   // Grouped Students by Grade & Class
   const groupedSessions = useMemo(() => {
@@ -400,6 +444,9 @@ export const TeacherExamLiveMonitorModal: React.FC<TeacherExamLiveMonitorModalPr
 
   // Statistics
   const totalCount = sessions.length;
+  const liveTestingNowCount = useMemo(() => {
+    return sessions.filter((s) => isSessionTestingNow(s)).length;
+  }, [sessions, isSessionTestingNow]);
   const completedCount = useMemo(() => {
     return sessions.filter((s) => getStudentCompletionData(s).isCompleted).length;
   }, [sessions, getStudentCompletionData]);
@@ -461,6 +508,7 @@ exit
     const isWarned = session.violationsCount > 0;
     const isDisq = session.status === "disqualified";
     const isFs = session.isFullscreen;
+    const isTestingNow = isSessionTestingNow(session);
 
     return (
       <div
@@ -470,6 +518,8 @@ exit
             ? "border-rose-400 bg-rose-50/30"
             : comp.isCompleted
             ? "border-emerald-300 bg-emerald-50/20"
+            : isTestingNow
+            ? "border-rose-300 bg-rose-50/10 hover:border-rose-400 shadow-sm"
             : isWarned
             ? "border-amber-300 bg-amber-50/20"
             : "border-slate-200 hover:border-indigo-300"
@@ -478,9 +528,20 @@ exit
         {/* Top Bar of Student Card */}
         <div className="flex items-start justify-between gap-2">
           <div className="space-y-0.5 min-w-0">
-            <h4 className="font-black text-sm text-slate-900 truncate">
-              {session.studentName}
-            </h4>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <h4 className="font-black text-sm text-slate-900 truncate">
+                {session.studentName}
+              </h4>
+              {isTestingNow && (
+                <span className="px-1.5 py-0.5 rounded-md text-[9px] font-black bg-rose-100 text-rose-700 border border-rose-200 inline-flex items-center gap-1">
+                  <span className="relative flex h-1.5 w-1.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-rose-500"></span>
+                  </span>
+                  يختبر الآن
+                </span>
+              )}
+            </div>
             <span className="text-[11px] text-slate-500 font-bold block truncate">
               {session.gradeClass || "طالب اختبار"}
             </span>
@@ -627,6 +688,7 @@ exit
     const isWarned = session.violationsCount > 0;
     const isDisq = session.status === "disqualified";
     const isFs = session.isFullscreen;
+    const isTestingNow = isSessionTestingNow(session);
 
     return (
       <tr
@@ -636,6 +698,8 @@ exit
             ? "bg-rose-50/50 hover:bg-rose-50/80 border-rose-200"
             : comp.isCompleted
             ? "bg-emerald-50/30 hover:bg-emerald-50/70 border-emerald-100"
+            : isTestingNow
+            ? "bg-rose-50/20 hover:bg-rose-50/50 border-rose-150"
             : isWarned
             ? "bg-amber-50/40 hover:bg-amber-50/80 border-amber-200"
             : "bg-white hover:bg-slate-50/80 border-slate-150"
@@ -649,6 +713,8 @@ exit
                   ? "bg-rose-100 text-rose-800 border border-rose-200"
                   : comp.isCompleted
                   ? "bg-emerald-100 text-emerald-900 border border-emerald-300"
+                  : isTestingNow
+                  ? "bg-rose-100 text-rose-700 border border-rose-200"
                   : isWarned
                   ? "bg-amber-100 text-amber-900 border border-amber-200"
                   : "bg-indigo-50 text-indigo-700 border border-indigo-100"
@@ -657,9 +723,20 @@ exit
               {session.studentName.trim().charAt(0) || "ط"}
             </div>
             <div className="min-w-0">
-              <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
-                {session.studentName}
-              </h4>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <h4 className="font-black text-xs sm:text-sm text-slate-900 truncate">
+                  {session.studentName}
+                </h4>
+                {isTestingNow && (
+                  <span className="px-1.5 py-0.5 rounded-md text-[9px] font-black bg-rose-100 text-rose-700 border border-rose-200 inline-flex items-center gap-1">
+                    <span className="relative flex h-1.5 w-1.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-rose-500"></span>
+                    </span>
+                    يختبر الآن
+                  </span>
+                )}
+              </div>
               <span className="text-[11px] text-slate-500 font-bold block truncate">
                 {session.gradeClass || "غير محدد الصف/الفصل"}
               </span>
@@ -903,7 +980,7 @@ exit
         {activeTab === "students" && (
           <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6">
             {/* Quick Metrics KPI cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
               <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-2xl flex items-center justify-between">
                 <div>
                   <span className="text-[11px] font-bold text-slate-500 block">إجمالي الطلاب</span>
@@ -913,6 +990,40 @@ exit
                   <Users className="w-5 h-5" />
                 </div>
               </div>
+
+              {/* Dedicated Live Testing Now KPI Card */}
+              <button
+                type="button"
+                onClick={() => setFilterStatus(filterStatus === "testing_now" ? "all" : "testing_now")}
+                className={`p-3.5 rounded-2xl flex items-center justify-between text-right transition cursor-pointer border ${
+                  filterStatus === "testing_now"
+                    ? "bg-gradient-to-br from-rose-500 to-red-600 text-white border-red-500 shadow-md ring-2 ring-red-400/50"
+                    : "bg-rose-50/90 border-rose-300 hover:bg-rose-100 text-rose-900 shadow-2xs"
+                }`}
+                title="انقر لعرض وفلترة الطلاب الذين يؤدون الاختبار في هذه اللحظة في الوقت الفعلي فقط"
+              >
+                <div>
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
+                    </span>
+                    <span className={`text-[11px] font-black ${filterStatus === "testing_now" ? "text-white" : "text-rose-900"}`}>
+                      يختبرون في نفس اللحظة
+                    </span>
+                  </div>
+                  <span className={`text-2xl font-black font-sans ${filterStatus === "testing_now" ? "text-white" : "text-red-700"}`}>
+                    {liveTestingNowCount}
+                  </span>
+                </div>
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold border ${
+                  filterStatus === "testing_now"
+                    ? "bg-white/20 text-white border-white/30"
+                    : "bg-red-100 text-red-600 border-red-200"
+                }`}>
+                  <Zap className="w-5 h-5 fill-current animate-pulse" />
+                </div>
+              </button>
 
               <div className="bg-emerald-50/90 border border-emerald-300 p-3.5 rounded-2xl flex items-center justify-between shadow-2xs">
                 <div>
@@ -944,7 +1055,7 @@ exit
                 </div>
               </div>
 
-              <div className="bg-rose-50/70 border border-rose-200 p-3.5 rounded-2xl flex items-center justify-between col-span-2 sm:col-span-1">
+              <div className="bg-rose-50/70 border border-rose-200 p-3.5 rounded-2xl flex items-center justify-between">
                 <div>
                   <span className="text-[11px] font-bold text-rose-700 block">مستبعدون</span>
                   <span className="text-2xl font-black text-rose-800 font-sans">{disqualifiedCount}</span>
@@ -958,7 +1069,7 @@ exit
             {/* Filter and Controls Bar */}
             <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 bg-slate-50 p-3 sm:p-4 rounded-2xl border border-slate-200">
               {/* Search Box */}
-              <div className="relative flex-1 min-w-[220px]">
+              <div className="relative flex-1 min-w-[200px]">
                 <Search className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
                   type="text"
@@ -971,6 +1082,25 @@ exit
 
               {/* Filter controls row */}
               <div className="flex flex-wrap items-center gap-2">
+                {/* Live Testing Now Quick Filter Button */}
+                <button
+                  type="button"
+                  onClick={() => setFilterStatus(filterStatus === "testing_now" ? "all" : "testing_now")}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-black border transition flex items-center gap-2 cursor-pointer shadow-xs shrink-0 ${
+                    filterStatus === "testing_now"
+                      ? "bg-gradient-to-r from-red-600 to-rose-600 text-white border-red-500 shadow-md ring-2 ring-red-400/50"
+                      : "bg-white text-rose-700 border-rose-200 hover:bg-rose-50"
+                  }`}
+                  title="عرض الطلاب المتواجدين حالياً في الاختبار ويؤدون الاختبار في الوقت الفعلي فقط"
+                >
+                  <span className="relative flex h-2.5 w-2.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500"></span>
+                  </span>
+                  <Zap className="w-3.5 h-3.5 fill-current" />
+                  <span>يختبرون حالياً في نفس اللحظة ({liveTestingNowCount})</span>
+                </button>
+
                 {/* Status Filter */}
                 <select
                   value={filterStatus}
@@ -979,6 +1109,7 @@ exit
                   title="تصفية حسب حالة الالتزام"
                 >
                   <option value="all">كل الحالات ({sessions.length})</option>
+                  <option value="testing_now">⚡ يختبرون حالياً في نفس اللحظة ({liveTestingNowCount})</option>
                   <option value="completed">أتموا الاختبار ورُصدت درجتهم ({completedCount}) 🎓</option>
                   <option value="active">مستمرون في الحل ({compliantCount}) 🟢</option>
                   <option value="warning">لديهم مخالفات ({warningCount}) ⚠️</option>
@@ -1057,12 +1188,27 @@ exit
                 <div className="w-14 h-14 bg-indigo-50 text-indigo-500 rounded-2xl mx-auto flex items-center justify-center">
                   <Users className="w-7 h-7" />
                 </div>
-                <h4 className="text-base font-black text-slate-700">لا يوجد طلاب متصلون حالياً في المعمل</h4>
+                <h4 className="text-base font-black text-slate-700">
+                  {filterStatus === "testing_now"
+                    ? "لا يوجد طلاب يؤدون الاختبار في الوقت الفعلي حالياً"
+                    : "لا يوجد طلاب متصلون حالياً في المعمل"}
+                </h4>
                 <p className="text-xs text-slate-400 font-semibold max-w-md mx-auto">
-                  {searchQuery || filterStatus !== "all" || selectedGradeClass !== "all"
+                  {filterStatus === "testing_now"
+                    ? "لا يوجد أي طالب يؤدي الاختبار في هذه اللحظة. قد يكون الطلاب قد أتموا الاختبار وسلموا إجاباتهم بالفعل أو لم يبدأوا بعد."
+                    : searchQuery || filterStatus !== "all" || selectedGradeClass !== "all"
                     ? "لا توجد نتائج مطابقة لمعايير البحث والتصفية المحددة."
                     : "بمجرد أن يبدأ الطالب فتح الاختبار وتقديم الإجابات، ستظهر بياناته هنا فورياً مع مؤشر التزامه وحالة شاشته."}
                 </p>
+                {filterStatus === "testing_now" && (
+                  <button
+                    type="button"
+                    onClick={() => setFilterStatus("all")}
+                    className="mt-2 px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-black rounded-xl transition cursor-pointer"
+                  >
+                    عرض جميع الطلاب ({sessions.length})
+                  </button>
+                )}
               </div>
             ) : groupByGradeClass ? (
               /* Grouped by Grade & Class */

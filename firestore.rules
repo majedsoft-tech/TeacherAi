@@ -1,91 +1,157 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Default deny
+
+    // Global Default Deny
     match /{document=**} {
       allow read, write: if false;
     }
 
+    // Helper functions
     function isSignedIn() {
       return request.auth != null;
     }
 
-    // Teachers profile & settings
+    function isSuperAdmin() {
+      return isSignedIn() && request.auth.token.email.lower() == 'majedsoft@gmail.com';
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Teachers Profile & Registration ---
     match /teachers/{teacherId} {
-      allow read, write: if true;
+      // Readable for student portal to display teacher name and registered teachers list
+      allow read: if true;
+      // Teachers can create and update their own profile, or super admin
+      allow create: if isSignedIn() && (request.auth.uid == teacherId || isSuperAdmin());
+      allow update: if isSignedIn() && (request.auth.uid == teacherId || isSuperAdmin());
+      // Only super admin can delete teacher profiles
+      allow delete: if isSuperAdmin();
     }
 
+    // --- System Settings (Global platform configuration like registration toggle) ---
+    match /system_settings/{settingId} {
+      // Public read to allow landing/login pages to check registration status
+      allow read: if true;
+      // Only super admin can update platform system settings
+      allow write: if isSuperAdmin();
+    }
+
+    // --- Secure Link Settings (Full Site Student Portal Link Control) ---
+    match /secure_link_settings/{docId} {
+      // Public read for students and teachers to verify link versions and active status
+      allow read: if true;
+      // Authenticated teachers can update their own link doc or demo doc, super admin can manage all
+      allow write: if isSuperAdmin() || (isSignedIn() && (docId == 'student_link_' + request.auth.uid || docId == 'student_link_demo_teacher'));
+    }
+
+    // --- Curriculum Review Settings & Unit/Lesson Locks ---
     match /curriculum_settings/{teacherId} {
-      allow read, write: if true;
+      // Readable for student portal to check unit/lesson locks
+      allow read: if true;
+      // Only the owning teacher or super admin can update unit/lesson locks and settings
+      allow write: if isSuperAdmin() || (isSignedIn() && request.auth.uid == teacherId);
     }
 
-    // Question Bank
+    // --- Question Bank ---
     match /question_bank/{questionId} {
-      allow read, write: if true;
+      // Readable for browsing and attaching to quizzes
+      allow read: if true;
+      // Creation: teacher or super admin
+      allow create: if isSuperAdmin() || (isSignedIn() && incoming().teacherId == request.auth.uid);
+      // Update/Delete: super admin or the owning teacher
+      allow update, delete: if isSuperAdmin() || (isSignedIn() && existing().teacherId == request.auth.uid);
     }
 
-    // Quizzes (Readable for quiz links and server endpoints, write restricted to authenticated teachers)
+    // --- Quizzes ---
     match /quizzes/{quizId} {
-      allow read, write: if true;
+      // Readable by students taking the quiz and teachers viewing quizzes
+      allow read: if true;
+      // Create: teacher creates quiz with their own teacherId
+      allow create: if isSuperAdmin() || (isSignedIn() && incoming().teacherId == request.auth.uid);
+      // Update/Delete: owning teacher or super admin
+      allow update, delete: if isSuperAdmin() || (isSignedIn() && existing().teacherId == request.auth.uid);
     }
 
-    // Students (created/updated by teachers & by students when taking quizzes)
+    // --- Students Roster & Grades ---
     match /students/{studentId} {
-      allow read, write: if true;
+      // Readable by students (to select names in portal) and teachers
+      allow read: if true;
+      // Teachers add students, or student records initialized with valid teacherId
+      allow create: if isSignedIn() || (incoming().teacherId is string);
+      // Updated by students submitting quiz grades or teachers editing details
+      allow update: if true;
+      // Only authenticated teachers or admin can delete students from roster
+      allow delete: if isSignedIn();
     }
 
-    // Trash students
+    // --- Trash Students (Archived/Deleted) ---
     match /trash_students/{studentId} {
-      allow read, write: if true;
+      // Protected: only authenticated teachers or admin can view or manage trash students
+      allow read, write: if isSignedIn();
     }
 
-    // Grades & Semesters
+    // --- School Grades Configuration & Locks ---
     match /grades/{gradeId} {
-      allow read, write: if true;
+      allow read: if true;
+      // Only authenticated teachers or admin can configure and lock grades
+      allow write: if isSignedIn();
     }
 
+    // --- Semesters / Classes Configuration & Locks ---
     match /semesters/{semesterId} {
-      allow read, write: if true;
+      allow read: if true;
+      // Only authenticated teachers or admin can configure and lock semesters/classes
+      allow write: if isSignedIn();
     }
 
-    // Review Challenges (Games)
+    // --- Interactive Review Challenges (Games) ---
     match /reviewChallenges/{challengeId} {
-      allow read, write: if true;
+      allow read: if true;
+      // Teachers create and manage challenges
+      allow write: if isSignedIn();
     }
 
+    // --- Review Scores (Game Leaderboards) ---
     match /reviewScores/{scoreId} {
-      allow read, write: if true;
+      allow read: if true;
+      // Students record scores when finishing games
+      allow create: if true;
+      // Only teachers or admin can modify/reset scores
+      allow update, delete: if isSignedIn();
     }
 
-    // Curriculum Scores & Live Playroom
+    // --- Student Curriculum Lesson Scores ---
     match /student_curriculum_scores/{studentId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if true;
     }
 
+    // --- Live Playroom Real-time Presence ---
     match /livePlayroomPresence/{presenceId} {
       allow read, write: if true;
     }
 
-    // Standalone Quiz Results
+    // --- Standalone Quiz Results ---
     match /standalone_results/{submissionId} {
-      allow read, write: if true;
+      allow read: if true;
+      // Students submit quiz results
+      allow create: if true;
+      // Only teachers/admin can manage or clear results
+      allow update, delete: if isSignedIn();
     }
 
-    // Live Exam Proctoring for Computer Labs
+    // --- Exam Proctoring & Live Lab Monitoring ---
     match /exam_proctoring/{sessionId} {
-      allow read, write: if true;
-    }
-
-    // Secure Full Site Link Settings (Teacher site control for student platform)
-    match /secure_link_settings/{docId} {
-      allow read, write: if true;
-    }
-
-    // System Settings (Global platform configuration like registration toggle)
-    match /system_settings/{settingId} {
-      allow read, write: if true;
+      allow read: if true;
+      // Students write violation and heartbeat events during monitored exams
+      allow write: if true;
     }
   }
 }
-

@@ -329,6 +329,54 @@
         "active": { "type": "boolean" }
       },
       "required": ["id", "studentId", "studentName", "gradeClass", "challengeId", "challengeTitle", "score", "updatedAt", "active"]
+    },
+    "SecureLinkSettings": {
+      "title": "SecureLinkSettings",
+      "description": "Secure link settings and versioning for student portal access",
+      "type": "object",
+      "properties": {
+        "teacherId": { "type": "string" },
+        "linkVersion": { "type": "integer" },
+        "token": { "type": "string" },
+        "isEnabled": { "type": "boolean" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["teacherId", "linkVersion"]
+    },
+    "SystemSettings": {
+      "title": "SystemSettings",
+      "description": "Global platform settings including teacher registration status",
+      "type": "object",
+      "properties": {
+        "isEnabled": { "type": "boolean" },
+        "updatedBy": { "type": "string" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["isEnabled"]
+    },
+    "StandaloneResult": {
+      "title": "StandaloneResult",
+      "description": "Submission results for standalone exams",
+      "type": "object",
+      "properties": {
+        "submissionId": { "type": "string" },
+        "quizId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "score": { "type": "number" }
+      },
+      "required": ["quizId", "studentName"]
+    },
+    "ExamProctoring": {
+      "title": "ExamProctoring",
+      "description": "Live exam proctoring session heartbeats and anti-cheat events",
+      "type": "object",
+      "properties": {
+        "sessionId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "quizId": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["sessionId", "studentId", "quizId"]
     }
   },
   "firestore": {
@@ -379,6 +427,22 @@
     "livePlayroomPresence/{presenceId}": {
       "schema": "LivePlayroomPresence",
       "description": "Real-time presence and scoring of active players"
+    },
+    "secure_link_settings/{docId}": {
+      "schema": "SecureLinkSettings",
+      "description": "Security settings and versioning for student portal access links"
+    },
+    "system_settings/{settingId}": {
+      "schema": "SystemSettings",
+      "description": "Global system configurations including registration status"
+    },
+    "standalone_results/{submissionId}": {
+      "schema": "StandaloneResult",
+      "description": "Standalone quiz submission records"
+    },
+    "exam_proctoring/{sessionId}": {
+      "schema": "ExamProctoring",
+      "description": "Proctoring and exam session records"
     }
   }
 }

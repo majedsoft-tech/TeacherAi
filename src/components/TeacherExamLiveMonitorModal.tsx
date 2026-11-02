@@ -152,7 +152,12 @@ export const TeacherExamLiveMonitorModal: React.FC<TeacherExamLiveMonitorModalPr
       broadcastChannelRef.current = new BroadcastChannel("exam_proctoring_channel");
       broadcastChannelRef.current.onmessage = (event) => {
         if (event.data?.type === "STUDENT_HEARTBEAT" && event.data.data) {
-          const incoming = event.data.data as LiveStudentSession;
+          const raw = event.data.data;
+          const incoming: LiveStudentSession = {
+            ...raw,
+            studentName: raw.studentName || "طالب اختبار",
+            gradeClass: raw.gradeClass || "",
+          };
           if (quiz && incoming.quizId !== quiz.id) return;
 
           setSessions((prev) => {
@@ -193,7 +198,12 @@ export const TeacherExamLiveMonitorModal: React.FC<TeacherExamLiveMonitorModalPr
           if (teacherId && data.teacherId && data.teacherId !== teacherId) {
             return;
           }
-          list.push({ ...data, id: docSnap.id });
+          list.push({
+            ...data,
+            id: docSnap.id,
+            studentName: data.studentName || "طالب اختبار",
+            gradeClass: data.gradeClass || "",
+          });
         });
 
         // Check if any student had a new violation to trigger sound
@@ -202,7 +212,7 @@ export const TeacherExamLiveMonitorModal: React.FC<TeacherExamLiveMonitorModalPr
           if (s.violationsCount > prev) {
             playAlertSound();
             triggerToast(
-              `⚠️ مخالفة جديدة: الطالب ${s.studentName} غادر شاشة الاختبار (${s.violationsCount}/${s.maxViolations})`,
+              `⚠️ مخالفة جديدة: الطالب ${s.studentName || "طالب"} غادر شاشة الاختبار (${s.violationsCount}/${s.maxViolations || 3})`,
               "warning"
             );
           }
@@ -318,11 +328,11 @@ export const TeacherExamLiveMonitorModal: React.FC<TeacherExamLiveMonitorModalPr
       }
 
       // 2. Check matched student in studentsList (detailedGrades recorded for this student)
-      const normName = session.studentName?.trim().toLowerCase();
+      const normName = (session?.studentName || "").trim().toLowerCase();
       const student = studentsList.find(
         (st) =>
           st.id === session.studentId ||
-          (st.name && normName && st.name.trim().toLowerCase() === normName)
+          (st.name && normName && (st.name || "").trim().toLowerCase() === normName)
       );
 
       if (student && Array.isArray(student.detailedGrades)) {
@@ -351,7 +361,7 @@ export const TeacherExamLiveMonitorModal: React.FC<TeacherExamLiveMonitorModalPr
       const standalone = standaloneResults.find(
         (sub) =>
           (sub.studentId === session.studentId ||
-            (sub.studentName && normName && sub.studentName.trim().toLowerCase() === normName)) &&
+            (sub.studentName && normName && (sub.studentName || "").trim().toLowerCase() === normName)) &&
           ((quiz && (sub.quizId === quiz.id || sub.quizTitle === quiz.title)) ||
             (session.quizId && sub.quizId === session.quizId) ||
             (session.quizTitle && sub.quizTitle === session.quizTitle))
@@ -407,10 +417,14 @@ export const TeacherExamLiveMonitorModal: React.FC<TeacherExamLiveMonitorModalPr
 
   // Filtered Students
   const filteredSessions = useMemo(() => {
+    const q = (searchQuery || "").trim().toLowerCase();
     return sessions.filter((s) => {
+      const studentNameStr = (s.studentName || "").toLowerCase();
+      const gradeClassStr = (s.gradeClass || "").toLowerCase();
       const matchesSearch =
-        s.studentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (s.gradeClass && s.gradeClass.toLowerCase().includes(searchQuery.toLowerCase()));
+        !q ||
+        studentNameStr.includes(q) ||
+        gradeClassStr.includes(q);
 
       if (!matchesSearch) return false;
 
